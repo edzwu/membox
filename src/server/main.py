@@ -9,6 +9,7 @@ from typing import Any, Optional, Union
 from shared.errors import (
     INTERNAL_ERROR,
     INVALID_REQUEST,
+    JsonRpcError,
     METHOD_NOT_FOUND,
     PARSE_ERROR,
 )
@@ -89,6 +90,9 @@ def main() -> int:
             result = handler(params)
             if req_id is not None:
                 _safe_send(make_response(req_id, result))
+        except JsonRpcError as e:
+            if req_id is not None:
+                _safe_send(make_error(req_id, e.code, e.message, e.data))
         except Exception:
             log.error("handler crashed:\n%s", traceback.format_exc())
             if req_id is not None:

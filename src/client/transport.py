@@ -10,6 +10,7 @@ from typing import Optional
 def start_server(
     module: str = "server.main",
     cwd: Optional[str] = None,
+    env: Optional[dict[str, str]] = None,
 ) -> subprocess.Popen:
     """
     Start server as a child process using stdio pipes.
@@ -27,5 +28,6 @@ def start_server(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,  # keep logs separate
         cwd=cwd,
+        env=env,
         bufsize=0,  # unbuffered
     )

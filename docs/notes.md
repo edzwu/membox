@@ -1,4 +1,12 @@
+## M0
+先把 TUI ↔ Host 的: “字节流通道 + framing + JSON-RPC ping” 跑通
+
+- view pane 得是一个 编辑器
 - 弄懂 vim 的 lsp 之类的插件结构来借鉴
+- extension - lsp ai 的 gdb
+- extension - mm web get
+- 需要 把 lsp 先看了
+- 未来需要 redis 和 sqlite 的 db 的知识
 - 知识库, 分散在 每个文件的每句话, 加上一个 tag 就能汇总到 inbox 里, 这可能也不错, 至少知道 context
 - 搜索功能
   - 模糊搜索

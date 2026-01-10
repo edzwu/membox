@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, Optional
 
+from server.extensions.loader import load_extensions
+
 
 Handler = Callable[[Any], Any]
 
@@ -28,4 +30,5 @@ def default_registry() -> HandlerRegistry:
         return "pong"
 
     reg.register("ping", ping)
+    load_extensions(reg)
     return reg
