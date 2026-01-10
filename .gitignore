@@ -1,0 +1,9 @@
+data/
+__pycache__/
+*.egg-info/
+.metadata/
+.venv/
+*.pyc
+.env
+uv.lock
+mutagen.yml.lock
