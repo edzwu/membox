@@ -1,6 +1,7 @@
 ## M0
 先把 TUI ↔ Host 的: “字节流通道 + framing + JSON-RPC ping” 跑通
 
+- sys design: mm-sdk / mm-protocol 作为插件作者唯一依赖 
 - view pane 得是一个 编辑器
 - 弄懂 vim 的 lsp 之类的插件结构来借鉴
 - extension - lsp ai 的 gdb

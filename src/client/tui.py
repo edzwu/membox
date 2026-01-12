@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import queue
+import os
 import shlex
+import shutil
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -24,6 +27,7 @@ def run(server_module: str = "server.main") -> int:
 
 def _run_repl(*, server_module: str) -> int:
     print("curses unavailable; falling back to simple REPL.")
+    last_file_path: Optional[str] = None
     with RpcClient(server_module=server_module) as rpc:
         while True:
             try:
@@ -34,7 +38,13 @@ def _run_repl(*, server_module: str) -> int:
                 continue
             if line in ("q", "quit", "exit"):
                 return 0
-            _handle_command_line(line, rpc, print)
+            normalized = line[3:] if line.startswith("mm ") else line
+            if normalized.strip() in ("vim", "open"):
+                _open_in_editor_non_curses(last_file_path, print)
+                continue
+            new_path = _handle_command_line(line, rpc, print)
+            if isinstance(new_path, str) and new_path:
+                last_file_path = new_path
 
 
 def _run_curses(stdscr, *, server_module: str) -> int:
@@ -46,7 +56,9 @@ def _run_curses(stdscr, *, server_module: str) -> int:
     output: list[str] = []
     cmd_q: "queue.Queue[Optional[str]]" = queue.Queue()
     out_q: "queue.Queue[str]" = queue.Queue()
+    event_q: "queue.Queue[tuple[str, str]]" = queue.Queue()
     stop = threading.Event()
+    last_file_path: Optional[str] = None
 
     def out(s: str = "") -> None:
         out_q.put(s)
@@ -65,7 +77,9 @@ def _run_curses(stdscr, *, server_module: str) -> int:
                         continue
                     if line is None:
                         return
-                    _handle_command_line(line, rpc, out)
+                    new_path = _handle_command_line(line, rpc, out)
+                    if isinstance(new_path, str) and new_path:
+                        event_q.put(("file", new_path))
         except Exception as e:
             out(f"worker crashed: {e!r}")
 
@@ -75,7 +89,8 @@ def _run_curses(stdscr, *, server_module: str) -> int:
     output.extend(
         [
             "membox TUI",
-            "Commands: `mm get <url>` | `get <url>` | `help` | `quit`",
+            "Commands: `mm get <url>` | `get <url>` | `vim` | `help` | `quit`",
+            "Keys: Enter=send, v=open last file in vim",
             "",
         ]
     )
@@ -130,6 +145,14 @@ def _run_curses(stdscr, *, server_module: str) -> int:
                 output.append(line)
                 drained += 1
 
+            while True:
+                try:
+                    ev, payload = event_q.get_nowait()
+                except queue.Empty:
+                    break
+                if ev == "file":
+                    last_file_path = payload
+
             if drained:
                 _render()
 
@@ -147,7 +170,12 @@ def _run_curses(stdscr, *, server_module: str) -> int:
                 if line in ("q", "quit", "exit"):
                     return 0
                 output.append(f"mm> {line}")
-                cmd_q.put(line)
+
+                normalized = line[3:] if line.startswith("mm ") else line
+                if normalized.strip() in ("vim", "open"):
+                    _open_in_vim(stdscr, last_file_path, output.append)
+                else:
+                    cmd_q.put(line)
                 _render()
                 continue
             if ch in (curses.KEY_BACKSPACE, 127, 8):
@@ -159,6 +187,10 @@ def _run_curses(stdscr, *, server_module: str) -> int:
                 continue
             if ch in (3, 4):  # Ctrl-C / Ctrl-D
                 return 0
+            if ch in (ord("v"), ord("V")):
+                _open_in_vim(stdscr, last_file_path, output.append)
+                _render()
+                continue
             if 32 <= ch <= 126:
                 buf += chr(ch)
                 _render()
@@ -168,16 +200,16 @@ def _run_curses(stdscr, *, server_module: str) -> int:
         t.join(timeout=1.0)
 
 
-def _handle_command_line(line: str, rpc: RpcClient, out) -> None:
+def _handle_command_line(line: str, rpc: RpcClient, out) -> Optional[str]:
     if line.startswith("mm "):
         line = line[3:]
     try:
         parts = shlex.split(line)
     except ValueError as e:
         out(f"parse error: {e}")
-        return
+        return None
     if not parts:
-        return
+        return None
 
     cmd, *rest = parts
     if cmd == "get" and len(rest) == 1:
@@ -188,10 +220,10 @@ def _handle_command_line(line: str, rpc: RpcClient, out) -> None:
             result = rpc.request("mm.get", {"url": url})
         except RpcError as e:
             out(str(e))
-            return
+            return None
         if not isinstance(result, dict):
             out(f"unexpected result: {result!r}")
-            return
+            return None
         path = result.get("path")
         out(f"status: {result.get('status')}")
         out(f"path: {path}")
@@ -199,13 +231,81 @@ def _handle_command_line(line: str, rpc: RpcClient, out) -> None:
         out(f"content_type: {result.get('content_type')}")
         out("")
         _preview_file(path, out)
-        return
+        if isinstance(path, str) and path:
+            out("tip: press `v` or type `vim` to open the last file")
+            return path
+        return None
+
+    if cmd in ("vim", "open"):
+        out("type `vim` in curses mode or set $EDITOR in non-curses mode")
+        return None
 
     if cmd in ("help", "?"):
-        out("Commands: `mm get <url>` | `get <url>` | `quit`")
-        return
+        out("Commands: `mm get <url>` | `get <url>` | `vim` | `help` | `quit`")
+        out("Keys: Enter=send, v=open last file in vim")
+        return None
 
     out(f"unknown command: {cmd!r} (try `help`)")
+    return None
+
+
+def _open_in_vim(stdscr, path: Optional[str], out) -> None:
+    if not isinstance(path, str) or not path:
+        out("no last file to open (run `mm get <url>` first)")
+        return
+
+    editor_env = os.environ.get("EDITOR")
+    if editor_env:
+        editor_argv = shlex.split(editor_env)
+    else:
+        editor_argv = ["nvim"] if shutil.which("nvim") else ["vim"]
+
+    exe = editor_argv[0] if editor_argv else "vim"
+    if not shutil.which(exe):
+        out(f"editor not found: {exe!r} (set $EDITOR or install vim/nvim)")
+        return
+
+    # If inside tmux, open vim in a split pane (separate process) for a true "pane" experience.
+    if os.environ.get("TMUX") and shutil.which("tmux"):
+        cmd = shlex.join([*editor_argv, path])
+        subprocess.call(["tmux", "split-window", "-v", "-p", "70", cmd])
+        out(f"opened in tmux split: {path}")
+        return
+
+    # Fallback: suspend curses, run editor full-screen, then resume.
+    try:
+        import curses
+
+        curses.def_prog_mode()
+        curses.endwin()
+        subprocess.call([*editor_argv, path])
+    finally:
+        try:
+            curses.reset_prog_mode()
+            curses.curs_set(1)
+            stdscr.nodelay(True)
+            stdscr.refresh()
+        except Exception:
+            pass
+
+
+def _open_in_editor_non_curses(path: Optional[str], out) -> None:
+    if not isinstance(path, str) or not path:
+        out("no last file to open (run `mm get <url>` first)")
+        return
+
+    editor_env = os.environ.get("EDITOR")
+    if editor_env:
+        editor_argv = shlex.split(editor_env)
+    else:
+        editor_argv = ["nvim"] if shutil.which("nvim") else ["vim"]
+
+    exe = editor_argv[0] if editor_argv else "vim"
+    if not shutil.which(exe):
+        out(f"editor not found: {exe!r} (set $EDITOR or install vim/nvim)")
+        return
+
+    subprocess.call([*editor_argv, path])
 
 
 def _preview_file(path: Optional[str], out) -> None:
