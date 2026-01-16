@@ -11,6 +11,12 @@ and keeps all business logic in a Python **core host** (`memboxd`) with a small,
   - `infra/` (JSON-file repository)
   - `protocol/` (ResultEnvelope: table view + actions)
   - `apps/` (CLI adapter: `memboxd`)
+- Research sessions with queues + artifacts:
+  - `session start <topic>` creates a session with a start timestamp
+  - `session file add` tracks edited files as session artifacts
+  - `session queue add` collects related vs misc ideas
+- External CLI bridge (calx/caly, etc.):
+  - `external <command> [args...]` runs a CLI and renders stdout as a table
 - Thin Neovim UI:
   - `:Membox` opens a "pseudo-terminal" prompt + a result panel.
   - Type `task ls` → table.
@@ -33,11 +39,25 @@ memboxd task add "Read chapter 4"
 memboxd task add "Implement JSON-RPC initialize"
 memboxd task ls
 memboxd task done 1
+
+memboxd session start "论文阅读：LLM 对齐"
+memboxd session file add 1 ./docs/notes.md
+memboxd session queue add 1 related "补充阅读 InstructGPT"
+memboxd session queue add 1 misc "给同事回邮件"
+memboxd session ls --filter 2026-01-16-16:00:00
+
+memboxd external calx today
+memboxd external caly week
 ```
 
 Data is stored in:
 - `$MEMBOX_HOME/tasks.json` if `MEMBOX_HOME` is set
 - otherwise `~/.membox/tasks.json`
+- sessions in `$MEMBOX_HOME/sessions.json` (or `~/.membox/sessions.json`)
+
+Membox focuses on session state + UI protocol. Schedule data comes from external CLIs
+invoked via `external`, so your Neovim client only needs to send commands and render
+the envelope response.
 
 ### 3) Use the Neovim client
 

@@ -1,2 +1,12 @@
+- 一个状态机, todo list
+- https://chatgpt.com/s/t_696a2439e7248191b360a6593d6a5b6f
+- 可以有 @ readwise 的机器人
+- session start xxxx
+  - 然后 bar 里有显示 + 
+  - 45 mins 自动结束
+  - 这期间的所有相关的文档, 都记录到这个 session 的 hist, session 一定有 hist/anchor/next 的字段
+- session ls 查看之前编辑记录
+- calx 和 caly 都要集成到 membox 的插件里
 - v0.1: simplest possible integration (subprocess per command).
 - v0.2+: add long-running core + framing + notifications.
+- ref: https://chatgpt.com/c/6963006a-f2e0-8320-9b59-a70dc9ed91b2
