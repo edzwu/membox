@@ -1,0 +1,26 @@
+{{ define "main" }}
+<main class="single-main">
+    <article>
+        <h1>{{ .Title }}</h1>
+
+        <div class="article-meta">
+            <time datetime="{{ .Date.Format "2006-01-02T15:04:05Z07:00" }}">{{ .Date.Format "January 2, 2006" }}</time>
+            {{ if .Params.tags }}
+            <span class="article-tags">
+                {{ range .Params.tags }}
+                <a href="/tags/{{ . | urlize }}/" class="article-tag">#{{ . }}</a>
+                {{ end }}
+            </span>
+            {{ end }}
+        </div>
+
+        {{ if .Params.tldr }}
+        <div class="article-tldr">
+            <strong>TLDR</strong> {{ .Params.tldr }}
+        </div>
+        {{ end }}
+
+        {{ .Content }}
+    </article>
+</main>
+{{ end }}

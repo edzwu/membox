@@ -1,0 +1,53 @@
+{{ define "main" }}
+<main class="home-main">
+    <section class="hero">
+        <div class="hero-headline">
+            <h1 class="hero-title" id="typewriter-title" aria-label="{{ delimit .Params.typewriter_title " " }}">
+                {{ range .Params.typewriter_title }}<span>{{ . }}</span>{{ end }}
+            </h1>
+        </div>
+        <div class="hero-about">
+            <p class="hero-name">{{ .Params.hero_name }}</p>
+            <p><strong>{{ .Params.hero_bio | safeHTML }}</strong></p>
+            <p>{{ .Params.hero_intro }}</p>
+            <p class="hero-skills">{{ .Params.hero_skills }}</p>
+            {{ range .Params.hero_mottos }}
+            <p class="hero-motto">{{ . }}</p>
+            {{ end }}
+        </div>
+    </section>
+
+    <section class="notes-section">
+        <table class="ls-table" id="note-list">
+            <thead class="ls-head">
+                <tr>
+                    <td colspan="3">$ ls -la notes/ <span class="ls-total">total {{ len (where (where .Site.RegularPages "Type" "!=" "print-version") "RelPermalink" "!=" "/about/") }}</span></td>
+                </tr>
+            </thead>
+            <tbody>
+                {{ $pages := where (where .Site.RegularPages "Type" "!=" "print-version") "RelPermalink" "!=" "/about/" }}
+                {{ range $pages.ByDate.Reverse }}
+                <tr class="ls-row"
+                    data-title="{{ .Title | lower }}"
+                    data-tldr="{{ .Params.tldr | default .Summary | plainify | lower }}"
+                    data-tags="{{ range .Params.tags }}{{ . | lower }} {{ end }}">
+                    <td class="ls-date">{{ .Date.Format "2006-01-02" }}</td>
+                    <td class="ls-title">
+                        <a href="{{ .RelPermalink }}">{{ .Title }}</a>
+                    </td>
+                    <td class="ls-tags">
+                        {{ range .Params.tags }}
+                        <span class="ls-tag">{{ . }}</span>
+                        {{ end }}
+                    </td>
+                </tr>
+                {{ end }}
+            </tbody>
+        </table>
+    </section>
+
+    <div class="no-results" id="no-results" hidden>
+        <p>no matches found.</p>
+    </div>
+</main>
+{{ end }}

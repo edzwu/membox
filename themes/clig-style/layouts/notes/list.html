@@ -1,0 +1,29 @@
+{{ define "main" }}
+<main class="notes-index-main">
+    <section class="notes-index-section">
+        <table class="notes-index-table">
+            <thead class="notes-index-head">
+                <tr>
+                    <td colspan="3">$ ls -la notes/ <span class="notes-index-total">total {{ len .Pages }}</span></td>
+                </tr>
+            </thead>
+            <tbody>
+                {{ $pages := .Pages }}
+                {{ range $pages.ByDate.Reverse }}
+                <tr class="notes-index-row">
+                    <td class="notes-index-date">{{ .Date.Format "2006-01-02" }}</td>
+                    <td class="notes-index-title">
+                        <a href="{{ .RelPermalink }}">{{ .Title }}</a>
+                    </td>
+                    <td class="notes-index-tags">
+                        {{ range .Params.tags }}
+                        <span class="notes-index-tag">{{ . }}</span>
+                        {{ end }}
+                    </td>
+                </tr>
+                {{ end }}
+            </tbody>
+        </table>
+    </section>
+</main>
+{{ end }}

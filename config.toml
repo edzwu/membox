@@ -1,0 +1,17 @@
+languageCode = "en-us"
+title = "Edward's Notes"
+baseURL = "https://zw4315.github.io/"
+canonifyURLs = false
+theme = "clig-style"
+publishDir = "public"
+
+[markup]
+  [markup.goldmark]
+    [markup.goldmark.renderer]
+      unsafe = true
+
+[taxonomies]
+  tag = "tags"
+
+[params]
+  description = "Intelligence is the ability to avoid doing work, yet getting the work done."
