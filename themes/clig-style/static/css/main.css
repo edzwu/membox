@@ -932,6 +932,14 @@ body.home {
    font-size: 12px;
 }
 
+.ls-columns td {
+   padding: 0.3em 0 0.1em;
+   opacity: 0.3;
+   font-size: 11px;
+   text-transform: uppercase;
+   letter-spacing: 0.05em;
+}
+
 .ls-total {
    margin-left: 1em;
 }
@@ -953,6 +961,7 @@ body.home {
    display: none;
 }
 
+.ls-id,
 .ls-date {
    white-space: nowrap;
    padding: 0.5em 1.5em 0.5em 0;
@@ -1013,6 +1022,14 @@ body.home {
    font-size: 12px;
 }
 
+.notes-index-columns td {
+   padding: 0.3em 0 0.1em;
+   opacity: 0.3;
+   font-size: 11px;
+   text-transform: uppercase;
+   letter-spacing: 0.05em;
+}
+
 .notes-index-total {
    margin-left: 1em;
 }
@@ -1030,6 +1047,7 @@ body.home {
    background: rgba(0,0,0,0.03);
 }
 
+.notes-index-id,
 .notes-index-date {
    white-space: nowrap;
    padding: 0.5em 1.5em 0.5em 0;

@@ -21,7 +21,13 @@
         <table class="ls-table" id="note-list">
             <thead class="ls-head">
                 <tr>
-                    <td colspan="3">$ ls -la notes/ <span class="ls-total">total {{ len (where (where .Site.RegularPages "Type" "!=" "print-version") "RelPermalink" "!=" "/about/") }}</span></td>
+                    <td colspan="4">$ ls -la notes/ <span class="ls-total">total {{ len (where (where .Site.RegularPages "Type" "!=" "print-version") "RelPermalink" "!=" "/about/") }}</span></td>
+                </tr>
+                <tr class="ls-columns">
+                    <td>id</td>
+                    <td>date</td>
+                    <td>title</td>
+                    <td>tags</td>
                 </tr>
             </thead>
             <tbody>
@@ -31,6 +37,7 @@
                     data-title="{{ .Title | lower }}"
                     data-tldr="{{ .Params.tldr | default .Summary | plainify | lower }}"
                     data-tags="{{ range .Params.tags }}{{ . | lower }} {{ end }}">
+                    <td class="ls-id">{{ slicestr .File.BaseFileName 0 5 }}</td>
                     <td class="ls-date">{{ .Lastmod.Format "2006-01-02" }}</td>
                     <td class="ls-title">
                         <a href="{{ .RelPermalink }}">{{ .Title }}</a>
