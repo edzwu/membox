@@ -5,7 +5,8 @@
   "scripts": {
     "test": "echo \"No tests configured\"",
     "serve": "hugo server --baseURL http://localhost:1313 --disableFastRender",
-    "build": "node lib/build.js"
+    "build": "node lib/build.js",
+    "new": "node lib/new-post.js"
   },
   "pre-commit": [
     "build"

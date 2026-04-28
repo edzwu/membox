@@ -1,3 +1,5 @@
+ag
+
 # Logs
 logs
 *.log
@@ -75,3 +77,7 @@ docs/
 
 # Tool configs
 lib/.pa11yci
+
+# Rust CLI build artifacts
+cli/target/
+cli/Cargo.lock
