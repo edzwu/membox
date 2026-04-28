@@ -37,7 +37,7 @@
                     data-title="{{ .Title | lower }}"
                     data-tldr="{{ .Params.tldr | default .Summary | plainify | lower }}"
                     data-tags="{{ range .Params.tags }}{{ . | lower }} {{ end }}">
-                    <td class="ls-id">{{ slicestr .File.BaseFileName 0 5 }}</td>
+                    <td class="ls-id">{{ slicestr .File.ContentBaseName 0 5 }}</td>
                     <td class="ls-date">{{ .Lastmod.Format "2006-01-02" }}</td>
                     <td class="ls-title">
                         <a href="{{ .RelPermalink }}">{{ .Title }}</a>
