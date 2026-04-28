@@ -1,7 +1,7 @@
 +++
 title = "首页"
 
-typewriter_title = ["定期落盘", "记忆缓存"]
+typewriter_title = ["记忆缓存", "的定期落盘"]
 hero_name = "吴政禹"
 hero_bio = "正在做一家 AI 创业公司，方向是 Agent、基础设施和推荐系统。"
 hero_intro = "写代码是基本功，其他的边做边学。"
