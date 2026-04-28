@@ -22,7 +22,7 @@
 
     <meta name="description" content="{{ .Site.Params.description }}" />
 
-    <link rel="stylesheet" media="screen" href="{{ "css/main.css" | relURL }}?v=11">
+    <link rel="stylesheet" media="screen" href="{{ "css/main.css" | relURL }}?v=12">
 </head>
 <body
     class="{{ if .IsHome }}home{{ else if eq .Kind "section" }}list-page{{ else if eq .Layout "about" }}about-page{{ else if .IsPage }}single-page{{ end }}"
@@ -61,6 +61,7 @@
     </button>
     {{ end }}
 
+    {{ if not (and .IsPage (ne .Layout "about")) }}
     <header class="site-nav">
         <a href="{{ "" | relLangURL }}" class="nav-logo" aria-label="{{ i18n "aria_home" }}">
             <svg viewBox="0 0 40 40" width="28" height="28" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
@@ -75,7 +76,6 @@
             <a href="{{ "about/" | relLangURL }}" {{ if eq .Layout "about" }}aria-current="page"{{ end }}>{{ i18n "nav_about" }}</a>
         </nav>
     </header>
-    {{ if not (and .IsPage (ne .Layout "about")) }}
     <button class="lang-toggle top-btn lang-toggle-nav" data-target-lang="{{ $targetLang }}" data-target-url="{{ $targetUrl }}" aria-label="{{ i18n "aria_switch_lang" }}" title="{{ i18n "aria_switch_lang" }}">
         {{ if eq $currentLang "en" }}中{{ else }}En{{ end }}
     </button>

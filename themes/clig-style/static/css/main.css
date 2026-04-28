@@ -633,6 +633,8 @@ pre code {
    display: flex;
    align-items: center;
    gap: 1em;
+   position: relative;
+   z-index: 90;
    padding: calc(1.5em * 0.5) 1em;
    border-bottom: 1px solid rgba(0,0,0,0.1);
 }
@@ -878,6 +880,8 @@ body.home {
 }
 
 .home .site-nav {
+   color: rgba(255,255,255,0.9);
+   background: rgb(3,3,3);
    border-bottom-color: rgba(255,255,255,0.09);
 }
 
@@ -1834,6 +1838,8 @@ html[data-theme="light"] body.home {
    background: rgba(255,255,255,1);
 }
 html[data-theme="light"] .home .site-nav {
+   color: rgba(0,0,0,0.85);
+   background: rgba(255,255,255,1);
    border-bottom-color: rgba(0,0,0,0.1);
 }
 html[data-theme="light"] .home .repl-search {
