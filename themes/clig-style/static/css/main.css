@@ -669,6 +669,53 @@ pre code {
    text-decoration: underline;
 }
 
+.theme-toggle {
+   margin-left: auto;
+   display: inline-flex;
+   align-items: center;
+   justify-content: center;
+   background: none;
+   border: none;
+   cursor: pointer;
+   padding: 0.25em;
+   opacity: 0.55;
+   transition: opacity 0.2s ease;
+   color: inherit;
+}
+
+.theme-toggle:hover {
+   opacity: 1;
+}
+
+@media (min-width: 901px) {
+   .theme-toggle-article {
+      display: inline-flex;
+      position: fixed;
+      top: 0.85rem;
+      right: 0.85rem;
+      top: max(0.85rem, env(safe-area-inset-top));
+      right: max(0.85rem, env(safe-area-inset-right));
+      z-index: 200;
+      margin-left: 0;
+      padding: 0.45rem 0.65rem;
+      border: 1px solid rgba(128,128,128,0.22);
+      background: rgba(255,255,255,0.72);
+      -webkit-backdrop-filter: blur(8px);
+      backdrop-filter: blur(8px);
+   }
+}
+
+@media (max-width: 900px) {
+   .theme-toggle-article {
+      display: inline-flex;
+      position: fixed;
+      top: calc(1.5em * 0.5);
+      right: 5.5em;
+      z-index: 201;
+      margin-left: 0;
+   }
+}
+
 /* REPL search */
 .repl-search {
    position: fixed;
@@ -1505,13 +1552,24 @@ body.home {
    }
 
    @media (prefers-color-scheme: dark) {
-      .single-page #menu-button,
-      .single-page.menu-open .page-toc,
-      .single-main h2::after,
-      .single-main h3::after {
+      html:not([data-theme]) .single-page #menu-button,
+      html:not([data-theme]) .single-page.menu-open .page-toc,
+      html:not([data-theme]) .single-main h2::after,
+      html:not([data-theme]) .single-main h3::after {
          background: rgba(0,0,0,0.96);
       }
    }
+}
+
+html[data-theme="dark"] .single-page #menu-button {
+   background: rgba(0,0,0,0.96);
+}
+html[data-theme="dark"] .single-page.menu-open .page-toc {
+   background: rgba(0,0,0,0.96);
+}
+html[data-theme="dark"] .single-main h2::after,
+html[data-theme="dark"] .single-main h3::after {
+   background: rgba(0,0,0,0.96);
 }
 
 /* ===== List page ===== */
@@ -1557,47 +1615,119 @@ body.about-page {
 }
 
 @media (prefers-color-scheme: dark) {
-   body {
+   html:not([data-theme]) body {
       color: rgba(255,255,255,1);
       background: rgba(0,0,0,1);
    }
-   #TableOfContents {
+   html:not([data-theme]) #TableOfContents {
       background: rgba(0,0,0,0.6);
    }
-   h2:after, h3:after {
+   html:not([data-theme]) h2:after,
+   html:not([data-theme]) h3:after {
       background: rgba(0,0,0,1);
       box-shadow: 0 0 25px rgba(0,0,0,1);
    }
-   main ul li:before {
+   html:not([data-theme]) main ul li:before {
       background: rgba(255,255,255,1);
    }
-   code {
-      background: rgba(80,80,80,1);      
-   }
-   pre {
-      background: rgba(126,126,126,0.3);
-   }
-   pre code {
+   html:not([data-theme]) code {
       background: rgba(80,80,80,1);
    }
-   .repl-search {
+   html:not([data-theme]) pre {
+      background: rgba(126,126,126,0.3);
+   }
+   html:not([data-theme]) pre code {
+      background: rgba(80,80,80,1);
+   }
+   html:not([data-theme]) .repl-search {
       background: rgba(0,0,0,0.95);
       border-top-color: rgba(255,255,255,0.15);
    }
-   .single-page.menu-open .page-toc {
+   html:not([data-theme]) .single-page.menu-open .page-toc {
       background: rgba(0,0,0,0.72);
    }
-   .single-page #TableOfContents {
+   html:not([data-theme]) .single-page #TableOfContents {
       background: transparent;
    }
-   .single-main h2::after,
-   .single-main h3::after {
+   html:not([data-theme]) .single-main h2::after,
+   html:not([data-theme]) .single-main h3::after {
       background: rgba(0,0,0,0.74);
       box-shadow: none;
    }
-   .single-page #menu-button {
+   html:not([data-theme]) .single-page #menu-button {
       background: rgba(0,0,0,0.68);
    }
+}
+
+html[data-theme="dark"] body {
+   color: rgba(255,255,255,1);
+   background: rgba(0,0,0,1);
+}
+html[data-theme="dark"] #TableOfContents {
+   background: rgba(0,0,0,0.6);
+}
+html[data-theme="dark"] h2:after,
+html[data-theme="dark"] h3:after {
+   background: rgba(0,0,0,1);
+   box-shadow: 0 0 25px rgba(0,0,0,1);
+}
+html[data-theme="dark"] main ul li:before {
+   background: rgba(255,255,255,1);
+}
+html[data-theme="dark"] code {
+   background: rgba(80,80,80,1);
+}
+html[data-theme="dark"] pre {
+   background: rgba(126,126,126,0.3);
+}
+html[data-theme="dark"] pre code {
+   background: rgba(80,80,80,1);
+}
+html[data-theme="dark"] .repl-search {
+   background: rgba(0,0,0,0.95);
+   border-top-color: rgba(255,255,255,0.15);
+}
+html[data-theme="dark"] .single-page.menu-open .page-toc {
+   background: rgba(0,0,0,0.72);
+}
+html[data-theme="dark"] .single-page #TableOfContents {
+   background: transparent;
+}
+html[data-theme="dark"] .single-main h2::after,
+html[data-theme="dark"] .single-main h3::after {
+   background: rgba(0,0,0,0.74);
+   box-shadow: none;
+}
+html[data-theme="dark"] .single-page #menu-button {
+   background: rgba(0,0,0,0.68);
+}
+
+/* ===== Light mode override (homepage default is dark) ===== */
+html[data-theme="light"] body.home {
+   color: rgba(0,0,0,0.85);
+   background: rgba(255,255,255,1);
+}
+html[data-theme="light"] .home .site-nav {
+   border-bottom-color: rgba(0,0,0,0.1);
+}
+html[data-theme="light"] .home .repl-search {
+   background: rgba(255,255,255,0.95);
+   border-top-color: rgba(0,0,0,0.15);
+}
+html[data-theme="light"] .hero-about {
+   color: rgba(0,0,0,0.68);
+}
+html[data-theme="light"] .hero-name {
+   color: rgba(0,0,0,0.8);
+}
+html[data-theme="light"] .hero-skills {
+   color: rgba(0,0,0,0.58) !important;
+}
+html[data-theme="light"] .hero-motto {
+   color: rgba(0,0,0,0.52) !important;
+}
+html[data-theme="light"] .hero-about strong {
+   color: rgba(0,0,0,0.86);
 }
 
 /* ===== About / Timeline ===== */

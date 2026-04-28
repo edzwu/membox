@@ -80,6 +80,46 @@
         });
     }
 
+    // Theme toggle
+    var themeToggle = document.querySelector('.theme-toggle');
+    if (themeToggle) {
+        var sunIcon = themeToggle.querySelector('.theme-icon-sun');
+        var moonIcon = themeToggle.querySelector('.theme-icon-moon');
+        var isHome = document.body.classList.contains('home');
+
+        function isCurrentlyDark() {
+            var t = document.documentElement.dataset.theme;
+            if (t === 'dark') return true;
+            if (t === 'light') return false;
+            return isHome || window.matchMedia('(prefers-color-scheme: dark)').matches;
+        }
+
+        function updateThemeIcons() {
+            if (isCurrentlyDark()) {
+                if (sunIcon) sunIcon.style.display = 'none';
+                if (moonIcon) moonIcon.style.display = 'block';
+            } else {
+                if (sunIcon) sunIcon.style.display = 'block';
+                if (moonIcon) moonIcon.style.display = 'none';
+            }
+        }
+
+        updateThemeIcons();
+
+        themeToggle.addEventListener('click', function() {
+            var t = document.documentElement.dataset.theme;
+            if (t) {
+                document.documentElement.removeAttribute('data-theme');
+                localStorage.removeItem('theme');
+            } else {
+                var target = isCurrentlyDark() ? 'light' : 'dark';
+                document.documentElement.dataset.theme = target;
+                localStorage.setItem('theme', target);
+            }
+            updateThemeIcons();
+        });
+    }
+
     // Homepage hamburger menu
 
 function convertToNestedSections(rootElement) {
