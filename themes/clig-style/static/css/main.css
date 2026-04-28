@@ -1357,6 +1357,7 @@ body.home {
    display: inline-block;
    margin-bottom: 1.2em;
    font-weight: 800;
+   font-size: 1.15em;
    opacity: 0.55;
    text-decoration: none;
 }
@@ -1446,8 +1447,9 @@ body.home {
    }
 
    .single-page.menu-open .toc-back {
-      margin-bottom: 0;
-      font-size: 11px;
+      margin-bottom: 0.35em;
+      padding: 0.35em 0;
+      font-size: 15px;
    }
 
    .single-main {
