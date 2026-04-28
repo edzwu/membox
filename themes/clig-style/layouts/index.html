@@ -24,10 +24,10 @@
                     <td colspan="4">$ ls -la notes/ <span class="ls-total">total {{ len (where (where .Site.RegularPages "Type" "!=" "print-version") "RelPermalink" "!=" "/about/") }}</span></td>
                 </tr>
                 <tr class="ls-columns">
-                    <td>id</td>
-                    <td>date</td>
-                    <td>title</td>
-                    <td>tags</td>
+                    <td>{{ i18n "table_id" }}</td>
+                    <td>{{ i18n "table_date" }}</td>
+                    <td>{{ i18n "table_title" }}</td>
+                    <td>{{ i18n "table_tags" }}</td>
                 </tr>
             </thead>
             <tbody>
@@ -54,7 +54,7 @@
     </section>
 
     <div class="no-results" id="no-results" hidden>
-        <p>no matches found.</p>
+        <p>{{ i18n "no_matches" }}</p>
     </div>
 </main>
 {{ end }}

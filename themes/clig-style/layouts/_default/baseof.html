@@ -46,15 +46,15 @@
     {{ end }}
 
     {{ if and .IsPage (ne .Layout "about") }}
-    <button id="menu-button">Contents</button>
+    <button id="menu-button">{{ i18n "contents_button" }}</button>
     <aside class="page-toc">
-        <a href="{{ "notes/" | relLangURL }}" class="toc-back">← notes</a>
+        <a href="{{ "notes/" | relLangURL }}" class="toc-back">{{ i18n "toc_back" }}</a>
         {{ .TableOfContents }}
     </aside>
-    <button class="lang-toggle top-btn lang-toggle-nav" data-target-lang="{{ $targetLang }}" data-target-url="{{ $targetUrl }}" aria-label="Switch language" title="Switch language">
+    <button class="lang-toggle top-btn lang-toggle-nav" data-target-lang="{{ $targetLang }}" data-target-url="{{ $targetUrl }}" aria-label="{{ i18n "aria_switch_lang" }}" title="{{ i18n "aria_switch_lang" }}">
         {{ if eq $currentLang "en" }}中{{ else }}En{{ end }}
     </button>
-    <button class="theme-toggle top-btn theme-toggle-left" aria-label="Toggle theme">
+    <button class="theme-toggle top-btn theme-toggle-left" aria-label="{{ i18n "aria_toggle_theme" }}">
         <svg class="theme-icon-sun" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
         <svg class="theme-icon-moon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:none"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
     </button>
@@ -62,7 +62,7 @@
 
     {{ if not (and .IsPage (ne .Layout "about")) }}
     <header class="site-nav">
-        <a href="{{ "" | relLangURL }}" class="nav-logo" aria-label="Home">
+        <a href="{{ "" | relLangURL }}" class="nav-logo" aria-label="{{ i18n "aria_home" }}">
             <svg viewBox="0 0 40 40" width="28" height="28" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
                 <rect x="4" y="4" width="32" height="32" rx="5"/>
                 <polyline points="12,14 8,20 12,26"/>
@@ -70,15 +70,15 @@
             </svg>
         </a>
         <nav class="nav-links">
-            <a href="{{ "" | relLangURL }}" {{ if .IsHome }}aria-current="page"{{ end }}>Home</a>
-            <a href="{{ "notes/" | relLangURL }}" {{ if eq .RelPermalink "/notes/" }}aria-current="page"{{ end }}>Notes</a>
-            <a href="{{ "about/" | relLangURL }}">About</a>
+            <a href="{{ "" | relLangURL }}" {{ if .IsHome }}aria-current="page"{{ end }}>{{ i18n "nav_home" }}</a>
+            <a href="{{ "notes/" | relLangURL }}" {{ if eq .RelPermalink "/notes/" }}aria-current="page"{{ end }}>{{ i18n "nav_notes" }}</a>
+            <a href="{{ "about/" | relLangURL }}">{{ i18n "nav_about" }}</a>
         </nav>
     </header>
-    <button class="lang-toggle top-btn lang-toggle-nav" data-target-lang="{{ $targetLang }}" data-target-url="{{ $targetUrl }}" aria-label="Switch language" title="Switch language">
+    <button class="lang-toggle top-btn lang-toggle-nav" data-target-lang="{{ $targetLang }}" data-target-url="{{ $targetUrl }}" aria-label="{{ i18n "aria_switch_lang" }}" title="{{ i18n "aria_switch_lang" }}">
         {{ if eq $currentLang "en" }}中{{ else }}En{{ end }}
     </button>
-    <button class="theme-toggle top-btn theme-toggle-nav" aria-label="Toggle theme">
+    <button class="theme-toggle top-btn theme-toggle-nav" aria-label="{{ i18n "aria_toggle_theme" }}">
         <svg class="theme-icon-sun" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
         <svg class="theme-icon-moon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:none"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
     </button>
@@ -88,7 +88,7 @@
 
     <div class="repl-search">
         <span class="repl-prompt">&gt;</span>
-        <input type="text" id="home-search" placeholder="search notes..." autocomplete="off">
+        <input type="text" id="home-search" placeholder="{{ i18n "search_placeholder" }}" autocomplete="off">
     </div>
 
     <script src="{{ "js/main.js" | relURL }}?v=4"></script>

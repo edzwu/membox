@@ -7,10 +7,10 @@
                     <td colspan="4">$ ls -la notes/ <span class="notes-index-total">total {{ len .Pages }}</span></td>
                 </tr>
                 <tr class="notes-index-columns">
-                    <td>id</td>
-                    <td>date</td>
-                    <td>title</td>
-                    <td>tags</td>
+                    <td>{{ i18n "table_id" }}</td>
+                    <td>{{ i18n "table_date" }}</td>
+                    <td>{{ i18n "table_title" }}</td>
+                    <td>{{ i18n "table_tags" }}</td>
                 </tr>
             </thead>
             <tbody>
