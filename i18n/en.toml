@@ -39,3 +39,6 @@ other = "Switch language"
 
 [aria_toggle_theme]
 other = "Toggle theme"
+
+[aria_back_notes]
+other = "Back to notes"

@@ -51,6 +51,7 @@
         <a href="{{ "notes/" | relLangURL }}" class="toc-back">{{ i18n "toc_back" }}</a>
         {{ .TableOfContents }}
     </aside>
+    <a href="{{ "notes/" | relLangURL }}" class="article-back top-btn" aria-label="{{ i18n "aria_back_notes" }}" title="{{ i18n "aria_back_notes" }}">←</a>
     <button class="lang-toggle top-btn lang-toggle-nav" data-target-lang="{{ $targetLang }}" data-target-url="{{ $targetUrl }}" aria-label="{{ i18n "aria_switch_lang" }}" title="{{ i18n "aria_switch_lang" }}">
         {{ if eq $currentLang "en" }}中{{ else }}En{{ end }}
     </button>

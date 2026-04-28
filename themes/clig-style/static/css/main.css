@@ -739,6 +739,26 @@ pre code {
    height: 1em;
 }
 
+.article-back {
+   display: none;
+   text-decoration: none;
+}
+
+.toc-back {
+   display: inline-block;
+   margin-bottom: 1.2em;
+   font-weight: 800;
+   font-size: 1.15em;
+   opacity: 0.55;
+   text-decoration: none;
+}
+
+.toc-back:hover,
+.toc-back:focus {
+   opacity: 1;
+   text-decoration: underline;
+}
+
 @media (min-width: 901px) {
    .lang-toggle-nav {
       display: inline-flex;
@@ -1509,21 +1529,6 @@ body.home {
    }
 }
 
-.toc-back {
-   display: inline-block;
-   margin-bottom: 1.2em;
-   font-weight: 800;
-   font-size: 1.15em;
-   opacity: 0.55;
-   text-decoration: none;
-}
-
-.toc-back:hover,
-.toc-back:focus {
-   opacity: 1;
-   text-decoration: underline;
-}
-
 @media (max-width: 1179px) {
    .single-page #menu-button {
       display: inline-block;
@@ -1586,6 +1591,10 @@ body.home {
       backdrop-filter: none;
    }
 
+   .single-page.menu-open .toc-back {
+      display: none;
+   }
+
    .single-page #TableOfContents a {
       font-size: clamp(12px, 2.6vw, 16px);
       letter-spacing: 0;
@@ -1600,12 +1609,6 @@ body.home {
       padding-top: 0.18em;
       font-size: 0.66em;
       opacity: 0.76;
-   }
-
-   .single-page.menu-open .toc-back {
-      margin-bottom: 0.35em;
-      padding: 0.35em 0;
-      font-size: 15px;
    }
 
    .single-main {
@@ -1629,6 +1632,16 @@ body.home {
    }
    .single-page .lang-toggle-nav {
       top: calc(0.85rem + 5.2em);
+   }
+
+   .single-page .article-back {
+      display: inline-flex;
+      position: fixed;
+      top: calc(0.85rem + 7.6em);
+      right: 0.85rem;
+      right: max(0.85rem, env(safe-area-inset-right));
+      z-index: 201;
+      margin-left: 0;
    }
 }
 
