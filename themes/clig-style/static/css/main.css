@@ -1531,8 +1531,11 @@ body.home {
 
 @media (max-width: 1179px) {
    .single-page #menu-button {
-      display: inline-block;
-      width: auto;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 2.2em;
+      min-height: 2.2em;
       position: fixed;
       top: 0.85rem;
       right: 0.85rem;
@@ -1540,7 +1543,7 @@ body.home {
       right: max(0.85rem, env(safe-area-inset-right));
       left: auto;
       z-index: 200;
-      padding: 0.45rem 0.65rem;
+      padding: 0.45rem;
       border: 1px solid rgba(128,128,128,0.22);
       background: rgba(255,255,255,0.72);
       -webkit-backdrop-filter: blur(8px);
@@ -1551,6 +1554,7 @@ body.home {
       font-size: 13px;
       font-weight: 800;
       line-height: 1;
+      box-sizing: border-box;
    }
 
    .single-page.menu-open #menu-button {

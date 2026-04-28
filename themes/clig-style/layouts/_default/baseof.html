@@ -46,7 +46,7 @@
     {{ end }}
 
     {{ if and .IsPage (ne .Layout "about") }}
-    <button id="menu-button">{{ i18n "contents_button" }}</button>
+    <button id="menu-button" aria-label="{{ i18n "contents_button" }}" title="{{ i18n "contents_button" }}">☰</button>
     <aside class="page-toc">
         <a href="{{ "notes/" | relLangURL }}" class="toc-back">{{ i18n "toc_back" }}</a>
         {{ .TableOfContents }}

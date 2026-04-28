@@ -1,7 +1,7 @@
 +++
 title = "An Agent-Friendly Blog Framework"
 date = "2025-01-01T00:00:00+08:00"
-tldr = "Agora is A lightweight Hugo-based blog evolving from human-readable to Agent-native. Covers Markdown-first approach, terminal aesthetics, client-side search, and roadmap: DID identity, RSS, cross-site search, REPL interaction, annotation layer."
+tldr = "Agora is a lightweight Hugo-based blog evolving from human-readable to Agent-native. Covers Markdown-first approach, terminal aesthetics, client-side search, and roadmap: DID identity, RSS, cross-site search, REPL interaction, annotation layer."
 tags = ["agent"]
 +++
 
