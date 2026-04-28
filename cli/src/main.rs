@@ -1,7 +1,9 @@
 use clap::{Parser, Subcommand};
 use rand::Rng;
 use std::fs;
+use std::path::Path;
 use std::process::Command;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 #[derive(Parser)]
 #[command(name = "ag")]
@@ -19,6 +21,8 @@ enum Commands {
     Build,
     /// Serve locally (hugo server)
     Serve,
+    /// List all posts
+    Ls,
 }
 
 fn generate_id() -> String {
@@ -48,6 +52,95 @@ fn generate_unique_id() -> String {
             eprintln!("无法生成唯一 ID");
             std::process::exit(1);
         }
+    }
+}
+
+fn read_frontmatter(path: &Path) -> Option<(String, String)> {
+    let content = fs::read_to_string(path).ok()?;
+
+    let start = content.find("+++")? + 3;
+    let end = content[start..].find("+++")? + start;
+    let toml_str = &content[start..end];
+
+    let value: toml::Value = toml::from_str(toml_str).ok()?;
+    let title = value.get("title")?.as_str()?.to_string();
+    let date = value.get("date")?.as_str()?.to_string();
+
+    Some((title, date))
+}
+
+fn cmd_ls() {
+    let notes_dir = Path::new("content/notes");
+    if !notes_dir.exists() {
+        eprintln!("content/notes/ 目录不存在");
+        std::process::exit(1);
+    }
+
+    let mut entries: Vec<(String, String, String)> = vec![];
+
+    for entry in fs::read_dir(notes_dir).unwrap() {
+        let entry = entry.unwrap();
+        let path = entry.path();
+
+        if path.extension().and_then(|s| s.to_str()) != Some("md") {
+            continue;
+        }
+
+        let id = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string();
+
+        // 跳过 _index.md 和以 _ 开头的文件
+        if id.starts_with('_') {
+            continue;
+        }
+
+        // 读取文件系统修改时间
+        let lastmod_str = fs::metadata(&path)
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| {
+                let secs = t.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs() as i64;
+                let dt = chrono::DateTime::from_timestamp(secs, 0)?;
+                Some(dt.with_timezone(&chrono::Local).format("%Y-%m-%d").to_string())
+            })
+            .unwrap_or_else(|| "?".to_string());
+
+        if let Some((title, _)) = read_frontmatter(&path) {
+            entries.push((id, title, lastmod_str));
+        }
+    }
+
+    // 按 lastmod 降序排列（最新的在前）
+    entries.sort_by(|a, b| b.2.cmp(&a.2));
+
+    // 输出表格
+    println!("{:<12} {:<38} {}", "ID", "TITLE", "UPDATED");
+    println!("{}", "-".repeat(80));
+    for (id, title, lastmod) in entries {
+        let id_short = &id[..id.chars().count().min(5)];
+
+        let title_display = truncate_width(&title, 38);
+        let pad = 38 - title_display.width();
+
+        println!("{:<12} {}{:pad$} {}", id_short, title_display, "", lastmod, pad = pad);
+    }
+
+    fn truncate_width(s: &str, max_width: usize) -> String {
+        let mut result = String::new();
+        let mut current_width = 0;
+        for ch in s.chars() {
+            let w = ch.width().unwrap_or(0);
+            if current_width + w > max_width - 3 {
+                result.push_str("...");
+                break;
+            }
+            result.push(ch);
+            current_width += w;
+        }
+        result
     }
 }
 
@@ -86,6 +179,9 @@ fn main() {
             if !status.success() {
                 std::process::exit(1);
             }
+        }
+        Commands::Ls => {
+            cmd_ls();
         }
     }
 }
