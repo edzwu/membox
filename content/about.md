@@ -7,7 +7,7 @@ layout = "about"
 [[timeline]]
 role = "Founder"
 org = "AI Startup"
-period = "2023.03 - Present"
+period = "2025.01 - Present"
 desc = "Building an AI startup around AI agents, infrastructure, and recommender systems."
 
 [[timeline]]

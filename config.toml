@@ -10,6 +10,9 @@ publishDir = "public"
     [markup.goldmark.renderer]
       unsafe = true
 
+[frontmatter]
+  lastmod = [":fileModTime", ":git", "lastmod", "date"]
+
 [taxonomies]
   tag = "tags"
 

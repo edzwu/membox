@@ -5,6 +5,9 @@
 
         <div class="article-meta">
             <time datetime="{{ .Date.Format "2006-01-02T15:04:05Z07:00" }}">{{ .Date.Format "January 2, 2006" }}</time>
+            {{ if ne .Date .Lastmod }}
+            <span class="article-updated">· updated {{ .Lastmod.Format "Jan 2, 2006" }}</span>
+            {{ end }}
             {{ if .Params.tags }}
             <span class="article-tags">
                 {{ range .Params.tags }}
