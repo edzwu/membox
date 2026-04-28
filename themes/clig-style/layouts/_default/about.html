@@ -1,7 +1,5 @@
 {{ define "main" }}
 <main class="about-main">
-    <h1 class="about-title">{{ .Title }}</h1>
-
     <div class="about-identity">
         <img src="/images/logo.svg" alt="logo" class="about-logo">
         {{ with .Params.name }}<h2 class="about-name">{{ . }}</h2>{{ end }}

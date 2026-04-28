@@ -71,8 +71,8 @@
         </a>
         <nav class="nav-links">
             <a href="{{ "" | relLangURL }}" {{ if .IsHome }}aria-current="page"{{ end }}>{{ i18n "nav_home" }}</a>
-            <a href="{{ "notes/" | relLangURL }}" {{ if eq .RelPermalink "/notes/" }}aria-current="page"{{ end }}>{{ i18n "nav_notes" }}</a>
-            <a href="{{ "about/" | relLangURL }}">{{ i18n "nav_about" }}</a>
+            <a href="{{ "notes/" | relLangURL }}" {{ if eq .Section "notes" }}aria-current="page"{{ end }}>{{ i18n "nav_notes" }}</a>
+            <a href="{{ "about/" | relLangURL }}" {{ if eq .Layout "about" }}aria-current="page"{{ end }}>{{ i18n "nav_about" }}</a>
         </nav>
     </header>
     {{ if not (and .IsPage (ne .Layout "about")) }}

@@ -1871,18 +1871,28 @@ html[data-theme="light"] .hero-about strong {
 .about-logo {
    display: block;
    width: 96px;
-   height: auto;
+   height: 45px;
+   object-fit: contain;
    opacity: 0.9;
-   margin-bottom: 0.4em;
+   margin: 0 0 0.4em;
+   padding: 0.35em;
+   box-sizing: content-box;
+   background: rgba(255,255,255,0.92);
 }
 
 .about-name {
+   position: static;
    font-family: 'HLR', serif;
    font-size: 26px;
    font-weight: 800;
    line-height: 1.15;
-   letter-spacing: -0.02em;
    margin: 0;
+   padding: 0;
+   z-index: auto;
+}
+
+.about-name::after {
+   content: none;
 }
 
 .about-links {
