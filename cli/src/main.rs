@@ -22,7 +22,14 @@ enum Commands {
     /// Serve locally (hugo server)
     Serve,
     /// List all posts
-    Ls,
+    Ls {
+        /// Show English posts
+        #[arg(long, conflicts_with = "zh")]
+        en: bool,
+        /// Show Chinese posts
+        #[arg(long, conflicts_with = "en")]
+        zh: bool,
+    },
 }
 
 fn generate_id() -> String {
@@ -43,8 +50,9 @@ fn generate_unique_id() -> String {
     let mut attempts = 0;
     loop {
         let id = generate_id();
-        let path = format!("{}/{}.md", notes_dir, id);
-        if fs::metadata(&path).is_err() {
+        let file_path = format!("{}/{}.md", notes_dir, id);
+        let bundle_path = format!("{}/{}", notes_dir, id);
+        if fs::metadata(&file_path).is_err() && fs::metadata(&bundle_path).is_err() {
             return id;
         }
         attempts += 1;
@@ -69,7 +77,63 @@ fn read_frontmatter(path: &Path) -> Option<(String, String)> {
     Some((title, date))
 }
 
-fn cmd_ls() {
+fn note_id_from_path(path: &Path) -> Option<String> {
+    let file_name = path.file_name()?.to_str()?;
+    if file_name == "index.md" || (file_name.starts_with("index.") && file_name.ends_with(".md")) {
+        return path.parent()?.file_name()?.to_str().map(|s| s.to_string());
+    }
+    let stem = path.file_stem()?.to_str()?;
+    Some(stem.to_string())
+}
+
+fn note_content_path(path: &Path, lang: Option<&str>) -> Option<std::path::PathBuf> {
+    if path.is_file() {
+        if path.extension().and_then(|s| s.to_str()) == Some("md") {
+            let id = path.file_stem()?.to_str()?;
+            if !id.starts_with('_') {
+                return Some(path.to_path_buf());
+            }
+        }
+        return None;
+    }
+
+    if !path.is_dir() {
+        return None;
+    }
+
+    let preferred = match lang {
+        Some("en") => vec!["index.en.md"],
+        Some("zh") => vec!["index.zh.md"],
+        _ => vec!["index.en.md", "index.zh.md", "index.md"],
+    };
+    for name in preferred {
+        let candidate = path.join(name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+
+    if lang.is_some() {
+        return None;
+    }
+
+    let mut candidates = fs::read_dir(path)
+        .ok()?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| {
+            path.is_file()
+                && path.extension().and_then(|s| s.to_str()) == Some("md")
+                && path
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .is_some_and(|name| name.starts_with("index."))
+        })
+        .collect::<Vec<_>>();
+    candidates.sort();
+    candidates.into_iter().next()
+}
+
+fn cmd_ls(lang: Option<&str>) {
     let notes_dir = Path::new("content/notes");
     if !notes_dir.exists() {
         eprintln!("content/notes/ 目录不存在");
@@ -80,19 +144,12 @@ fn cmd_ls() {
 
     for entry in fs::read_dir(notes_dir).unwrap() {
         let entry = entry.unwrap();
-        let path = entry.path();
-
-        if path.extension().and_then(|s| s.to_str()) != Some("md") {
+        let Some(path) = note_content_path(&entry.path(), lang) else {
             continue;
-        }
-
-        let id = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_string();
-
-        // 跳过 _index.md 和以 _ 开头的文件
+        };
+        let Some(id) = note_id_from_path(&path) else {
+            continue;
+        };
         if id.starts_with('_') {
             continue;
         }
@@ -104,7 +161,11 @@ fn cmd_ls() {
             .and_then(|t| {
                 let secs = t.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs() as i64;
                 let dt = chrono::DateTime::from_timestamp(secs, 0)?;
-                Some(dt.with_timezone(&chrono::Local).format("%Y-%m-%d").to_string())
+                Some(
+                    dt.with_timezone(&chrono::Local)
+                        .format("%Y-%m-%d")
+                        .to_string(),
+                )
             })
             .unwrap_or_else(|| "?".to_string());
 
@@ -125,7 +186,14 @@ fn cmd_ls() {
         let title_display = truncate_width(&title, 38);
         let pad = 38 - title_display.width();
 
-        println!("{:<12} {}{:pad$} {}", id_short, title_display, "", lastmod, pad = pad);
+        println!(
+            "{:<12} {}{:pad$} {}",
+            id_short,
+            title_display,
+            "",
+            lastmod,
+            pad = pad
+        );
     }
 
     fn truncate_width(s: &str, max_width: usize) -> String {
@@ -150,7 +218,7 @@ fn main() {
     match cli.command {
         Commands::New => {
             let id = generate_unique_id();
-            let path = format!("content/notes/{}.md", id);
+            let path = format!("content/notes/{}/index.en.md", id);
             let status = Command::new("hugo")
                 .args(&["new", &path])
                 .status()
@@ -180,8 +248,15 @@ fn main() {
                 std::process::exit(1);
             }
         }
-        Commands::Ls => {
-            cmd_ls();
+        Commands::Ls { en, zh } => {
+            let lang = if en {
+                Some("en")
+            } else if zh {
+                Some("zh")
+            } else {
+                None
+            };
+            cmd_ls(lang);
         }
     }
 }
