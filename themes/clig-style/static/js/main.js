@@ -80,6 +80,33 @@
         });
     }
 
+    // Language auto-redirect
+    (function() {
+        var savedLang = document.documentElement.dataset.savedLang;
+        if (savedLang) {
+            var currentLang = document.documentElement.lang;
+            if (currentLang !== savedLang) {
+                var toggle = document.querySelector('.lang-toggle-nav');
+                if (toggle && toggle.dataset.targetUrl && toggle.dataset.targetLang === savedLang) {
+                    window.location.href = toggle.dataset.targetUrl;
+                }
+            }
+        }
+    })();
+
+    // Language toggle
+    var langToggle = document.querySelector('.lang-toggle-nav');
+    if (langToggle) {
+        langToggle.addEventListener('click', function() {
+            var targetUrl = langToggle.dataset.targetUrl;
+            var targetLang = langToggle.dataset.targetLang;
+            if (targetUrl) {
+                localStorage.setItem('lang', targetLang);
+                window.location.href = targetUrl;
+            }
+        });
+    }
+
     // Theme toggle
     var themeToggle = document.querySelector('.theme-toggle');
     if (themeToggle) {
