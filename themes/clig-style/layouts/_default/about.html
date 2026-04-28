@@ -2,7 +2,15 @@
 <main class="about-main">
     <h1 class="about-title">{{ .Title }}</h1>
 
-    <img src="/images/logo.svg" alt="logo" class="about-logo">
+    <div class="about-identity">
+        <img src="/images/logo.svg" alt="logo" class="about-logo">
+        {{ with .Params.name }}<h2 class="about-name">{{ . }}</h2>{{ end }}
+        <div class="about-links">
+            {{ with .Params.x }}<a href="{{ . }}" target="_blank" rel="noopener">𝕏 @{{ $.Params.x_handle }}</a>{{ end }}
+            {{ with .Params.github }}<a href="{{ . }}" target="_blank" rel="noopener">GitHub @{{ $.Params.github_handle }}</a>{{ end }}
+            {{ with .Params.email }}<a href="mailto:{{ . }}">{{ . }}</a>{{ end }}
+        </div>
+    </div>
 
     {{ if .Content }}
     <div class="about-intro">

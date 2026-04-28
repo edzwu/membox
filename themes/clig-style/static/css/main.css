@@ -1589,12 +1589,52 @@ body.about-page {
    padding: 2em 1.5em 5.5em;
 }
 
+.about-identity {
+   display: flex;
+   flex-direction: column;
+   align-items: center;
+   text-align: center;
+   margin: 0.5em 0 3em;
+   gap: 0.6em;
+}
+
 .about-logo {
    display: block;
-   width: 120px;
+   width: 96px;
    height: auto;
-   margin: 0 0 1.5em;
-   opacity: 0.85;
+   opacity: 0.9;
+   margin-bottom: 0.4em;
+}
+
+.about-name {
+   font-family: 'HLR', serif;
+   font-size: 26px;
+   font-weight: 800;
+   line-height: 1.15;
+   letter-spacing: -0.02em;
+   margin: 0;
+}
+
+.about-links {
+   display: flex;
+   flex-wrap: wrap;
+   align-items: center;
+   justify-content: center;
+   gap: 0.2em 1em;
+   font-family: 'CLIG-PRE', monospace;
+   font-size: 13px;
+   margin-top: 0.2em;
+}
+
+.about-links a {
+   text-decoration: none;
+   opacity: 0.55;
+   transition: opacity 0.2s ease;
+}
+
+.about-links a:hover {
+   opacity: 1;
+   text-decoration: underline;
 }
 
 .about-title {

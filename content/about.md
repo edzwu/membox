@@ -1,6 +1,12 @@
 +++
 title = "About"
 layout = "about"
+name = "Edward Wu"
+x = "https://x.com/fivetiaowuu"
+x_handle = "fivetiaowuu"
+github = "https://github.com/zw4315"
+github_handle = "zw4315"
+email = "ed.z.wu@outlook.com"
 [build]
   list = "never"
 
