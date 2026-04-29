@@ -1104,18 +1104,21 @@ body.home {
 
    .notes-section {
       width: 100%;
-      padding-left: 0;
-      padding-right: 0;
+      padding-left: 1.15em;
+      padding-right: 1.15em;
+      box-sizing: border-box;
    }
 
    .ls-page-main {
-      padding-left: 0.95em;
-      padding-right: 0.95em;
+      padding-left: 1.15em;
+      padding-right: 1.15em;
+      box-sizing: border-box;
    }
 
    .notes-index-main {
-      padding-left: 1em;
-      padding-right: 1.5em;
+      padding-left: 1.15em;
+      padding-right: 1.15em;
+      box-sizing: border-box;
    }
 }
 
