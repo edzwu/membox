@@ -3,6 +3,13 @@
     <article>
         <h1>{{ .Title }}</h1>
 
+        {{ if .Params.tldr }}
+        <div class="article-tldr">
+            <span class="article-tldr-rule" aria-hidden="true"></span>
+            <div class="article-tldr-copy"><strong>TLDR</strong> {{ .Params.tldr }}</div>
+        </div>
+        {{ end }}
+
         <div class="article-meta">
             <time datetime="{{ .Date.Format "2006-01-02T15:04:05Z07:00" }}">{{ .Date.Format "January 2, 2006" }}</time>
             {{ if ne .Date .Lastmod }}
@@ -16,12 +23,6 @@
             </span>
             {{ end }}
         </div>
-
-        {{ if .Params.tldr }}
-        <div class="article-tldr">
-            <strong>TLDR</strong> {{ .Params.tldr }}
-        </div>
-        {{ end }}
 
         {{ .Content }}
     </article>

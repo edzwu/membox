@@ -45,11 +45,38 @@
     var button = document.querySelector('#menu-button');
     var menu = document.querySelector('#TableOfContents');
     if (button && menu) {
+        var scrollBeforeMenu = 0;
+        function setMenuHeight() {
+            var tocRoot = menu.closest('.page-toc') || menu;
+            var rect = tocRoot.getBoundingClientRect();
+            var height = Math.max(tocRoot.scrollHeight, rect.height, window.innerHeight);
+            document.body.style.setProperty('--toc-scroll-height', Math.ceil(height) + 'px');
+        }
+
+        function closeMenu() {
+            document.body.classList.remove("menu-open");
+            document.body.style.removeProperty('--toc-scroll-height');
+            window.scrollTo(0, scrollBeforeMenu);
+        }
+
         button.addEventListener('click', function (event) {
-            document.body.classList.add("menu-open");
+            var willOpen = !document.body.classList.contains("menu-open");
+            if (willOpen) {
+                scrollBeforeMenu = window.scrollY || window.pageYOffset || 0;
+                document.body.classList.add("menu-open");
+                setMenuHeight();
+                window.scrollTo(0, 0);
+            } else {
+                closeMenu();
+            }
         });
         menu.addEventListener('click', function (event) {
-            document.body.classList.remove("menu-open");
+            closeMenu();
+        });
+        window.addEventListener('resize', function() {
+            if (document.body.classList.contains("menu-open")) {
+                setMenuHeight();
+            }
         });
     }
 

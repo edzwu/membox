@@ -22,7 +22,7 @@
 
     <meta name="description" content="{{ .Site.Params.description }}" />
 
-    <link rel="stylesheet" media="screen" href="{{ "css/main.css" | relURL }}?v=15">
+    <link rel="stylesheet" media="screen" href="{{ "css/main.css" | relURL }}?v=37">
 </head>
 <body
     class="{{ if .IsHome }}home{{ else if eq .Kind "section" }}list-page{{ else if eq .Layout "about" }}about-page{{ else if .IsPage }}single-page{{ end }}"
@@ -46,7 +46,7 @@
     {{ end }}
 
     {{ if and .IsPage (ne .Layout "about") }}
-    <button id="menu-button" aria-label="{{ i18n "contents_button" }}" title="{{ i18n "contents_button" }}">☰</button>
+    <button id="menu-button" aria-label="{{ i18n "contents_button" }}" title="{{ i18n "contents_button" }}">{{ i18n "contents_button" }}</button>
     <aside class="page-toc">
         <a href="{{ "notes/" | relLangURL }}" class="toc-back">{{ i18n "toc_back" }}</a>
         {{ .TableOfContents }}
@@ -92,6 +92,6 @@
         <input type="text" id="home-search" placeholder="{{ i18n "search_placeholder" }}" autocomplete="off">
     </div>
 
-    <script src="{{ "js/main.js" | relURL }}?v=4"></script>
+    <script src="{{ "js/main.js" | relURL }}?v=7"></script>
 </body>
 </html>
