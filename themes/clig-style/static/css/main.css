@@ -5,6 +5,30 @@
    src: url(/fonts/ibmplexserif-light.woff2) format('woff2');
 }
 @font-face {
+   font-family: 'CLIG';
+   font-style: normal;
+   font-weight: 400;
+   src: url(https://fonts.clig.dev/iAWriterDuospace-Regular.woff2) format('woff2');
+}
+@font-face {
+   font-family: 'CLIG';
+   font-style: italic;
+   font-weight: 400;
+   src: url(https://fonts.clig.dev/iAWriterDuospace-Italic.woff2) format('woff2');
+}
+@font-face {
+   font-family: 'CLIG';
+   font-style: normal;
+   font-weight: 600;
+   src: url(https://fonts.clig.dev/iAWriterDuospace-Bold.woff2) format('woff2');
+}
+@font-face {
+   font-family: 'CLIG';
+   font-style: italic;
+   font-weight: 600;
+   src: url(https://fonts.clig.dev/iAWriterDuospace-BoldItalic.woff2) format('woff2');
+}
+@font-face {
    font-family: 'HLR'; 
    font-style: italic; 
    font-weight: 400; 
@@ -53,7 +77,7 @@
 }
 
 html {
-   font-family: 'HLR';
+   font-family: 'CLIG', 'HLR', serif;
    font-weight: 400;
    font-size: 62.5%;
    -webkit-font-smoothing: antialiased;
@@ -61,17 +85,22 @@ html {
 }
 
 body {
-   font-size: 1.6rem;
-   line-height: 1.6;
+   font-size: 1.55rem;
+   line-height: 1.42;
+}
+@media (min-width: 1000px) {
+   body {
+      font-size: 1.6rem;
+   }
 }
 @media (min-width: 1200px) {
    body {
-      font-size: 1.7rem;
+      font-size: 17px;
    }
 }
 @media (min-width: 1600px) {
    body {
-      font-size: 1.8rem;
+      font-size: 20px;
    }
 }
 
@@ -374,7 +403,7 @@ main img,
 main blockquote, 
 main table, 
 main hr { 
-   margin: 1.5em 0;
+   margin: 1.7em 0;
    font-weight: 400;
 }
 
@@ -420,7 +449,7 @@ main a {
 }
 
 main strong {
-   font-weight: 800;
+   font-weight: 600;
 }
 
 main img {
@@ -492,14 +521,14 @@ main table {
 }
 
 main table th {
-   font-weight: 800;
-   padding: calc(1.5em * 0.25) 0;
+   font-weight: 600;
+   padding: calc(1.7em * 0.25) 0;
    border-bottom: 2px solid;
 }
 
 main table td {
    border-top: 1px solid;
-   padding: calc(1.5em * 0.25) 0;
+   padding: calc(1.7em * 0.25) 0;
 }
 
 main hr {
@@ -509,7 +538,7 @@ main hr {
 }
 
 h2+p, h3+p {
-   margin-top: calc(1.5em *0.5);
+   margin-top: calc(1.7em *0.5);
 }
 
 code {
@@ -539,7 +568,7 @@ pre code {
 }
 
 pre code strong {
-   font-weight: 800;
+   font-weight: 600;
 }
 
 @media (min-width: 750px) {
@@ -591,7 +620,7 @@ footer a {
    text-decoration: underline;
 }
 footer strong {
-   font-weight: 800;
+   font-weight: 600;
 }
 
 body section iframe {
@@ -1305,10 +1334,10 @@ body.home {
 }
 
 .single-main {
-   --article-measure: min(100%, 84rem);
+   --article-measure: min(100%, 72rem);
    padding: 2.2em clamp(20px, 5vw, 72px) 6em;
-   font-size: 15px;
-   line-height: 1.6;
+   font-size: 16px;
+   line-height: 1.45;
    overflow-wrap: break-word;
 }
 
@@ -1348,13 +1377,13 @@ body.home {
 }
 
 .single-main h2 {
-   font-size: 1.5em;
+   font-size: 1.45em;
    margin-top: 1.9em;
    margin-bottom: 0.45em;
 }
 
 .single-main h3 {
-   font-size: 1.12em;
+   font-size: 1.1em;
    margin-top: 1.45em;
    margin-bottom: 0.38em;
    white-space: normal;
@@ -1398,7 +1427,7 @@ body.home {
 }
 
 .single-main li {
-   line-height: 1.52;
+   line-height: 1.45;
 }
 
 .single-main ol li,
@@ -1422,8 +1451,20 @@ body.home {
 .single-main p,
 .single-main ol,
 .single-main ul {
-   margin-top: 0.82em;
-   margin-bottom: 0.82em;
+   margin-top: 1em;
+   margin-bottom: 1em;
+}
+
+@media (min-width: 1200px) {
+   .single-main {
+      font-size: 17px;
+   }
+}
+
+@media (min-width: 1600px) {
+   .single-main {
+      font-size: 20px;
+   }
 }
 
 .single-main pre {
@@ -1621,7 +1662,7 @@ body.home {
 
    .single-main {
       padding-top: 1.7em;
-      font-size: 15px;
+      font-size: 16px;
    }
 
    /* Article toggle buttons: stack vertically below Contents button on narrow screens */
@@ -1657,8 +1698,8 @@ body.home {
    .single-main {
       padding-left: 18px;
       padding-right: 18px;
-      font-size: 14.5px;
-      line-height: 1.58;
+      font-size: 15.5px;
+      line-height: 1.48;
    }
 
    .single-main h2,
