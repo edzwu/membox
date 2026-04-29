@@ -1,51 +1,210 @@
-// Typewriter effect on homepage title
-    const typewriterTitle = document.getElementById('typewriter-title');
-    if (typewriterTitle) {
-        const lines = Array.from(typewriterTitle.querySelectorAll('span'));
-        const delayStepMs = 80;
-        const queue = [];
+(function() {
+    function initInteractiveUI() {
+        ensureStableNavigation();
+        bindNavRefreshLinks();
+        initTypewriter();
+        initArticlePageEnhancements();
+        initArticleMenuButton();
+        initHomepageSearch();
+        runLanguageAutoRedirect();
+        initLanguageToggle();
+        initThemeToggle();
+    }
 
-        lines.forEach((line) => {
-            const text = line.textContent;
+    function ensureStableNavigation() {
+        var body = document.body;
+        if (!body) return;
+
+        // Single article pages intentionally use ToC navigation, not top nav.
+        var isArticlePage = body.classList.contains('single-page') && !body.classList.contains('about-page');
+        if (isArticlePage) return;
+
+        var nav = document.getElementById('site-nav') || document.querySelector('.site-nav');
+        if (!nav) {
+            nav = rebuildSiteNavFromBodyData();
+        }
+
+        if (!nav) return;
+
+        nav.hidden = false;
+        nav.style.display = 'flex';
+        refreshTopNavCurrentPage(nav);
+    }
+
+    function rebuildSiteNavFromBodyData() {
+        var body = document.body;
+        if (!body) return null;
+
+        var homeUrl = body.dataset.homeUrl || '/';
+        var notesUrl = body.dataset.notesUrl || '/notes/';
+        var aboutUrl = body.dataset.aboutUrl || '/about/';
+        var homeLabel = body.dataset.navHomeLabel || 'Home';
+        var notesLabel = body.dataset.navNotesLabel || 'Notes';
+        var aboutLabel = body.dataset.navAboutLabel || 'About';
+
+        var header = document.createElement('header');
+        header.className = 'site-nav';
+        header.id = 'site-nav';
+
+        var logoLink = document.createElement('a');
+        logoLink.href = homeUrl;
+        logoLink.className = 'nav-logo';
+        logoLink.setAttribute('data-nav-refresh', 'true');
+        logoLink.setAttribute('aria-label', 'Home');
+        logoLink.innerHTML = '<svg viewBox="0 0 40 40" width="28" height="28" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><rect x="4" y="4" width="32" height="32" rx="5"></rect><polyline points="12,14 8,20 12,26"></polyline><line x1="17" y1="26" x2="28" y2="26"></line></svg>';
+
+        var navLinks = document.createElement('nav');
+        navLinks.className = 'nav-links';
+
+        navLinks.appendChild(createTopNavLink(homeUrl, homeLabel));
+        navLinks.appendChild(createTopNavLink(notesUrl, notesLabel));
+        navLinks.appendChild(createTopNavLink(aboutUrl, aboutLabel));
+
+        header.appendChild(logoLink);
+        header.appendChild(navLinks);
+
+        var main = document.querySelector('main');
+        if (main && main.parentNode) {
+            main.parentNode.insertBefore(header, main);
+        } else {
+            body.insertBefore(header, body.firstChild);
+        }
+
+        return header;
+    }
+
+    function createTopNavLink(url, text) {
+        var link = document.createElement('a');
+        link.href = url;
+        link.textContent = text;
+        link.setAttribute('data-nav-refresh', 'true');
+        return link;
+    }
+
+    function refreshTopNavCurrentPage(nav) {
+        var links = nav.querySelectorAll('.nav-links a');
+        var path = window.location.pathname || '/';
+
+        links.forEach(function(link) {
+            var href = link.getAttribute('href') || '';
+            link.removeAttribute('aria-current');
+
+            var isHome = href === '/' || href.endsWith('/en/') || href.endsWith('/zh/');
+            var isNotes = href.indexOf('/notes/') !== -1;
+            var isAbout = href.indexOf('/about/') !== -1;
+
+            if ((isHome && isHomePath(path)) || (isNotes && path.indexOf('/notes/') !== -1) || (isAbout && path.indexOf('/about/') !== -1)) {
+                link.setAttribute('aria-current', 'page');
+            }
+        });
+    }
+
+    function isHomePath(path) {
+        var normalized = normalizePath(path);
+        return normalized === '/' || normalized === '/en/' || normalized === '/zh/';
+    }
+
+    function normalizePath(path) {
+        if (!path) return '/';
+        if (path.charAt(path.length - 1) !== '/') return path + '/';
+        return path;
+    }
+
+    function bindNavRefreshLinks() {
+        var links = document.querySelectorAll('a[data-nav-refresh="true"]');
+        links.forEach(function(link) {
+            if (link.dataset.navRefreshBound === '1') return;
+            link.dataset.navRefreshBound = '1';
+
+            link.addEventListener('click', function() {
+                try {
+                    sessionStorage.setItem('agora-nav-refresh-needed', '1');
+                } catch (err) {
+                    // Ignore storage failures in privacy-restricted browsers.
+                }
+            });
+        });
+    }
+
+    function consumePendingNavRefresh() {
+        try {
+            if (sessionStorage.getItem('agora-nav-refresh-needed') === '1') {
+                sessionStorage.removeItem('agora-nav-refresh-needed');
+                ensureStableNavigation();
+            }
+        } catch (err) {
+            // Ignore storage failures in privacy-restricted browsers.
+        }
+    }
+
+    function initTypewriter() {
+        var typewriterTitle = document.getElementById('typewriter-title');
+        if (!typewriterTitle || typewriterTitle.dataset.typed === '1') return;
+
+        typewriterTitle.dataset.typed = '1';
+
+        var lines = Array.from(typewriterTitle.querySelectorAll('span'));
+        var delayStepMs = 80;
+        var queue = [];
+
+        lines.forEach(function(line) {
+            var text = line.textContent || '';
             line.innerHTML = '';
-            for (let char of text) {
-                const span = document.createElement('span');
+            for (var i = 0; i < text.length; i++) {
+                var span = document.createElement('span');
                 span.className = 'type-char';
-                span.textContent = char === ' ' ? '\u00A0' : char;
-                queue.push({ span, line });
+                span.textContent = text[i] === ' ' ? '\u00A0' : text[i];
+                queue.push({ span: span, line: line });
             }
         });
 
-        // Cursor starts on the first line, then gets pushed forward as we type
-        const cursor = document.createElement('span');
+        var cursor = document.createElement('span');
         cursor.className = 'type-cursor';
         cursor.textContent = '|';
         if (lines.length > 0) lines[0].appendChild(cursor);
 
-        let i = 0;
+        var index = 0;
         function typeNext() {
-            if (i >= queue.length) return;
-            const { span, line } = queue[i];
-            if (cursor.parentNode !== line) line.appendChild(cursor);
-            cursor.before(span);
-            i++;
+            if (index >= queue.length) return;
+            var item = queue[index];
+            if (cursor.parentNode !== item.line) item.line.appendChild(cursor);
+            cursor.before(item.span);
+            index += 1;
             setTimeout(typeNext, delayStepMs);
         }
+
         setTimeout(typeNext, delayStepMs);
     }
 
-    // Article page: section nesting + ToC highlighting
-    if (document.querySelector('main article')) {
-        convertToNestedSections(document.querySelector('main article'));
-        addParentHeadingAttribute();
-        startNavObservation();
+    function initArticlePageEnhancements() {
+        var article = document.querySelector('main article');
+        if (!article) return;
+
+        if (article.dataset.nestedSectionsDone !== '1') {
+            convertToNestedSections(article);
+            article.dataset.nestedSectionsDone = '1';
+        }
+
+        if (document.body.dataset.parentHeadingDone !== '1') {
+            addParentHeadingAttribute();
+            document.body.dataset.parentHeadingDone = '1';
+        }
+
+        if (article.dataset.navObserveDone !== '1') {
+            startNavObservation();
+            article.dataset.navObserveDone = '1';
+        }
     }
 
-    // Article page menu button
-    var button = document.querySelector('#menu-button');
-    var menu = document.querySelector('#TableOfContents');
-    if (button && menu) {
+    function initArticleMenuButton() {
+        var button = document.querySelector('#menu-button');
+        var menu = document.querySelector('#TableOfContents');
+        if (!button || !menu || button.dataset.menuBound === '1') return;
+
+        button.dataset.menuBound = '1';
+
         var scrollBeforeMenu = 0;
+
         function setMenuHeight() {
             var tocRoot = menu.closest('.page-toc') || menu;
             var rect = tocRoot.getBoundingClientRect();
@@ -54,51 +213,55 @@
         }
 
         function closeMenu() {
-            document.body.classList.remove("menu-open");
+            document.body.classList.remove('menu-open');
             document.body.style.removeProperty('--toc-scroll-height');
             window.scrollTo(0, scrollBeforeMenu);
         }
 
-        button.addEventListener('click', function (event) {
-            var willOpen = !document.body.classList.contains("menu-open");
+        button.addEventListener('click', function() {
+            var willOpen = !document.body.classList.contains('menu-open');
             if (willOpen) {
                 scrollBeforeMenu = window.scrollY || window.pageYOffset || 0;
-                document.body.classList.add("menu-open");
+                document.body.classList.add('menu-open');
                 setMenuHeight();
                 window.scrollTo(0, 0);
             } else {
                 closeMenu();
             }
         });
-        menu.addEventListener('click', function (event) {
+
+        menu.addEventListener('click', function() {
             closeMenu();
         });
+
         window.addEventListener('resize', function() {
-            if (document.body.classList.contains("menu-open")) {
+            if (document.body.classList.contains('menu-open')) {
                 setMenuHeight();
             }
         });
     }
 
-    // Homepage search
-    const searchInput = document.getElementById('home-search');
-    const noteList = document.getElementById('note-list');
-    const noResults = document.getElementById('no-results');
+    function initHomepageSearch() {
+        var searchInput = document.getElementById('home-search');
+        var noteList = document.getElementById('note-list');
+        var noResults = document.getElementById('no-results');
 
-    if (searchInput && noteList) {
-        const rows = Array.from(noteList.querySelectorAll('.ls-row'));
+        if (!searchInput || !noteList || searchInput.dataset.searchBound === '1') return;
+        searchInput.dataset.searchBound = '1';
 
-        searchInput.addEventListener('input', () => {
-            const query = searchInput.value.trim().toLowerCase();
-            let visible = 0;
+        var rows = Array.from(noteList.querySelectorAll('.ls-row'));
 
-            rows.forEach(row => {
-                const title = row.dataset.title || '';
-                const tldr = row.dataset.tldr || '';
-                const tags = row.dataset.tags || '';
-                const match = title.includes(query) || tldr.includes(query) || tags.includes(query);
+        searchInput.addEventListener('input', function() {
+            var query = (searchInput.value || '').trim().toLowerCase();
+            var visible = 0;
+
+            rows.forEach(function(row) {
+                var title = row.dataset.title || '';
+                var tldr = row.dataset.tldr || '';
+                var tags = row.dataset.tags || '';
+                var match = title.indexOf(query) !== -1 || tldr.indexOf(query) !== -1 || tags.indexOf(query) !== -1;
                 row.hidden = !match;
-                if (match) visible++;
+                if (match) visible += 1;
             });
 
             if (noResults) {
@@ -107,36 +270,41 @@
         });
     }
 
-    // Language auto-redirect
-    (function() {
-        var savedLang = document.documentElement.dataset.savedLang;
-        if (savedLang) {
-            var currentLang = document.documentElement.lang;
-            if (currentLang !== savedLang) {
-                var toggle = document.querySelector('.lang-toggle-nav');
-                if (toggle && toggle.dataset.targetUrl && toggle.dataset.targetLang === savedLang) {
-                    window.location.href = toggle.dataset.targetUrl;
-                }
-            }
-        }
-    })();
+    function runLanguageAutoRedirect() {
+        if (document.documentElement.dataset.langRedirectChecked === '1') return;
+        document.documentElement.dataset.langRedirectChecked = '1';
 
-    // Language toggle
-    var langToggle = document.querySelector('.lang-toggle-nav');
-    if (langToggle) {
+        var savedLang = document.documentElement.dataset.savedLang;
+        if (!savedLang) return;
+
+        var currentLang = document.documentElement.lang;
+        if (currentLang === savedLang) return;
+
+        var toggle = document.querySelector('.lang-toggle-nav');
+        if (toggle && toggle.dataset.targetUrl && toggle.dataset.targetLang === savedLang) {
+            window.location.href = toggle.dataset.targetUrl;
+        }
+    }
+
+    function initLanguageToggle() {
+        var langToggle = document.querySelector('.lang-toggle-nav');
+        if (!langToggle || langToggle.dataset.langBound === '1') return;
+        langToggle.dataset.langBound = '1';
+
         langToggle.addEventListener('click', function() {
             var targetUrl = langToggle.dataset.targetUrl;
             var targetLang = langToggle.dataset.targetLang;
-            if (targetUrl) {
-                localStorage.setItem('lang', targetLang);
-                window.location.href = targetUrl;
-            }
+            if (!targetUrl) return;
+
+            localStorage.setItem('lang', targetLang);
+            window.location.href = targetUrl;
         });
     }
 
-    // Theme toggle
-    var themeToggle = document.querySelector('.theme-toggle');
-    if (themeToggle) {
+    function initThemeToggle() {
+        var themeToggle = document.querySelector('.theme-toggle');
+        if (!themeToggle) return;
+
         var sunIcon = themeToggle.querySelector('.theme-icon-sun');
         var moonIcon = themeToggle.querySelector('.theme-icon-moon');
         var isHome = document.body.classList.contains('home');
@@ -160,6 +328,9 @@
 
         updateThemeIcons();
 
+        if (themeToggle.dataset.themeBound === '1') return;
+        themeToggle.dataset.themeBound = '1';
+
         themeToggle.addEventListener('click', function() {
             var t = document.documentElement.dataset.theme;
             if (t) {
@@ -174,7 +345,24 @@
         });
     }
 
-    // Homepage hamburger menu
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initInteractiveUI, { once: true });
+    } else {
+        initInteractiveUI();
+    }
+
+    window.addEventListener('pageshow', function() {
+        initInteractiveUI();
+        consumePendingNavRefresh();
+    });
+
+    window.addEventListener('popstate', function() {
+        setTimeout(function() {
+            initInteractiveUI();
+            consumePendingNavRefresh();
+        }, 0);
+    });
+})();
 
 function convertToNestedSections(rootElement) {
     const children = Array.from(rootElement.children);
@@ -188,7 +376,7 @@ function convertToNestedSections(rootElement) {
         const headingMatch = element.tagName.match(/^h(\d)$/i);
 
         if (headingMatch) {
-            const newLevel = parseInt(headingMatch[1]);
+            const newLevel = parseInt(headingMatch[1], 10);
 
             while (currentLevel + 1 < newLevel) {
                 const section = document.createElement('section');
@@ -205,13 +393,15 @@ function convertToNestedSections(rootElement) {
             const id = element.getAttribute('id');
 
             const newSection = document.createElement('section');
-            newSection.setAttribute('id', id);
-            element.removeAttribute('id');
+            if (id) {
+                newSection.setAttribute('id', id);
+                element.removeAttribute('id');
 
-            const permalink = document.createElement('a');
-            permalink.setAttribute('href', `#${id}`);
-            permalink.classList.add('permalink');
-            element.appendChild(permalink);
+                const permalink = document.createElement('a');
+                permalink.setAttribute('href', `#${id}`);
+                permalink.classList.add('permalink');
+                element.appendChild(permalink);
+            }
 
             currentSection.appendChild(newSection);
 
@@ -240,17 +430,17 @@ function addParentHeadingAttribute() {
 }
 
 function highlightFirstActive() {
-    document.querySelectorAll("nav li").forEach(link => {
-        link.classList.remove('active')
-    })
+    document.querySelectorAll('nav li').forEach(link => {
+        link.classList.remove('active');
+    });
 
-    let firstVisibleLink = document.querySelector('nav li.visible');
+    const firstVisibleLink = document.querySelector('nav li.visible');
     if (firstVisibleLink) {
-        let firstVisibleChild = firstVisibleLink.querySelector("li.visible");
+        const firstVisibleChild = firstVisibleLink.querySelector('li.visible');
         if (firstVisibleChild) {
-            firstVisibleChild.classList.add('active')
+            firstVisibleChild.classList.add('active');
         } else {
-            firstVisibleLink.classList.add('active')
+            firstVisibleLink.classList.add('active');
         }
     }
 }
@@ -271,7 +461,7 @@ function startNavObservation() {
         highlightFirstActive();
     });
 
-    document.querySelectorAll('section[id]').forEach((section) => {
+    document.querySelectorAll('section[id]').forEach(section => {
         observer.observe(section);
     });
 }
