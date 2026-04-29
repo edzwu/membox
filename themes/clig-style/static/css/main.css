@@ -992,7 +992,6 @@ body.home {
 .hero-about p {
    margin: 0;
    font-size: 15px;
-   font-family: 'CLIG-PRE', monospace;
 }
 
 .hero-about p + p {
