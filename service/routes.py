@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
 import sqlite3
+import uuid
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -15,6 +18,21 @@ router = APIRouter()
 class OperationError(BaseModel):
     path: str
     error: str
+
+
+class NoteIngestRequest(BaseModel):
+    type: str = Field(default="note")
+    backend: str = Field(..., description="Backend name")
+    subdir: Optional[str] = Field(None, description="Subdirectory under backend root")
+    source_url: Optional[str] = Field(None, description="Original source URL")
+    title: str = Field(..., description="Note title")
+    tags: List[str] = Field(default_factory=list)
+    content: str = Field(..., description="Markdown or plain text content")
+
+
+class NoteIngestResponse(BaseModel):
+    uuid: str
+    status: str
 
 
 class IngestRequest(BaseModel):
@@ -37,6 +55,22 @@ class IngestResponse(BaseModel):
     unchanged: int
     results: List[IngestResult]
     errors: List[OperationError] = Field(default_factory=list)
+
+
+@router.post("/api/ingest", response_model=NoteIngestResponse)
+def ingest_note(req: NoteIngestRequest, conn: sqlite3.Connection = Depends(get_conn)) -> NoteIngestResponse:
+    note_uuid = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+    tags_json = json.dumps(req.tags, ensure_ascii=False)
+    conn.execute(
+        """
+        INSERT INTO note (uuid, backend, subdir, source_url, title, tags, content, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (note_uuid, req.backend, req.subdir, req.source_url, req.title, tags_json, req.content, now, now),
+    )
+    conn.commit()
+    return NoteIngestResponse(uuid=note_uuid, status="created")
 
 
 @router.post("/ingest", response_model=IngestResponse)

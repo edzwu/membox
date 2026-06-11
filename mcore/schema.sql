@@ -57,3 +57,40 @@ CREATE TABLE IF NOT EXISTS embedding (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_embedding_model ON embedding(embedding_model);
+
+-- Generic note ingest (aligned with mvp.md Hub documents concept)
+CREATE TABLE IF NOT EXISTS note (
+  uuid TEXT PRIMARY KEY,
+  backend TEXT,
+  subdir TEXT,
+  source_url TEXT,
+  title TEXT,
+  tags TEXT, -- JSON array
+  content TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS note_fts USING fts5(
+  title, content,
+  content='note',
+  content_rowid='rowid',
+  tokenize='porter'
+);
+
+CREATE TRIGGER IF NOT EXISTS trg_note_ai AFTER INSERT ON note BEGIN
+  INSERT INTO note_fts(rowid, title, content)
+  VALUES (new.rowid, new.title, new.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_note_ad AFTER DELETE ON note BEGIN
+  INSERT INTO note_fts(note_fts, rowid, title, content)
+  VALUES ('delete', old.rowid, old.title, old.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_note_au AFTER UPDATE ON note BEGIN
+  INSERT INTO note_fts(note_fts, rowid, title, content)
+  VALUES ('delete', old.rowid, old.title, old.content);
+  INSERT INTO note_fts(rowid, title, content)
+  VALUES (new.rowid, new.title, new.content);
+END;

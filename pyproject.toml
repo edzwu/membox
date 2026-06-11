@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.scripts]
-mm = "mcore.tools.cli:main"
+mm = "cli.membox_cli.main:main"
 
 # ✅ 新写法：PEP 735 dependency groups（替代 [tool.uv].dev-dependencies）
 [dependency-groups]
@@ -29,4 +29,4 @@ dev = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["*"]
-exclude = ["data*", "front_end*"]
+exclude = ["data*", "front_end*", "go-client*", "service*", "internal*", "cmd*"]
