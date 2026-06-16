@@ -26,11 +26,11 @@ jobs:
       - name: Build
         run: hugo --minify
 
-      - name: Deploy to zw4315.github.io
+      - name: Deploy to edzwu.github.io
         uses: peaceiris/actions-gh-pages@v4
         with:
           personal_token: ${{ secrets.PAGES_DEPLOY_TOKEN || secrets.DEPLOY_PAT }}
-          external_repository: zw4315/zw4315.github.io
+          external_repository: edzwu/edzwu.github.io
           publish_branch: master
           publish_dir: ./public
           user_name: github-actions[bot]

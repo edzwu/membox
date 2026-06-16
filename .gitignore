@@ -1,6 +1,7 @@
 ag
 
 # Logs
+docs/
 logs
 *.log
 npm-debug.log*
@@ -73,7 +74,6 @@ resources/_gen/
 
 # Generated site
 public/
-docs/
 
 # Tool configs
 lib/.pa11yci

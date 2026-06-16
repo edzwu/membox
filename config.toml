@@ -1,6 +1,6 @@
 languageCode = "en-us"
 title = "Edward's Notes"
-baseURL = "https://zw4315.github.io/"
+baseURL = "https://edzwu.github.io/"
 canonifyURLs = false
 theme = "clig-style"
 publishDir = "public"
