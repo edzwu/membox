@@ -1,10 +1,19 @@
-data/
+# Build artifacts
+bin/
+
+# macOS
+.DS_Store
+
+# Workspace data
+.membox/
+
+# Python
 __pycache__/
 *.egg-info/
-.metadata/
 .venv/
 *.pyc
-.env
 uv.lock
-mutagen.yml.lock
-mm
+
+# Misc
+.metadata/
+.env
