@@ -20,19 +20,19 @@ $(MMD_BIN):
 test:
 	go test ./...
 
-# Convenience target to forcibly terminate any orphaned mm tui processes.
+# Convenience target to forcibly terminate any orphaned mm processes.
 kill-tui:
-	@PIDS=$$(ps aux | grep -E 'mm tui' | grep -v grep | awk '{print $$2}' | tr '\n' ' '); \
+	@PIDS=$$(ps aux | grep -E 'mm$$|mm ' | grep -v grep | awk '{print $$2}' | tr '\n' ' '); \
 	if [ -n "$${PIDS% }" ]; then \
 		kill $${PIDS% }; \
-		echo "killed mm tui process(s): $${PIDS% }"; \
+		echo "killed mm process(s): $${PIDS% }"; \
 	else \
-		echo "no running mm tui process found"; \
+		echo "no running mm process found"; \
 	fi
 
 # Development helper: keep all config/data under ./.membox
 run: kill-tui
-	MM_DEV=1 go run ./cmd/mm tui
+	MM_DEV=1 go run ./cmd/mm
 
 clean:
 	rm -rf $(BIN_DIR) .membox
