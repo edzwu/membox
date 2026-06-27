@@ -61,7 +61,25 @@ END;
 
 // Open returns a *sql.DB for the given path, creating the file if necessary.
 // An empty dbPath falls back to MEMBOX_DB_PATH, then data/membox.sqlite.
-func Open(dbPath string) (*sql.DB, error) {
+// DB wraps *sql.DB so callers can close the underlying connection pool and
+// access it for repository construction.
+type DB struct {
+	db *sql.DB
+}
+
+// DB returns the underlying *sql.DB.
+func (d *DB) DB() *sql.DB {
+	return d.db
+}
+
+// Close closes the underlying database connection pool.
+func (d *DB) Close() error {
+	return d.db.Close()
+}
+
+// Open returns a DB for the given path, creating the file if necessary.
+// An empty dbPath falls back to MEMBOX_DB_PATH, then data/membox.sqlite.
+func Open(dbPath string) (*DB, error) {
 	if dbPath == "" {
 		dbPath = defaultDBPath
 		if v := os.Getenv("MEMBOX_DB_PATH"); v != "" {
@@ -87,5 +105,5 @@ func Open(dbPath string) (*sql.DB, error) {
 	if _, err := db.Exec(noteSchema); err != nil {
 		return nil, fmt.Errorf("init schema: %w", err)
 	}
-	return db, nil
+	return &DB{db: db}, nil
 }

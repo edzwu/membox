@@ -24,6 +24,7 @@ Run 'mm init' to create a local development workspace.`,
 	}
 
 	root.AddCommand(initCmd())
+	root.AddCommand(tuiCmd())
 
 	return root
 }
