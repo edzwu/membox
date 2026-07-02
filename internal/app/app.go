@@ -74,17 +74,29 @@ func (a *App) Close() error {
 }
 
 // Sync reconciles the SQLite metadata index with all filesystem notes directories.
+// If the workspace is empty, it returns an empty result and no error.
 func (a *App) Sync(ctx context.Context) (*service.SyncResult, error) {
+	if a.ws.IsEmpty() {
+		return &service.SyncResult{}, nil
+	}
 	return a.service.Sync(ctx)
 }
 
 // ListNotes returns recent notes from all workspace directories.
+// If the workspace is empty, it returns an empty slice and no error.
 func (a *App) ListNotes(ctx context.Context, includeTags, excludeTags []string, limit int) ([]*domain.Note, error) {
+	if a.ws.IsEmpty() {
+		return []*domain.Note{}, nil
+	}
 	return a.service.ListNotes(ctx, includeTags, excludeTags, limit)
 }
 
 // SearchNotes performs a full-text search over note titles.
+// If the workspace is empty, it returns an empty slice and no error.
 func (a *App) SearchNotes(ctx context.Context, query string, limit int) ([]*repository.NoteSearchResult, error) {
+	if a.ws.IsEmpty() {
+		return []*repository.NoteSearchResult{}, nil
+	}
 	return a.service.SearchNotes(ctx, query, limit)
 }
 

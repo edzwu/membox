@@ -12,6 +12,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("mmd: load config: %v", err)
 	}
+	if err := config.InitWorkspace(cfg); err != nil {
+		log.Fatalf("mmd: init workspace: %v", err)
+	}
 
 	fmt.Printf("mmd daemon starting\n")
 	fmt.Printf("config dir: %s\n", cfg.ConfigDir)

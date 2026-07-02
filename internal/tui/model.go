@@ -3,6 +3,8 @@ package tui
 import (
 	"strings"
 
+	"fmt"
+
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -10,16 +12,29 @@ import (
 	"github.com/earendil-works/membox/internal/app"
 )
 
-type errMsg error
 
 type noteItem struct {
 	UUID  string `json:"UUID"`
 	Title string `json:"Title"`
 }
 
+// onboardingMsg signals that the workspace is empty and the user must add a
+// notes directory before any other operation can proceed.
+type onboardingMsg struct{}
+
+// workspaceAddedMsg signals that the user successfully configured the first
+// notes directory during onboarding.
+type workspaceAddedMsg struct{}
+
+const (
+	modeNormal     = "normal"
+	modeOnboarding = "onboarding"
+)
+
 type model struct {
 	app *app.App
 
+	mode         string
 	viewport     viewport.Model
 	input        textinput.Model
 	width        int
@@ -46,15 +61,28 @@ func newModel(a *app.App) *model {
 	vp := viewport.New(80, 20)
 	vp.SetContent("")
 
-	return &model{
+	m := &model{
 		app:     a,
+		mode:    modeNormal,
 		viewport: vp,
 		input:   ti,
 		compAll: completionCandidates(),
 	}
+
+	if a.Workspaces().IsEmpty() {
+		m.mode = modeOnboarding
+	}
+
+	return m
 }
 
 func (m *model) Init() tea.Cmd {
+	if m.mode == modeOnboarding {
+		return tea.Batch(
+			textinput.Blink,
+			func() tea.Msg { return onboardingMsg{} },
+		)
+	}
 	return tea.Batch(
 		textinput.Blink,
 		loadInitialNotes(m.app),
@@ -69,67 +97,38 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.updateLayout()
+	case onboardingMsg:
+		m.appendOutput("Welcome to membox.\n\nNo notes directories are configured yet.\nEnter the path to your first notes directory below, or press q to quit.")
+	case workspaceAddedMsg:
+		m.mode = modeNormal
+		m.appendOutput("Workspace configured. Loading notes...")
+		cmds = append(cmds, loadInitialNotes(m.app))
 	case notesMsg:
 		m.notes = msg
 	case outputMsg:
 		m.appendOutput(string(msg))
 		cmds = append(cmds, loadInitialNotes(m.app))
-	case errMsg:
-		m.appendOutput(msg.Error())
+	case errorMsg:
+		m.appendOutput(string(msg))
 	case tea.KeyMsg:
-		if m.completing {
+		if msg.Type == tea.KeyCtrlC {
+			return m, tea.Quit
+		}
+
+		if m.mode == modeOnboarding {
 			switch msg.Type {
-			case tea.KeyUp:
-				if m.compIndex > 0 {
-					m.compIndex--
-					m.ensureCompletionVisible()
-				}
-				return m, nil
-			case tea.KeyDown:
-				if m.compIndex < len(m.compFiltered)-1 {
-					m.compIndex++
-					m.ensureCompletionVisible()
-				}
-				return m, nil
-			case tea.KeyTab, tea.KeyEnter:
-				if len(m.compFiltered) > 0 {
-					m.input.SetValue(m.compFiltered[m.compIndex])
-					m.input.CursorEnd()
-				}
-				m.completing = false
-				m.updateLayout()
-				return m, nil
-			case tea.KeyEsc:
-				m.completing = false
-				m.updateLayout()
-				return m, nil
+			case tea.KeyEnter:
+				return m, m.submitOnboarding()
+			case tea.KeyCtrlC, tea.KeyEsc:
+				return m, tea.Quit
 			default:
-				m.completing = false
-				m.updateLayout()
+				var cmd tea.Cmd
+				m.input, cmd = m.input.Update(msg)
+				return m, cmd
 			}
 		}
 
-		switch msg.Type {
-		case tea.KeyCtrlC:
-			return m, tea.Quit
-		case tea.KeyTab:
-			m.showCompletions()
-			return m, nil
-		case tea.KeyUp:
-			m.historyPrev()
-			return m, nil
-		case tea.KeyDown:
-			m.historyNext()
-			return m, nil
-		case tea.KeyPgUp:
-			m.viewport.LineUp(3)
-			return m, nil
-		case tea.KeyPgDown:
-			m.viewport.LineDown(3)
-			return m, nil
-		case tea.KeyEnter:
-			return m, m.submitInput()
-		}
+		return m.handleNormalKey(msg)
 	}
 
 	var cmd tea.Cmd
@@ -149,6 +148,83 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, tea.Batch(cmds...)
+}
+
+func (m *model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.completing {
+		switch msg.Type {
+		case tea.KeyUp:
+			if m.compIndex > 0 {
+				m.compIndex--
+				m.ensureCompletionVisible()
+			}
+			return m, nil
+		case tea.KeyDown:
+			if m.compIndex < len(m.compFiltered)-1 {
+				m.compIndex++
+				m.ensureCompletionVisible()
+			}
+			return m, nil
+		case tea.KeyTab, tea.KeyEnter:
+			if len(m.compFiltered) > 0 {
+				m.input.SetValue(m.compFiltered[m.compIndex])
+				m.input.CursorEnd()
+			}
+			m.completing = false
+			m.updateLayout()
+			return m, nil
+		case tea.KeyEsc:
+			m.completing = false
+			m.updateLayout()
+			return m, nil
+		default:
+			m.completing = false
+			m.updateLayout()
+		}
+	}
+
+	switch msg.Type {
+	case tea.KeyTab:
+		m.showCompletions()
+		return m, nil
+	case tea.KeyUp:
+		m.historyPrev()
+		return m, nil
+	case tea.KeyDown:
+		m.historyNext()
+		return m, nil
+	case tea.KeyPgUp:
+		m.viewport.LineUp(3)
+		return m, nil
+	case tea.KeyPgDown:
+		m.viewport.LineDown(3)
+		return m, nil
+	case tea.KeyEnter:
+		return m, m.submitInput()
+	}
+
+	var cmd tea.Cmd
+	oldVal := m.input.Value()
+	m.input, cmd = m.input.Update(msg)
+	if m.input.Value() != oldVal {
+		m.completing = false
+		m.historyTemp = m.input.Value()
+		m.updateLayout()
+	}
+	return m, cmd
+}
+
+func (m *model) submitOnboarding() tea.Cmd {
+	input := strings.TrimSpace(m.input.Value())
+	if input == "" {
+		return nil
+	}
+	return func() tea.Msg {
+		if err := m.app.AddWorkspace(input); err != nil {
+			return errorMsg(fmt.Sprintf("add workspace: %v", err))
+		}
+		return workspaceAddedMsg{}
+	}
 }
 
 func (m *model) submitInput() tea.Cmd {

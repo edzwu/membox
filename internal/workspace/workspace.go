@@ -20,19 +20,20 @@ const fileName = "workspaces.json"
 type Workspace struct {
 	// Notes is a list of absolute paths to directories containing markdown
 	// note files. The first directory is the default write target for new
-	// notes.
+	// notes. An empty list means the workspace is uninitialized.
 	Notes []string `json:"notes"`
 }
 
-// Load reads the workspace configuration from the data directory, creating a
-// default single-directory workspace if the file does not yet exist.
+// Load reads the workspace configuration from the data directory. If the file
+// does not exist yet, an empty workspace is returned so the caller can decide
+// how to onboard the user.
 func Load(cfg *config.Config) (*Workspace, error) {
 	path := filepath.Join(cfg.DataDir, fileName)
 
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return defaultWorkspace(cfg), nil
+			return &Workspace{Notes: nil}, nil
 		}
 		return nil, fmt.Errorf("read workspace file %q: %w", path, err)
 	}
@@ -61,6 +62,33 @@ func Load(cfg *config.Config) (*Workspace, error) {
 
 // Save persists the workspace to the data directory, creating the directory
 // if necessary.
+func (w *Workspace) Save(cfg *config.Config) error {
+	if err := w.validate(); err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
+		return fmt.Errorf("create data directory: %w", err)
+	}
+
+	path := filepath.Join(cfg.DataDir, fileName)
+	data, err := json.MarshalIndent(w, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode workspace: %w", err)
+	}
+	data = append(data, '\n')
+
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return fmt.Errorf("write workspace file %q: %w", path, err)
+	}
+	return nil
+}
+
+// IsEmpty reports whether the workspace has no notes directories configured.
+func (w *Workspace) IsEmpty() bool {
+	return len(w.Notes) == 0
+}
+
 // Add appends a notes directory to the workspace if it is not already present.
 func (w *Workspace) Add(dir string) error {
 	if dir == "" {
@@ -86,45 +114,7 @@ func (w *Workspace) Remove(dir string) error {
 	return fmt.Errorf("notes directory not in workspace: %q", dir)
 }
 
-func (w *Workspace) Save(cfg *config.Config) error {
-	if err := w.validate(); err != nil {
-		return err
-	}
-
-	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
-		return fmt.Errorf("create data directory: %w", err)
-	}
-
-	path := filepath.Join(cfg.DataDir, fileName)
-	data, err := json.MarshalIndent(w, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encode workspace: %w", err)
-	}
-	data = append(data, '\n')
-
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		return fmt.Errorf("write workspace file %q: %w", path, err)
-	}
-	return nil
-}
-
-// DefaultNotesDir returns the directory used for notes when no workspace file
-// exists yet. In dev mode this is .membox/notes; otherwise it is a notes/
-// directory under the current working directory.
-func DefaultNotesDir(cfg *config.Config) string {
-	return filepath.Join(cfg.DataDir, "..", "notes")
-}
-
-func defaultWorkspace(cfg *config.Config) *Workspace {
-	return &Workspace{
-		Notes: []string{DefaultNotesDir(cfg)},
-	}
-}
-
 func (w *Workspace) validate() error {
-	if len(w.Notes) == 0 {
-		return fmt.Errorf("workspace must contain at least one notes directory")
-	}
 	seen := make(map[string]struct{}, len(w.Notes))
 	for _, dir := range w.Notes {
 		if dir == "" {
