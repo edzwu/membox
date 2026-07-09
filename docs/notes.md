@@ -1,10 +1,7 @@
-## sprint
+## sprint0
 
-- 把当前的 changes commit
-	root.AddCommand(noteCmd())
-	root.AddCommand(tuiCmd())
-- bugfix: 当前的 rename take args 错误
-- 需要有 migrate 的能力, 然后开始做 link
+- 双击 space bubble tea
+- 和远端的 perkeep 做整合
 
 ## backlog 
 
@@ -14,6 +11,11 @@
 - 现在的 uuid 都是怎么做的?
 - tags 需要一个系统
 - 需要 alphaxiv-open 模仿, 打上 index
+- 把当前的 changes commit
+	root.AddCommand(noteCmd())
+	root.AddCommand(tuiCmd())
+- bugfix: 当前的 rename take args 错误
+- 需要有 migrate 的能力, 然后开始做 link
 
 ## learning
 

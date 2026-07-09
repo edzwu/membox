@@ -57,6 +57,17 @@ BEGIN
   INSERT INTO note_fts(rowid, title)
   VALUES (new.rowid, new.title);
 END;
+
+-- Perkeep sync state: maps local note UUID to remote permanode blobref.
+CREATE TABLE IF NOT EXISTS perkeep_sync (
+  uuid TEXT PRIMARY KEY,
+  permanode TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  synced_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (uuid) REFERENCES note(uuid) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_perkeep_sync_permanode ON perkeep_sync(permanode);
 `
 
 // Open returns a *sql.DB for the given path, creating the file if necessary.

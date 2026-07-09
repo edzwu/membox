@@ -30,6 +30,9 @@ Run 'mm init' to create a local development workspace.`,
 	}
 
 	root.AddCommand(initCmd())
+	root.AddCommand(noteCmd())
+	root.AddCommand(workspaceCmd())
+	root.AddCommand(perkeepCmd())
 
 	return root
 }

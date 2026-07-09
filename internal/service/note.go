@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"github.com/earendil-works/membox/internal/domain"
+	"github.com/earendil-works/membox/internal/perkeep"
 	"github.com/earendil-works/membox/internal/repository"
+	sqliterepo "github.com/earendil-works/membox/internal/repository/sqlite"
 	"github.com/google/uuid"
 )
 
@@ -345,6 +347,17 @@ type SyncResult struct {
 	Deleted   int
 	Errors    int
 	Errs      []error
+}
+
+// SyncToPerkeep uploads any changed local notes to Perkeep and records the
+// resulting permanode blobrefs in the perkeep_sync table.
+func (s *NoteService) SyncToPerkeep(ctx context.Context, syncRepo *sqliterepo.PerkeepSyncRepo, cacheRoot string) (*perkeep.SyncResult, error) {
+	client := perkeep.NewClient()
+	if v := os.Getenv("MM_PERKEEP_SERVER"); v != "" {
+		client = perkeep.NewClientWithServer(v)
+	}
+	syncer := perkeep.NewSyncer(client, s.store, s.repo, syncRepo, cacheRoot)
+	return syncer.Push(ctx)
 }
 
 // openEditor creates a markdown file with minimal frontmatter and opens it in the user's editor.

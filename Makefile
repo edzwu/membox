@@ -34,6 +34,9 @@ kill-tui:
 run: kill-tui
 	MM_DEV=1 go run ./cmd/mm
 
+run-mmd: build
+	MM_DEV=1 ./$(MMD_BIN)
+
 clean:
 	rm -rf $(BIN_DIR) .membox
 

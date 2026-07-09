@@ -29,7 +29,17 @@ func NewNoteStore(notesDirs []string) *NoteStore {
 // Path returns the filesystem path for a note based on its title.
 // New notes are written to the first notes directory.
 func (s *NoteStore) Path(n *domain.Note) string {
-	return filepath.Join(s.notesDirs[0], sanitize(n.Title)+".md")
+	return filepath.Join(s.writeDir(), sanitize(n.Title)+".md")
+}
+
+// writeDir returns the first notes directory, falling back to a sentinel
+// path when no directories are configured so callers still get a sensible
+// error rather than a panic.
+func (s *NoteStore) writeDir() string {
+	if len(s.notesDirs) == 0 {
+		return ""
+	}
+	return s.notesDirs[0]
 }
 
 // Save writes a note to <notesDir>/<title>.md.
@@ -37,6 +47,9 @@ func (s *NoteStore) Path(n *domain.Note) string {
 // renamed. The note remains in its original notes directory if it already
 // exists; otherwise it is written to the first directory.
 func (s *NoteStore) Save(n *domain.Note) error {
+	if len(s.notesDirs) == 0 {
+		return fmt.Errorf("no notes directories configured in workspace")
+	}
 	existing, _ := s.FindByUUID(n.UUID)
 
 	path := s.Path(n)
