@@ -49,6 +49,22 @@ func New() (*App, error) {
 		return nil, fmt.Errorf("load workspace: %w", err)
 	}
 
+	if ws.IsEmpty() {
+		defaultDir, err := workspace.DiscoverDefaultNotesDir()
+		if err != nil {
+			return nil, fmt.Errorf("discover default notes dir: %w", err)
+		}
+		if err := os.MkdirAll(defaultDir, 0o755); err != nil {
+			return nil, fmt.Errorf("create default notes dir: %w", err)
+		}
+		if err := ws.Add(defaultDir); err != nil {
+			return nil, fmt.Errorf("add default workspace: %w", err)
+		}
+		if err := ws.Save(cfg); err != nil {
+			return nil, fmt.Errorf("save default workspace: %w", err)
+		}
+	}
+
 	db, err := sqlite.Open(filepath.Join(cfg.DataDir, "membox.sqlite"))
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)

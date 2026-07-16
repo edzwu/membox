@@ -71,9 +71,24 @@ server configured in ~/.config/perkeep/client-config.json.`,
 				return fmt.Errorf("sync metadata: %w", err)
 			}
 
-			client := perkeep.NewClient()
+			var client *perkeep.Client
+			if flags.server == "" {
+				flags.server = os.Getenv("MM_PERKEEP_SERVER")
+			}
 			if flags.server != "" {
-				client = perkeep.NewClientWithServer(flags.server)
+				client, err = perkeep.NewClientWithServer(flags.server)
+			} else {
+				client, err = perkeep.NewClient()
+			}
+			if err != nil {
+				return fmt.Errorf("create perkeep client: %w", err)
+			}
+			defer client.Close()
+			if flags.verbose {
+				fmt.Fprintf(os.Stderr, "perkeep server: %s\n", client.Server)
+				if client.Server == "" {
+					fmt.Fprintln(os.Stderr, "perkeep server: (default from ~/.config/perkeep/client-config.json)")
+				}
 			}
 			syncer := perkeep.NewSyncer(client, store, repo, syncRepo, filepath.Join(cfg.DataDir, "perkeep-cache"))
 			res, err := syncer.Push(cmd.Context())

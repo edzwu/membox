@@ -1,10 +1,18 @@
 ## sprint0
 
-- 双击 space bubble tea
-- 和远端的 perkeep 做整合
+- mmd start, mm configure cmd
 
 ## backlog 
 
+- 双击 space bubble tea
+- 和远端的 perkeep 做整合
+- bugfix: 当前的 rename take args 错误
+- mm init 
+- 把当前的 changes commit
+	root.AddCommand(noteCmd())
+	root.AddCommand(tuiCmd())
+- 需要有 migrate 的能力, 然后开始做 link
+- web 网页版, 能看到 copied markdpwn && clusted tabs
 - grok 可以在后台, 找到这节课相关的 pdf
 - ai agentic search 应该起作用, 复习的时候, 很有用
 - 现在在 note new 的时候, 需要查看已有笔记, 关联 or 显示打开建议
@@ -21,7 +29,6 @@
 
 - cobra 的 cli 的包需要学
 - goreleaser 需要弄懂 go 的这个开发的链条
-
 
 ## 价值点
 
@@ -67,3 +74,7 @@
 1. POST /ingest：导入 PDF（先支持本地 path，后面再支持 upload）
 2. POST /search：query + topk → 返回 chunks + score + page
 3. POST /reindex：重建/更新索引（最开始可以同步执行）
+
+## ref
+
+- https://github.com/yuexiaoliang/baidupan-cli

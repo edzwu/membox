@@ -351,11 +351,26 @@ type SyncResult struct {
 
 // SyncToPerkeep uploads any changed local notes to Perkeep and records the
 // resulting permanode blobrefs in the perkeep_sync table.
-func (s *NoteService) SyncToPerkeep(ctx context.Context, syncRepo *sqliterepo.PerkeepSyncRepo, cacheRoot string) (*perkeep.SyncResult, error) {
-	client := perkeep.NewClient()
-	if v := os.Getenv("MM_PERKEEP_SERVER"); v != "" {
-		client = perkeep.NewClientWithServer(v)
+//
+// If server is non-empty, it is used as the Perkeep server prefix (e.g.
+// "http://127.0.0.1:3179"). Otherwise the MM_PERKEEP_SERVER environment
+// variable is consulted; if neither is set, the perkeep binaries use their
+// default client configuration.
+func (s *NoteService) SyncToPerkeep(ctx context.Context, syncRepo *sqliterepo.PerkeepSyncRepo, cacheRoot, server string) (*perkeep.SyncResult, error) {
+	if server == "" {
+		server = os.Getenv("MM_PERKEEP_SERVER")
 	}
+	var client *perkeep.Client
+	var err error
+	if server != "" {
+		client, err = perkeep.NewClientWithServer(server)
+	} else {
+		client, err = perkeep.NewClient()
+	}
+	if err != nil {
+		return nil, fmt.Errorf("create perkeep client: %w", err)
+	}
+	defer client.Close()
 	syncer := perkeep.NewSyncer(client, s.store, s.repo, syncRepo, cacheRoot)
 	return syncer.Push(ctx)
 }
