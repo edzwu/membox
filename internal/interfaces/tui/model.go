@@ -219,9 +219,10 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case openMsg:
 		m.err = msg.err
 	case spaceTimeoutMsg:
-		if msg.sequence == m.spaceSequence {
+		if msg.sequence == m.spaceSequence && !m.inputActive {
 			m.spaceSequence = 0
 			m.lastKeyAt = time.Time{}
+			m.detailsVisible = !m.detailsVisible
 		}
 	case spinner.TickMsg:
 		if m.loading {
@@ -276,6 +277,9 @@ func (m Model) updateFilterInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.refreshFilter()
 		return m, m.loadPreview()
+	case "ctrl+i":
+		m.detailsVisible = !m.detailsVisible
+		return m, nil
 	case "enter":
 		m.hideInput()
 		if document, ok := m.selectedDocument(); ok {
@@ -335,12 +339,13 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "space", " ":
 		if m.lastKeyAt.Add(doubleSpaceWindow).After(time.Now()) {
+			// double space confirmed: toggle input
 			m.spaceSequence++
 			m.lastKeyAt = time.Time{}
 			commands = append(commands, m.toggleInput())
 			return m, tea.Batch(commands...)
 		}
-		m.detailsVisible = !m.detailsVisible
+		// first space: schedule delayed details toggle
 		m.lastKeyAt = time.Now()
 		m.spaceSequence++
 		sequence := m.spaceSequence
@@ -668,7 +673,7 @@ func (m Model) inputView() string {
 func (m Model) statusBar() string {
 	width := max(20, m.width)
 	left := dimStyle.Render(m.hints())
-	right := dimStyle.Render(fmt.Sprintf("sel=%d top=%d n=%d", m.selected, m.scrollTop, len(m.filtered)))
+	right := ""
 	if m.loading {
 		right = m.spinner.View() + " " + right
 	}
@@ -707,9 +712,9 @@ func (m Model) modeBadge() string {
 
 func (m Model) hints() string {
 	if m.inputVisible {
-		return "tab mode • enter open • esc hide • type to search"
+		return "tab mode • ctrl+i details • enter open • esc hide • type to search"
 	}
-	return "space×2 filter • enter open • ↑↓ select • r rescan • q quit"
+	return "space details • space×2 filter • enter open • ↑↓ select • r rescan • q quit"
 }
 
 func searchResultItems(items []item, results []membox.SearchResult) []item {

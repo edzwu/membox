@@ -139,14 +139,38 @@ func TestModel_SingleSpaceTogglesDetailsPane(t *testing.T) {
 	space := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}}
 	updated, _ := model.Update(space)
 	model = updated.(Model)
-	if !model.detailsVisible {
-		t.Fatal("single space did not show details pane")
+	if model.detailsVisible {
+		t.Fatal("single space should not toggle immediately")
 	}
+	// simulate timeout expiry (single space confirmed)
+	updated, _ = model.Update(spaceTimeoutMsg{sequence: model.spaceSequence})
+	model = updated.(Model)
+	if !model.detailsVisible {
+		t.Fatal("single space timeout did not show details pane")
+	}
+	// press space again and let timeout fire -> hide
 	model.lastKeyAt = time.Now().Add(-time.Second)
 	updated, _ = model.Update(space)
 	model = updated.(Model)
+	updated, _ = model.Update(spaceTimeoutMsg{sequence: model.spaceSequence})
+	model = updated.(Model)
 	if model.detailsVisible {
-		t.Fatal("single space did not hide details pane")
+		t.Fatal("second single space did not hide details pane")
+	}
+}
+
+func TestModel_DoubleSpaceDoesNotToggleDetails(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	space := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}}
+	updated, _ := model.Update(space)
+	model = updated.(Model)
+	updated, _ = model.Update(space) // double space -> toggle input
+	model = updated.(Model)
+	if model.detailsVisible {
+		t.Fatal("double space should not toggle details")
+	}
+	if !model.inputVisible {
+		t.Fatal("double space did not open input")
 	}
 }
 
@@ -312,7 +336,7 @@ func TestModel_ResultsHaveUUIDInStatus(t *testing.T) {
 	if !strings.Contains(status, "dabf") {
 		t.Fatalf("status bar does not contain UUID: %q", status)
 	}
-	if !strings.HasPrefix(strings.TrimLeft(status, " "), "space×2 filter") {
+	if !strings.HasPrefix(strings.TrimLeft(status, " "), "space details") {
 		t.Fatalf("shortcuts are not on the left: %q", status)
 	}
 }
