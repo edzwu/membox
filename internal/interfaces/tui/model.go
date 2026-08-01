@@ -219,7 +219,7 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case openMsg:
 		m.err = msg.err
 	case spaceTimeoutMsg:
-		if msg.sequence == m.spaceSequence && !m.inputActive {
+		if msg.sequence == m.spaceSequence {
 			m.spaceSequence = 0
 			m.lastKeyAt = time.Time{}
 			m.detailsVisible = !m.detailsVisible
