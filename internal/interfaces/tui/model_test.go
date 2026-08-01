@@ -159,6 +159,31 @@ func TestModel_SingleSpaceTogglesDetailsPane(t *testing.T) {
 	}
 }
 
+func TestModel_DetailsToggleKeepsSelectedItemVisible(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.width, model.height = 120, 20
+	var docs []membox.DocumentView
+	for i := 0; i < 30; i++ {
+		docs = append(docs, membox.DocumentView{ID: fmt.Sprintf("019fbe56-64c3-7e3c-861d-4da66742%04d", i), Title: fmt.Sprintf("Doc %02d", i), Path: fmt.Sprintf("/tmp/doc-%02d.md", i), RelativePath: fmt.Sprintf("doc-%02d.md", i)})
+	}
+	model.items = documentItems(docs)
+	model.refreshFilter()
+	// select the first item, scroll to top
+	model.selected = 0
+	model.scrollTop = 0
+	// open details pane (shrinks visible area)
+	model.detailsVisible = true
+	model.keepSelectionVisible()
+	// selected item 0 must still be visible (scrollTop should stay 0)
+	if model.scrollTop != 0 {
+		t.Fatalf("opening details pushed first item off screen: scrollTop=%d", model.scrollTop)
+	}
+	view := model.treePreviewView()
+	if !strings.Contains(view, "doc-00.md") {
+		t.Fatalf("first item not visible after details toggle: %q", view[:200])
+	}
+}
+
 func TestModel_DoubleSpaceDoesNotToggleDetails(t *testing.T) {
 	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
 	space := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}}

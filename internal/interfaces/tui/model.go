@@ -223,6 +223,7 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.spaceSequence = 0
 			m.lastKeyAt = time.Time{}
 			m.detailsVisible = !m.detailsVisible
+			m.keepSelectionVisible()
 		}
 	case spinner.TickMsg:
 		if m.loading {
@@ -279,6 +280,7 @@ func (m Model) updateFilterInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.loadPreview()
 	case "ctrl+i":
 		m.detailsVisible = !m.detailsVisible
+		m.keepSelectionVisible()
 		return m, nil
 	case "enter":
 		m.hideInput()
