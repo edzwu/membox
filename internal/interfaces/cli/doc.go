@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"membox"
+	"membox/internal/interfaces/host"
 )
 
 func newDocCommand(runtime *runtime) *cobra.Command {
@@ -183,9 +184,4 @@ func newDocOpenCommand(runtime *runtime) *cobra.Command {
 	return command
 }
 
-func shortID(id string) string {
-	if len(id) > 12 {
-		return id[:12]
-	}
-	return id
-}
+func shortID(id string) string { return host.ShortDocumentID(id) }

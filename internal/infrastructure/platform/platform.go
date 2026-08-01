@@ -31,6 +31,20 @@ func (Launcher) EditorCommand(ctx context.Context, path string) (*exec.Cmd, erro
 	return exec.CommandContext(ctx, parts[0], append(parts[1:], path)...), nil
 }
 
+func (Launcher) ViewerCommand(ctx context.Context, path string) (*exec.Cmd, error) {
+	if command := strings.TrimSpace(os.Getenv("MEMBOX_VIEWER")); command != "" {
+		parts, err := shlex.Split(command)
+		if err != nil {
+			return nil, err
+		}
+		if len(parts) == 0 {
+			return nil, errors.New("viewer command is empty")
+		}
+		return exec.CommandContext(ctx, parts[0], append(parts[1:], path)...), nil
+	}
+	return exec.CommandContext(ctx, "leaf", path), nil
+}
+
 func (Launcher) OpenCommand(ctx context.Context, path string) (*exec.Cmd, error) {
 	switch runtime.GOOS {
 	case "darwin":

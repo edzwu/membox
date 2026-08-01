@@ -15,6 +15,9 @@ type fakeLauncher struct{}
 func (fakeLauncher) EditorCommand(context.Context, string) (*exec.Cmd, error) {
 	return exec.Command("true"), nil
 }
+func (fakeLauncher) ViewerCommand(context.Context, string) (*exec.Cmd, error) {
+	return exec.Command("true"), nil
+}
 func (fakeLauncher) OpenCommand(context.Context, string) (*exec.Cmd, error) {
 	return exec.Command("true"), nil
 }

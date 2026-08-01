@@ -5,9 +5,9 @@ import "github.com/charmbracelet/lipgloss"
 // The palette follows pi's visual hierarchy: quiet editor borders, a cyan
 // focused border, muted secondary text, and a restrained teal accent.
 var colors = struct {
-	Accent, Border, BorderAccent, BorderMuted lipgloss.AdaptiveColor
-	Text, Muted, Dim, SelectedBG              lipgloss.AdaptiveColor
-	Success, Error, Warning, Heading          lipgloss.AdaptiveColor
+	Accent, Border, BorderAccent, BorderMuted     lipgloss.AdaptiveColor
+	Text, Muted, Dim, SelectedBG                  lipgloss.AdaptiveColor
+	Success, Error, Warning, Heading, HighlightBG lipgloss.AdaptiveColor
 }{
 	Accent:       lipgloss.AdaptiveColor{Dark: "#8abeb7", Light: "#356b68"},
 	Border:       lipgloss.AdaptiveColor{Dark: "#5f87ff", Light: "#3159b8"},
@@ -21,6 +21,7 @@ var colors = struct {
 	Error:        lipgloss.AdaptiveColor{Dark: "#cc6666", Light: "#a03030"},
 	Warning:      lipgloss.AdaptiveColor{Dark: "#ffff00", Light: "#8a6500"},
 	Heading:      lipgloss.AdaptiveColor{Dark: "#f0c674", Light: "#8a5a00"},
+	HighlightBG:  lipgloss.AdaptiveColor{Dark: "#d99a2b", Light: "#ffd98a"},
 }
 
 var (
