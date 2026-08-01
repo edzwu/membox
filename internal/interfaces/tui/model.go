@@ -278,7 +278,7 @@ func (m Model) updateFilterInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.refreshFilter()
 		return m, m.loadPreview()
-	case "ctrl+i":
+	case "ctrl+g":
 		m.detailsVisible = !m.detailsVisible
 		m.keepSelectionVisible()
 		return m, nil
@@ -714,7 +714,7 @@ func (m Model) modeBadge() string {
 
 func (m Model) hints() string {
 	if m.inputVisible {
-		return "tab mode • ctrl+i details • enter open • esc hide • type to search"
+		return "tab mode • ctrl+g details • enter open • esc hide • type to search"
 	}
 	return "space details • space×2 filter • enter open • ↑↓ select • r rescan • q quit"
 }
