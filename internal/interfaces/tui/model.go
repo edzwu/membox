@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -11,12 +12,18 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"membox"
 	"membox/internal/interfaces/host"
 )
 
 const doubleSpaceWindow = 320 * time.Millisecond
+
+const (
+	searchModeName = "name"
+	searchModeFull = "full"
+)
 
 type App interface {
 	AddPath(context.Context, membox.AddPathCommand) (membox.AddPathResult, error)
@@ -30,27 +37,9 @@ type App interface {
 	GetIndexStatus(context.Context) (membox.IndexStatusView, error)
 }
 
-type screen int
-
-const (
-	searchScreen screen = iota
-	pathsScreen
-	statusScreen
-)
-
-type itemKind int
-
-const (
-	documentItem itemKind = iota
-	pathItem
-	statusItem
-)
-
 type item struct {
-	kind     itemKind
 	document membox.DocumentView
-	path     membox.PathView
-	text     string
+	title    string
 	match    string
 }
 
@@ -59,34 +48,35 @@ type Model struct {
 	app      App
 	launcher host.Launcher
 
-	input     textinput.Model
-	pathInput textinput.Model
-	preview   viewport.Model
-	spinner   spinner.Model
+	input   textinput.Model
+	preview viewport.Model
+	spinner spinner.Model
 
-	screen       screen
-	items        []item
-	filtered     []item
-	selected     int
-	filterActive bool
-	allLoaded    bool
-	addingPath   bool
-	paths        []membox.PathView
-	status       membox.IndexStatusView
+	items     []item
+	filtered  []item
+	selected  int
+	scrollTop int
 
-	loading        bool
-	err            error
-	width, height  int
-	searchSequence uint64
-	listSequence   uint64
-	spaceSequence  uint64
+	inputVisible bool
+	inputActive  bool
+	fullscreen   bool
+	fullDocument *membox.DocumentView
+
+	loading       bool
+	err           error
+	width, height int
+	listSequence  uint64
+	spaceSequence uint64
+	lastKeyAt     time.Time
+	searchMode    string
 }
 
 type searchMsg struct {
-	sequence uint64
-	results  []membox.SearchResult
-	err      error
+	query   string
+	results []membox.SearchResult
+	err     error
 }
+
 type documentsMsg struct {
 	sequence  uint64
 	documents []membox.DocumentView
@@ -98,15 +88,6 @@ type previewMsg struct {
 }
 type scanMsg struct {
 	report membox.ScanReport
-	err    error
-}
-type pathsMsg struct {
-	paths []membox.PathView
-	err   error
-}
-type addPathMsg struct{ err error }
-type statusMsg struct {
-	status membox.IndexStatusView
 	err    error
 }
 type editReadyMsg struct {
@@ -125,21 +106,12 @@ type spaceTimeoutMsg struct{ sequence uint64 }
 func New(ctx context.Context, app App, launcher host.Launcher) Model {
 	input := textinput.New()
 	input.Prompt = ""
-	input.Placeholder = "type to search Markdown"
-	input.Focus()
-	pathInput := textinput.New()
-	pathInput.Prompt = ""
-	pathInput.Placeholder = "~/notes"
+	input.Placeholder = "filter documents"
 	spin := spinner.New()
 	spin.Spinner = spinner.Dot
 	vp := viewport.New(40, 10)
-	vp.SetContent("Type a query and press Enter.")
-	model := Model{
-		ctx: ctx, app: app, launcher: launcher,
-		input: input, pathInput: pathInput, spinner: spin, preview: vp,
-		screen: searchScreen, filtered: []item{},
-	}
-	model.preview.SetContent(previewPlaceholder("Search and press Enter."))
+	model := Model{ctx: ctx, app: app, launcher: launcher, input: input, spinner: spin, preview: vp, searchMode: searchModeName}
+	model.preview.SetContent(previewPlaceholder("Loading documents…"))
 	return model
 }
 
@@ -150,7 +122,9 @@ func Run(ctx context.Context, app App, launcher host.Launcher, programOptions ..
 	return err
 }
 
-func (m Model) Init() tea.Cmd { return textinput.Blink }
+func (m Model) Init() tea.Cmd {
+	return tea.Batch(textinput.Blink, m.spinner.Tick, listDocumentsCmd(m.ctx, m.app, m.listSequence))
+}
 
 func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	var commands []tea.Cmd
@@ -162,20 +136,20 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
 		}
-		if m.pathInput.Focused() {
-			return m.updatePathInput(msg)
+		if m.fullscreen {
+			return m.updateFullscreen(msg)
 		}
-		if m.input.Focused() {
-			return m.updateMainInput(msg)
+		if m.inputActive {
+			return m.updateFilterInput(msg)
 		}
 		return m.updateNavigation(msg)
 	case searchMsg:
-		if msg.sequence == m.searchSequence {
+		if strings.TrimSpace(m.input.Value()) == msg.query && m.searchMode == searchModeFull {
 			m.loading, m.err = false, msg.err
 			if msg.err == nil {
-				m.items = searchItems(msg.results)
+				m.filtered = searchResultItems(m.items, msg.results)
 				m.selected = 0
-				m.refreshFilter()
+				m.keepSelectionVisible()
 				commands = append(commands, m.loadPreview())
 			}
 		}
@@ -183,7 +157,6 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.sequence == m.listSequence {
 			m.loading, m.err = false, msg.err
 			if msg.err == nil {
-				m.allLoaded = true
 				m.items = documentItems(msg.documents)
 				m.selected = 0
 				m.refreshFilter()
@@ -199,23 +172,8 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case scanMsg:
 		m.loading, m.err = false, msg.err
 		if msg.err == nil {
-			m.preview.SetContent(fmt.Sprintf("Scan complete\n\nfiles %d\nadded %d\nupdated %d\nrenamed %d\nmissing %d", msg.report.Files, msg.report.Added, msg.report.Updated, msg.report.Renamed, msg.report.Missing))
+			commands = append(commands, listDocumentsCmd(m.ctx, m.app, m.listSequence))
 		}
-	case pathsMsg:
-		m.loading, m.err, m.paths = false, msg.err, msg.paths
-		m.items = pathItems(m.paths)
-		m.selected = 0
-		m.refreshFilter()
-	case addPathMsg:
-		m.loading, m.err = false, msg.err
-		if msg.err == nil {
-			commands = append(commands, loadPathsCmd(m.ctx, m.app))
-		}
-	case statusMsg:
-		m.loading, m.err, m.status = false, msg.err, msg.status
-		m.items = statusItems(m.status)
-		m.selected = 0
-		m.refreshFilter()
 	case editReadyMsg:
 		m.loading, m.err = false, msg.err
 		if msg.err == nil {
@@ -240,12 +198,9 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case openMsg:
 		m.err = msg.err
 	case spaceTimeoutMsg:
-		if msg.sequence == m.spaceSequence && m.input.Focused() && !m.filterActive {
-			m.enterFilterMode()
+		if msg.sequence == m.spaceSequence {
 			m.spaceSequence = 0
-			if command := listDocumentsCmd(m.ctx, m.app, m.listSequence); !m.allLoaded {
-				commands = append(commands, m.spinner.Tick, command)
-			}
+			m.lastKeyAt = time.Time{}
 		}
 	case spinner.TickMsg:
 		if m.loading {
@@ -260,72 +215,90 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(commands...)
 }
 
-func (m Model) updatePathInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	var commands []tea.Cmd
+func (m Model) updateFullscreen(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "enter":
-		if strings.TrimSpace(m.pathInput.Value()) != "" {
-			m.loading, m.addingPath = true, false
-			m.pathInput.Blur()
-			commands = append(commands, m.spinner.Tick, addPathCmd(m.ctx, m.app, m.pathInput.Value()))
-		}
-	case "esc":
-		m.addingPath = false
-		m.pathInput.Blur()
-	default:
-		var command tea.Cmd
-		m.pathInput, command = m.pathInput.Update(msg)
-		commands = append(commands, command)
+	case "q", "esc":
+		m.fullscreen = false
+		m.fullDocument = nil
+		return m, m.loadPreview()
+	case "up", "k":
+		m.preview.LineUp(1)
+	case "down", "j":
+		m.preview.LineDown(1)
+	case "pgup", "ctrl+b":
+		m.preview.PageUp()
+	case "pgdown", "ctrl+f", "space", " ":
+		m.preview.PageDown()
+	case "home", "g":
+		m.preview.GotoTop()
+	case "end", "shift+g":
+		m.preview.GotoBottom()
 	}
-	return m, tea.Batch(commands...)
+	return m, nil
 }
 
-func (m Model) updateMainInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	var commands []tea.Cmd
+func (m Model) updateFilterInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
-		m.input.Blur()
-		m.input.SetValue("")
-		m.filterActive = false
-		if m.screen == pathsScreen || m.screen == statusScreen {
-			m.screen = searchScreen
+		m.hideInput()
+		m.refreshFilter()
+		return m, m.loadPreview()
+	case "tab":
+		if m.searchMode == searchModeName {
+			m.searchMode = searchModeFull
+		} else {
+			m.searchMode = searchModeName
+		}
+		if m.searchMode == searchModeFull && strings.TrimSpace(m.input.Value()) != "" {
+			m.loading = true
+			return m, tea.Batch(m.spinner.Tick, searchDocumentsCmd(m.ctx, m.app, m.input.Value()))
 		}
 		m.refreshFilter()
 		return m, m.loadPreview()
 	case "enter":
-		if m.filterActive {
-			m.input.Blur()
-			m.input.SetValue("")
-			m.filterActive = false
+		m.hideInput()
+		if document, ok := m.selectedDocument(); ok {
+			m.fullDocument = &document
+			m.fullscreen = true
+		}
+		return m, m.loadPreview()
+	case "up", "down", "pgup", "pgdown":
+		return m.moveSelection(msg.String())
+	case "ctrl+u":
+		m.input.SetValue("")
+		m.refreshFilter()
+		return m, m.loadPreview()
+	case "space", " ":
+		if m.lastKeyAt.Add(doubleSpaceWindow).After(time.Now()) {
+			m.spaceSequence++
+			m.lastKeyAt = time.Time{}
+			m.input.SetValue(strings.TrimSuffix(m.input.Value(), " "))
+			m.hideInput()
 			m.refreshFilter()
 			return m, m.loadPreview()
 		}
-		m.searchSequence++
-		m.loading, m.err, m.allLoaded = true, nil, false
-		commands = append(commands, m.spinner.Tick, searchCmd(m.ctx, m.app, m.searchSequence, m.input.Value()))
-	case "up", "down", "pgup", "pgdown":
-		return m.moveSelection(msg.String())
-	case "space":
-		if m.filterActive {
-			var command tea.Cmd
-			m.input, command = m.input.Update(msg)
-			m.refreshFilter()
-			return m, tea.Batch(command, m.loadPreview())
-		}
+		m.lastKeyAt = time.Now()
 		m.spaceSequence++
 		sequence := m.spaceSequence
-		commands = append(commands, tea.Tick(doubleSpaceWindow, func(time.Time) tea.Msg { return spaceTimeoutMsg{sequence: sequence} }))
+		return m, tea.Tick(doubleSpaceWindow, func(time.Time) tea.Msg { return spaceTimeoutMsg{sequence: sequence} })
 	default:
 		m.spaceSequence = 0
+		m.lastKeyAt = time.Time{}
 		var command tea.Cmd
 		m.input, command = m.input.Update(msg)
-		if m.filterActive {
-			m.refreshFilter()
-			return m, tea.Batch(command, m.loadPreview())
+		if m.searchMode == searchModeFull {
+			query := strings.TrimSpace(m.input.Value())
+			m.loading = true
+			if query == "" {
+				m.loading = false
+				m.refreshFilter()
+				return m, tea.Batch(command, m.loadPreview())
+			}
+			return m, tea.Batch(command, m.spinner.Tick, searchDocumentsCmd(m.ctx, m.app, m.input.Value()))
 		}
-		commands = append(commands, command)
+		m.refreshFilter()
+		return m, tea.Batch(command, m.loadPreview())
 	}
-	return m, tea.Batch(commands...)
 }
 
 func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -333,10 +306,23 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q":
 		return m, tea.Quit
-	case "/", "tab":
-		m.screen = searchScreen
-		m.input.Focus()
-		return m, textinput.Blink
+	case "enter":
+		if document, ok := m.selectedDocument(); ok {
+			m.fullDocument = &document
+			m.fullscreen = true
+			return m, m.loadPreview()
+		}
+	case "space", " ":
+		if m.lastKeyAt.Add(doubleSpaceWindow).After(time.Now()) {
+			m.spaceSequence++
+			m.lastKeyAt = time.Time{}
+			commands = append(commands, m.toggleInput())
+			return m, tea.Batch(commands...)
+		}
+		m.lastKeyAt = time.Now()
+		m.spaceSequence++
+		sequence := m.spaceSequence
+		commands = append(commands, tea.Tick(doubleSpaceWindow, func(time.Time) tea.Msg { return spaceTimeoutMsg{sequence: sequence} }))
 	case "up", "down", "pgup", "pgdown", "k", "j":
 		if msg.String() == "k" {
 			return m.moveSelection("up")
@@ -345,19 +331,6 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.moveSelection("down")
 		}
 		return m.moveSelection(msg.String())
-	case "p":
-		m.screen, m.loading = pathsScreen, true
-		commands = append(commands, m.spinner.Tick, loadPathsCmd(m.ctx, m.app))
-	case "s":
-		m.screen, m.loading = statusScreen, true
-		commands = append(commands, m.spinner.Tick, loadStatusCmd(m.ctx, m.app))
-	case "a":
-		if m.screen == pathsScreen {
-			m.addingPath = true
-			m.pathInput.SetValue("")
-			m.pathInput.Focus()
-			return m, textinput.Blink
-		}
 	case "r":
 		m.loading = true
 		commands = append(commands, m.spinner.Tick, scanCmd(m.ctx, m.app))
@@ -370,6 +343,9 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if document, ok := m.selectedDocument(); ok {
 			commands = append(commands, openCmd(m.ctx, m.app, m.launcher, document.ID))
 		}
+	default:
+		m.spaceSequence = 0
+		m.lastKeyAt = time.Time{}
 	}
 	return m, tea.Batch(commands...)
 }
@@ -385,30 +361,55 @@ func (m Model) moveSelection(key string) (tea.Model, tea.Cmd) {
 			m.selected++
 		}
 	case "pgup":
-		m.selected = max(0, m.selected-m.preview.Height)
+		m.selected = max(0, m.selected-m.visibleRows())
 	case "pgdown":
-		m.selected = min(max(0, len(m.filtered)-1), m.selected+m.preview.Height)
+		m.selected = min(max(0, len(m.filtered)-1), m.selected+m.visibleRows())
 	}
+	m.keepSelectionVisible()
 	return m, m.loadPreview()
 }
 
-func (m *Model) enterFilterMode() {
-	m.filterActive = true
+func (m Model) visibleRows() int {
+	if m.inputVisible {
+		return max(3, m.height-3)
+	}
+	return max(3, m.height-1)
+}
+
+func (m *Model) keepSelectionVisible() {
+	visible := m.visibleRows()
+	if m.selected < m.scrollTop {
+		m.scrollTop = m.selected
+	}
+	if m.selected >= m.scrollTop+visible {
+		m.scrollTop = m.selected - visible + 1
+	}
+	m.scrollTop = min(max(0, m.scrollTop), max(0, len(m.filtered)-visible))
+}
+
+func (m *Model) toggleInput() tea.Cmd {
+	if m.inputVisible {
+		m.hideInput()
+		m.refreshFilter()
+		return m.loadPreview()
+	}
+	m.inputVisible = true
+	m.inputActive = true
 	m.input.Focus()
 	m.input.SetValue("")
-	if !m.allLoaded {
-		m.listSequence++
-		m.loading = true
-	}
+	return textinput.Blink
+}
+
+func (m *Model) hideInput() {
+	m.inputVisible = false
+	m.inputActive = false
+	m.input.Blur()
+	m.input.SetValue("")
 }
 
 func (m *Model) refreshFilter() {
-	if m.screen != searchScreen {
-		m.filtered = append([]item(nil), m.items...)
-		return
-	}
 	query := strings.ToLower(strings.TrimSpace(m.input.Value()))
-	if !m.filterActive || query == "" {
+	if !m.inputVisible || query == "" {
 		m.filtered = append([]item(nil), m.items...)
 	} else {
 		m.filtered = m.filtered[:0]
@@ -423,6 +424,7 @@ func (m *Model) refreshFilter() {
 	} else if m.selected >= len(m.filtered) {
 		m.selected = len(m.filtered) - 1
 	}
+	m.keepSelectionVisible()
 }
 
 func wordsMatch(value, query string) bool {
@@ -436,22 +438,15 @@ func wordsMatch(value, query string) bool {
 }
 
 func (m Model) selectedDocument() (membox.DocumentView, bool) {
-	if m.screen != searchScreen || len(m.filtered) == 0 || m.selected >= len(m.filtered) {
+	if len(m.filtered) == 0 || m.selected >= len(m.filtered) {
 		return membox.DocumentView{}, false
 	}
-	candidate := m.filtered[m.selected]
-	if candidate.kind != documentItem {
-		return membox.DocumentView{}, false
-	}
-	return candidate.document, true
+	return m.filtered[m.selected].document, true
 }
 
 func (m Model) loadPreview() tea.Cmd {
-	if m.screen == pathsScreen {
-		return func() tea.Msg { return previewMsg{content: previewPlaceholder("Press a to add a path, r to scan.")} }
-	}
-	if m.screen == statusScreen {
-		return func() tea.Msg { return previewMsg{content: statusPreview(m.status)} }
+	if m.fullscreen && m.fullDocument != nil {
+		return previewCmd(m.ctx, m.app, m.fullDocument.ID)
 	}
 	if document, ok := m.selectedDocument(); ok {
 		return previewCmd(m.ctx, m.app, document.ID)
@@ -460,19 +455,32 @@ func (m Model) loadPreview() tea.Cmd {
 }
 
 func (m *Model) resize() {
-	contentHeight := max(3, m.height-6)
-	width := max(20, m.width-4)
-	if m.width >= 100 {
-		width = max(40, m.width*2/3-6)
+	if m.fullscreen {
+		m.preview.Width = max(20, m.width-2)
+		m.preview.Height = max(3, m.height-2)
+	} else {
+		_, previewWidth := m.layoutWidths()
+		m.preview.Width = previewWidth
+		m.preview.Height = m.visibleRows()
 	}
-	m.preview.Width, m.preview.Height = width, contentHeight
-	m.input.Width = max(10, m.width-5)
-	m.pathInput.Width = max(10, m.width-5)
+	m.input.Width = max(10, m.width-12)
+}
+
+func (m Model) layoutWidths() (int, int) {
+	if m.width >= 100 {
+		list := max(32, m.width*2/5)
+		return list, max(40, m.width-list-2)
+	}
+	list := max(24, m.width/2)
+	return list, max(20, m.width-list-2)
 }
 
 func (m Model) View() string {
-	contentHeight := max(3, m.height-6)
-	content := m.contentView()
+	if m.fullscreen {
+		return m.fullscreenView()
+	}
+	contentHeight := m.visibleRows()
+	content := m.treePreviewView()
 	lines := strings.Split(content, "\n")
 	if len(lines) > contentHeight {
 		lines = lines[:contentHeight]
@@ -480,163 +488,124 @@ func (m Model) View() string {
 	for len(lines) < contentHeight {
 		lines = append(lines, "")
 	}
-	return strings.Join(lines, "\n") + "\n" + m.inputView() + "\n" + m.footerView()
-}
-
-func (m Model) contentView() string {
-	switch m.screen {
-	case pathsScreen:
-		return m.pathsView()
-	case statusScreen:
-		return m.statusView()
-	default:
-		return m.searchView()
+	parts := []string{strings.Join(lines, "\n")}
+	if m.inputVisible {
+		parts = append(parts, m.inputView())
 	}
+	parts = append(parts, m.statusBar())
+	return strings.Join(parts, "\n")
 }
 
-func (m Model) searchView() string {
+func (m Model) fullscreenView() string {
+	header := accentStyle.Render("membox")
+	if m.fullDocument != nil {
+		header += dimStyle.Render("  " + shortID(m.fullDocument.ID) + "  " + displayTitle(m.fullDocument.Title, m.fullDocument.Path))
+	}
+	footer := dimStyle.Render(fmt.Sprintf("%3.0f%%  ↑/↓ line • pgup/pgdn page • q close", m.preview.ScrollPercent()*100))
+	return header + "\n" + m.preview.View() + "\n" + footer
+}
+
+func (m Model) treePreviewView() string {
+	listWidth, previewWidth := m.layoutWidths()
+	visible := m.visibleRows()
+	start := min(max(0, m.scrollTop), max(0, len(m.filtered)-visible))
+	end := min(len(m.filtered), start+visible)
 	var lines []string
-	for i, candidate := range m.filtered {
-		line := candidate.text
+	for i := start; i < end; i++ {
+		candidate := m.filtered[i]
+		line := fitWidth(candidate.title, max(8, listWidth-2))
 		if i == m.selected {
-			line = lipgloss.NewStyle().Foreground(colors.Accent).Background(colors.SelectedBG).Render("> " + line)
+			line = lipgloss.NewStyle().Foreground(colors.Accent).Background(colors.SelectedBG).Width(listWidth - 2).Inline(true).Render("> " + line)
 		} else {
-			line = "  " + line
+			line = lipgloss.NewStyle().Width(listWidth - 2).Inline(true).Render("  " + line)
 		}
-		lines = append(lines, lipgloss.NewStyle().MaxWidth(max(20, m.width/3)).Render(line))
+		lines = append(lines, line)
 	}
 	if len(lines) == 0 {
-		lines = []string{dimStyle.Render("No results.")}
+		lines = []string{dimStyle.Render("No documents.")}
 	}
-	list := strings.Join(lines, "\n")
-	if m.width >= 100 {
-		left := lipgloss.NewStyle().Width(max(30, m.width/3)).Render(list)
-		right := lipgloss.NewStyle().Width(max(40, m.width*2/3-6)).Render(m.preview.View())
-		return lipgloss.JoinHorizontal(lipgloss.Top, left, right)
-	}
-	return list + "\n\n" + m.preview.View()
-}
-
-func (m Model) pathsView() string {
-	if len(m.filtered) == 0 {
-		return dimStyle.Render("No configured paths.")
-	}
-	var lines []string
-	for i, candidate := range m.filtered {
-		prefix := "  "
-		if i == m.selected {
-			prefix = accentStyle.Render("> ")
-		}
-		lines = append(lines, prefix+candidate.text)
-	}
-	return strings.Join(lines, "\n")
-}
-
-func (m Model) statusView() string {
-	var lines []string
-	for _, candidate := range m.filtered {
-		lines = append(lines, "  "+candidate.text)
-	}
-	return strings.Join(lines, "\n")
+	list := lipgloss.NewStyle().Width(listWidth).MaxWidth(listWidth).Render(strings.Join(lines, "\n"))
+	preview := lipgloss.NewStyle().Width(previewWidth).MaxWidth(previewWidth).Render(m.preview.View())
+	return lipgloss.JoinHorizontal(lipgloss.Top, list, "  ", preview)
 }
 
 func (m Model) inputView() string {
-	prompt := "❯ "
-	label := "search"
 	value := m.input.View()
-	if m.filterActive {
-		prompt = "rg "
-		label = "filter"
-	}
-	if m.addingPath {
-		prompt = "+  "
-		label = "path"
-		value = m.pathInput.View()
-	}
-	label = accentStyle.Render(label)
-	border := "╭" + repeat("─", max(0, m.width-2)) + "╮"
-	border = lipgloss.NewStyle().Foreground(colors.BorderMuted).Render(border)
-	if m.input.Focused() || m.pathInput.Focused() {
-		border = lipgloss.NewStyle().Foreground(colors.BorderAccent).Render(border)
-	}
-	return border + "\n" + prompt + value + " " + label
+	innerWidth := max(10, m.width-2)
+	badge := m.modeBadge()
+	fieldWidth := max(6, innerWidth-lipgloss.Width(badge)-1)
+	field := lipgloss.NewStyle().Width(fieldWidth).MaxWidth(fieldWidth).Inline(true).Render(value)
+	line := lipgloss.NewStyle().Width(innerWidth).MaxWidth(innerWidth).Inline(true).Render(badge + " " + field)
+	border := lipgloss.NewStyle().Width(innerWidth).MaxWidth(innerWidth).Border(lipgloss.NormalBorder(), true, false, false, false).BorderForeground(colors.BorderAccent)
+	return border.Render(line)
 }
 
-func (m Model) footerView() string {
-	left := ""
+func (m Model) statusBar() string {
+	width := max(20, m.width)
+	left := dimStyle.Render(m.hints())
+	right := ""
 	if m.loading {
-		left += m.spinner.View() + " "
+		right += m.spinner.View() + " "
 	}
 	if m.err != nil {
-		left += errorStyle.Render("Error: " + m.err.Error())
+		right += errorStyle.Render("Error: " + m.err.Error())
 	} else {
-		left += dimStyle.Render(fmt.Sprintf("%d shown / %d loaded", len(m.filtered), len(m.items)))
+		if m.inputVisible {
+			right += accentStyle.Render("filter") + dimStyle.Render(fmt.Sprintf(" %d/%d", len(m.filtered), len(m.items)))
+		} else {
+			if document, ok := m.selectedDocument(); ok {
+				right += dimStyle.Render(shortID(document.ID) + " " + displayTitle(document.Title, document.Path))
+			} else {
+				right += dimStyle.Render(fmt.Sprintf("%d documents", len(m.items)))
+			}
+		}
 	}
-	right := dimStyle.Render(m.hints())
-	width := max(20, m.width)
+	maxRight := max(0, width-lipgloss.Width(left)-1)
+	if lipgloss.Width(right) > maxRight {
+		right = fitWidth(right, maxRight)
+	}
 	padding := max(1, width-lipgloss.Width(left)-lipgloss.Width(right))
 	return left + strings.Repeat(" ", padding) + right
 }
 
-func (m Model) hints() string {
-	if m.addingPath {
-		return "enter add • esc cancel"
+func (m Model) modeBadge() string {
+	mode := " NAME "
+	background := colors.Border
+	if m.searchMode == searchModeFull {
+		mode = " FULL "
+		background = colors.Warning
 	}
-	if m.filterActive {
-		return "enter select • esc clear • type to filter"
-	}
-	if m.screen == pathsScreen {
-		return "a add • r scan • p paths • s status • q quit"
-	}
-	if m.screen == statusScreen {
-		return "r scan • / search • p paths • q quit"
-	}
-	return "space×2 filter • enter search • ↑↓ select • e edit • o open • q quit"
+	return lipgloss.NewStyle().Background(background).Foreground(colors.Text).Bold(true).Inline(true).Render(mode)
 }
 
-func searchItems(results []membox.SearchResult) []item {
-	items := make([]item, 0, len(results))
-	for _, result := range results {
-		document := membox.DocumentView{ID: result.DocumentID, Title: result.Title, Path: result.Path, Status: "active"}
-		text := fmt.Sprintf("%s  %s", displayTitle(result.Title, result.Path), mutedStyle.Render(shortID(result.DocumentID)))
-		items = append(items, item{kind: documentItem, document: document, text: text, match: result.Title + " " + result.Path + " " + result.Snippet + " " + result.DocumentID})
+func (m Model) hints() string {
+	if m.inputVisible {
+		return "tab mode • enter open • esc hide • type to search"
 	}
-	return items
+	return "space×2 filter • enter open • ↑↓ select • r rescan • q quit"
+}
+
+func searchResultItems(items []item, results []membox.SearchResult) []item {
+	allowed := make(map[string]bool, len(results))
+	for _, result := range results {
+		allowed[result.DocumentID] = true
+	}
+	filtered := make([]item, 0, len(results))
+	for _, candidate := range items {
+		if allowed[candidate.document.ID] {
+			filtered = append(filtered, candidate)
+		}
+	}
+	return filtered
 }
 
 func documentItems(documents []membox.DocumentView) []item {
 	items := make([]item, 0, len(documents))
 	for _, document := range documents {
-		text := fmt.Sprintf("%s  %s  %s", displayTitle(document.Title, document.Path), mutedStyle.Render(document.Status), mutedStyle.Render(shortID(document.ID)))
-		items = append(items, item{kind: documentItem, document: document, text: text, match: document.Title + " " + document.Path + " " + document.Status + " " + document.ID})
+		title := displayTitle(document.Title, document.Path)
+		items = append(items, item{document: document, title: title, match: document.Title + " " + document.Path + " " + document.Status + " " + document.ID})
 	}
 	return items
-}
-
-func pathItems(paths []membox.PathView) []item {
-	items := make([]item, 0, len(paths))
-	for _, path := range paths {
-		text := fmt.Sprintf("%d  %s  %s docs=%d", path.ID, path.Path, path.Status, path.Documents)
-		items = append(items, item{kind: pathItem, path: path, text: text, match: fmt.Sprint(path.ID) + " " + path.Path + " " + path.Status})
-	}
-	return items
-}
-
-func statusItems(status membox.IndexStatusView) []item {
-	texts := []string{
-		fmt.Sprintf("paths     %d", status.Paths), fmt.Sprintf("active    %d", status.Active),
-		fmt.Sprintf("missing   %d", status.Missing), fmt.Sprintf("untracked %d", status.Untracked),
-		"database  " + status.DatabasePath,
-	}
-	items := make([]item, 0, len(texts))
-	for _, text := range texts {
-		items = append(items, item{kind: statusItem, text: text, match: text})
-	}
-	return items
-}
-
-func statusPreview(status membox.IndexStatusView) string {
-	return fmt.Sprintf("Status\n\npaths: %d\nactive: %d\nmissing: %d\nuntracked: %d\ndatabase: %s", status.Paths, status.Active, status.Missing, status.Untracked, status.DatabasePath)
 }
 
 func displayTitle(title, path string) string {
@@ -646,39 +615,35 @@ func displayTitle(title, path string) string {
 	if path == "" {
 		return "(untitled)"
 	}
-	base := path[strings.LastIndex(path, "/")+1:]
-	if dot := strings.LastIndex(base, "."); dot > 0 {
-		base = base[:dot]
-	}
-	return base
+	base := filepath.Base(path)
+	return strings.TrimSuffix(base, filepath.Ext(base))
 }
 
 func previewPlaceholder(message string) string {
 	return headingStyle.Render("membox") + "\n\n" + dimStyle.Render(message)
 }
-
+func fitWidth(value string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	return ansi.Truncate(value, width, "…")
+}
 func shortID(id string) string {
 	if len(id) > 12 {
 		return id[:12]
 	}
 	return id
 }
-func repeat(value string, count int) string {
-	if count <= 0 {
-		return ""
-	}
-	return strings.Repeat(value, count)
-}
 
-func searchCmd(ctx context.Context, app App, sequence uint64, query string) tea.Cmd {
+func searchDocumentsCmd(ctx context.Context, app App, query string) tea.Cmd {
 	return func() tea.Msg {
-		results, err := app.SearchDocuments(ctx, membox.SearchDocumentsQuery{Query: query, Limit: 50})
-		return searchMsg{sequence: sequence, results: results, err: err}
+		results, err := app.SearchDocuments(ctx, membox.SearchDocumentsQuery{Query: query, Limit: 100})
+		return searchMsg{query: strings.TrimSpace(query), results: results, err: err}
 	}
 }
 func listDocumentsCmd(ctx context.Context, app App, sequence uint64) tea.Cmd {
 	return func() tea.Msg {
-		documents, err := app.ListDocuments(ctx, membox.ListDocumentsQuery{Limit: 500})
+		documents, err := app.ListDocuments(ctx, membox.ListDocumentsQuery{Limit: 1000})
 		return documentsMsg{sequence: sequence, documents: documents, err: err}
 	}
 }
@@ -693,18 +658,6 @@ func scanCmd(ctx context.Context, app App) tea.Cmd {
 		report, err := app.ScanPaths(ctx, membox.ScanPathsCommand{})
 		return scanMsg{report: report, err: err}
 	}
-}
-func addPathCmd(ctx context.Context, app App, directory string) tea.Cmd {
-	return func() tea.Msg {
-		_, err := app.AddPath(ctx, membox.AddPathCommand{Directory: directory})
-		return addPathMsg{err: err}
-	}
-}
-func loadPathsCmd(ctx context.Context, app App) tea.Cmd {
-	return func() tea.Msg { paths, err := app.ListPaths(ctx); return pathsMsg{paths: paths, err: err} }
-}
-func loadStatusCmd(ctx context.Context, app App) tea.Cmd {
-	return func() tea.Msg { status, err := app.GetIndexStatus(ctx); return statusMsg{status: status, err: err} }
 }
 func resolveEditorCmd(ctx context.Context, app App, selector string) tea.Cmd {
 	return func() tea.Msg {
