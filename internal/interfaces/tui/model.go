@@ -54,16 +54,18 @@ type Model struct {
 	preview viewport.Model
 	spinner spinner.Model
 
-	items      []item
-	filtered   []item
-	selected   int
-	scrollTop  int
-	rawContent string
+	items         []item
+	filtered      []item
+	selected      int
+	scrollTop     int
+	rawContent    string
+	rawDocumentID string
 
-	inputVisible bool
-	inputActive  bool
-	fullscreen   bool
-	fullDocument *membox.DocumentView
+	inputVisible   bool
+	inputActive    bool
+	detailsVisible bool
+	fullscreen     bool
+	fullDocument   *membox.DocumentView
 
 	loading       bool
 	err           error
@@ -86,8 +88,9 @@ type documentsMsg struct {
 	err       error
 }
 type previewMsg struct {
-	content string
-	err     error
+	documentID string
+	content    string
+	err        error
 }
 type scanMsg struct {
 	report membox.ScanReport
@@ -165,6 +168,7 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.err == nil {
 				m.items = documentItems(msg.documents)
 				m.selected = 0
+				m.scrollTop = 0
 				m.refreshFilter()
 				commands = append(commands, m.loadPreview())
 			}
@@ -173,6 +177,11 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = msg.err
 		if msg.err == nil {
 			m.rawContent = msg.content
+			if msg.documentID != "" {
+				m.rawDocumentID = msg.documentID
+			} else if document, ok := m.selectedDocument(); ok {
+				m.rawDocumentID = document.ID
+			}
 			m.applyPreviewContent()
 		}
 	case scanMsg:
@@ -331,6 +340,7 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			commands = append(commands, m.toggleInput())
 			return m, tea.Batch(commands...)
 		}
+		m.detailsVisible = !m.detailsVisible
 		m.lastKeyAt = time.Now()
 		m.spaceSequence++
 		sequence := m.spaceSequence
@@ -378,11 +388,21 @@ func (m Model) moveSelection(key string) (tea.Model, tea.Cmd) {
 		m.selected = min(max(0, len(m.filtered)-1), m.selected+m.visibleRows())
 	}
 	m.keepSelectionVisible()
+	if document, ok := m.selectedDocument(); ok && m.rawDocumentID == document.ID {
+		m.applyPreviewContent()
+		return m, nil
+	}
 	return m, m.loadPreview()
 }
 
 func (m Model) visibleRows() int {
 	if m.inputVisible {
+		if m.detailsVisible {
+			return max(3, m.height-5)
+		}
+		return max(3, m.height-3)
+	}
+	if m.detailsVisible {
 		return max(3, m.height-3)
 	}
 	return max(3, m.height-1)
@@ -433,6 +453,7 @@ func (m *Model) refreshFilter() {
 	}
 	if len(m.filtered) == 0 {
 		m.selected = 0
+		m.scrollTop = 0
 	} else if m.selected >= len(m.filtered) {
 		m.selected = len(m.filtered) - 1
 	}
@@ -461,7 +482,11 @@ func (m Model) loadPreview() tea.Cmd {
 		return previewCmd(m.ctx, m.app, m.fullDocument.ID)
 	}
 	if document, ok := m.selectedDocument(); ok {
-		return previewCmd(m.ctx, m.app, document.ID)
+		selector := document.ID
+		return func() tea.Msg {
+			body, err := m.app.ReadDocument(m.ctx, membox.ReadDocumentQuery{Selector: selector})
+			return previewMsg{documentID: selector, content: string(body), err: err}
+		}
 	}
 	return func() tea.Msg { return previewMsg{content: previewPlaceholder("No document selected.")} }
 }
@@ -554,11 +579,30 @@ func (m Model) View() string {
 		lines = append(lines, "")
 	}
 	parts := []string{strings.Join(lines, "\n")}
+	if m.detailsVisible {
+		parts = append(parts, m.detailsView())
+	}
 	if m.inputVisible {
 		parts = append(parts, m.inputView())
 	}
 	parts = append(parts, m.statusBar())
 	return strings.Join(parts, "\n")
+}
+
+func (m Model) detailsView() string {
+	document, ok := m.selectedDocument()
+	border := lipgloss.NewStyle().Width(max(10, m.width-2)).MaxWidth(max(10, m.width-2)).Border(lipgloss.NormalBorder(), true, false, false, false).BorderForeground(colors.BorderMuted)
+	if !ok {
+		return border.Render(dimStyle.Render("no document selected"))
+	}
+	id := fitWidth(document.ID, 36)
+	path := fitWidth(document.Path, max(20, m.width-20))
+	left := dimStyle.Render("id      ") + id
+	right := dimStyle.Render("path    ") + path
+	timeLine := dimStyle.Render("modified ") + dateOnly(document.MTime)
+	first := lipgloss.JoinHorizontal(lipgloss.Top, left, strings.Repeat(" ", max(2, m.width-4-lipgloss.Width(left)-lipgloss.Width(right))), right)
+	content := fitWidth(first, max(10, m.width-4)) + "\n" + fitWidth(timeLine, max(10, m.width-4))
+	return border.Render(content)
 }
 
 func (m Model) fullscreenView() string {
@@ -576,13 +620,25 @@ func (m Model) treePreviewView() string {
 	start := min(max(0, m.scrollTop), max(0, len(m.filtered)-visible))
 	end := min(len(m.filtered), start+visible)
 	uuidWidth := 4
-	filenameWidth := max(12, listWidth-uuidWidth-6)
+	filenameWidth := max(12, listWidth-uuidWidth-8)
+	if listWidth >= 72 {
+		filenameWidth = max(16, listWidth-uuidWidth-30)
+	} else if listWidth >= 52 {
+		filenameWidth = max(14, listWidth-uuidWidth-20)
+	}
 	var lines []string
 	for i := start; i < end; i++ {
 		candidate := m.filtered[i]
 		uuid := dimStyle.Render(fitWidth(shortID(candidate.document.ID), uuidWidth))
-		filename := fitWidth(candidate.filename, filenameWidth)
-		line := lipgloss.NewStyle().Width(listWidth - 2).MaxWidth(listWidth - 2).Inline(true).Render(uuid + "  " + filename)
+		filename := fitMiddle(candidate.filename, filenameWidth)
+		dates := ""
+		if listWidth >= 72 {
+			created, updated := dateOnly(candidate.document.MTime), dateOnly(candidate.document.MTime)
+			dates = dimStyle.Render("  " + created + "  " + updated)
+		} else if listWidth >= 52 {
+			dates = dimStyle.Render("  " + dateOnly(candidate.document.MTime))
+		}
+		line := lipgloss.NewStyle().Width(listWidth - 2).MaxWidth(listWidth - 2).Inline(true).Render(uuid + "  " + filename + dates)
 		if i == m.selected {
 			line = lipgloss.NewStyle().Foreground(colors.Accent).Background(colors.SelectedBG).Width(listWidth - 2).Inline(true).Render("> " + line)
 		} else {
@@ -612,9 +668,9 @@ func (m Model) inputView() string {
 func (m Model) statusBar() string {
 	width := max(20, m.width)
 	left := dimStyle.Render(m.hints())
-	right := ""
+	right := dimStyle.Render(fmt.Sprintf("sel=%d top=%d n=%d", m.selected, m.scrollTop, len(m.filtered)))
 	if m.loading {
-		right += m.spinner.View() + " "
+		right = m.spinner.View() + " " + right
 	}
 	if m.err != nil {
 		right += errorStyle.Render("Error: " + m.err.Error())
@@ -707,6 +763,28 @@ func fitWidth(value string, width int) string {
 	}
 	return ansi.Truncate(value, width, "…")
 }
+func fitMiddle(value string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if ansi.StringWidth(value) <= width {
+		return value
+	}
+	if width <= 1 {
+		return "…"
+	}
+	left := width / 2
+	right := width - left - 1
+	return ansi.Cut(value, 0, left) + "…" + ansi.TruncateLeft(value, right, "")
+}
+
+func dateOnly(value int64) string {
+	if value <= 0 {
+		return "----------"
+	}
+	return time.Unix(0, value).Local().Format("2006-01-02")
+}
+
 func shortID(id string) string { return host.ShortDocumentID(id) }
 
 func searchDocumentsCmd(ctx context.Context, app App, query string) tea.Cmd {
