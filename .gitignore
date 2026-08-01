@@ -1,0 +1,17 @@
+# membox local build artifacts
+/bin/
+/dist/
+/mm
+
+# test/coverage output
+/coverage.out
+/coverage.html
+
+# Go workspace files
+go.work
+go.work.sum
+
+# editor/system files
+.DS_Store
+.idea/
+.vscode/
