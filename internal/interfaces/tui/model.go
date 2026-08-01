@@ -436,6 +436,7 @@ func (m *Model) toggleInput() tea.Cmd {
 	m.inputActive = true
 	m.input.Focus()
 	m.input.SetValue("")
+	m.keepSelectionVisible()
 	return textinput.Blink
 }
 
