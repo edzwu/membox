@@ -26,6 +26,11 @@ const (
 	searchModeFull = "full"
 )
 
+const (
+	viewTree  = "tree"
+	viewBoard = "board"
+)
+
 type App interface {
 	AddPath(context.Context, membox.AddPathCommand) (membox.AddPathResult, error)
 	SearchDocuments(context.Context, membox.SearchDocumentsQuery) ([]membox.SearchResult, error)
@@ -58,6 +63,7 @@ type Model struct {
 	filtered      []item
 	selected      int
 	scrollTop     int
+	boardScrollY  int
 	rawContent    string
 	rawDocumentID string
 
@@ -74,6 +80,7 @@ type Model struct {
 	spaceSequence uint64
 	lastKeyAt     time.Time
 	searchMode    string
+	viewMode      string
 }
 
 type searchMsg struct {
@@ -118,7 +125,7 @@ func New(ctx context.Context, app App, launcher host.Launcher) Model {
 	spin := spinner.New()
 	spin.Spinner = spinner.Dot
 	vp := viewport.New(40, 10)
-	model := Model{ctx: ctx, app: app, launcher: launcher, input: input, spinner: spin, preview: vp, searchMode: searchModeName}
+	model := Model{ctx: ctx, app: app, launcher: launcher, input: input, spinner: spin, preview: vp, searchMode: searchModeName, viewMode: viewTree}
 	model.preview.SetContent(previewPlaceholder("Loading documents…"))
 	return model
 }
@@ -352,6 +359,18 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.spaceSequence++
 		sequence := m.spaceSequence
 		commands = append(commands, tea.Tick(doubleSpaceWindow, func(time.Time) tea.Msg { return spaceTimeoutMsg{sequence: sequence} }))
+	case "tab":
+		// Toggle between tree and board view when input is not active
+		if m.viewMode == viewTree {
+			m.viewMode = viewBoard
+			// Snap the highlight to a card that is actually drawn on the board.
+			m.snapToBoardSelection()
+			m.scrollBoardToSelection()
+		} else {
+			m.viewMode = viewTree
+			m.keepSelectionVisible()
+		}
+		return m, nil
 	case "up", "down", "pgup", "pgdown", "k", "j":
 		if msg.String() == "k" {
 			return m.moveSelection("up")
@@ -380,19 +399,24 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) moveSelection(key string) (tea.Model, tea.Cmd) {
-	switch key {
-	case "up":
-		if m.selected > 0 {
-			m.selected--
+	if m.viewMode == viewBoard {
+		m.moveBoardSelection(key)
+		m.scrollBoardToSelection()
+	} else {
+		switch key {
+		case "up":
+			if m.selected > 0 {
+				m.selected--
+			}
+		case "down":
+			if m.selected+1 < len(m.filtered) {
+				m.selected++
+			}
+		case "pgup":
+			m.selected = max(0, m.selected-m.visibleRows())
+		case "pgdown":
+			m.selected = min(max(0, len(m.filtered)-1), m.selected+m.visibleRows())
 		}
-	case "down":
-		if m.selected+1 < len(m.filtered) {
-			m.selected++
-		}
-	case "pgup":
-		m.selected = max(0, m.selected-m.visibleRows())
-	case "pgdown":
-		m.selected = min(max(0, len(m.filtered)-1), m.selected+m.visibleRows())
 	}
 	m.keepSelectionVisible()
 	if document, ok := m.selectedDocument(); ok && m.rawDocumentID == document.ID {
@@ -400,6 +424,114 @@ func (m Model) moveSelection(key string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, m.loadPreview()
+}
+
+// boardVisibleIndices returns the indices into m.filtered of the cards actually
+// rendered on the board (documents with a non-empty summary), in display order.
+func (m Model) boardVisibleIndices() []int {
+	var indices []int
+	for i, candidate := range m.filtered {
+		if candidate.document.Summary != "" {
+			indices = append(indices, i)
+		}
+	}
+	return indices
+}
+
+// moveBoardSelection moves the selection only among board-visible cards, so the
+// highlight never lands on a card that is not drawn.
+func (m *Model) moveBoardSelection(key string) {
+	indices := m.boardVisibleIndices()
+	if len(indices) == 0 {
+		return
+	}
+	// Locate the current selection within the visible indices; if it is not a
+	// visible card, snap to the nearest visible one.
+	pos := -1
+	for p, idx := range indices {
+		if idx == m.selected {
+			pos = p
+			break
+		}
+	}
+	if pos == -1 {
+		m.snapToBoardSelection()
+		for p, idx := range indices {
+			if idx == m.selected {
+				pos = p
+				break
+			}
+		}
+		if pos == -1 {
+			return
+		}
+	}
+	switch key {
+	case "up":
+		if pos > 0 {
+			m.selected = indices[pos-1]
+		}
+	case "down":
+		if pos+1 < len(indices) {
+			m.selected = indices[pos+1]
+		}
+	case "pgup":
+		m.selected = indices[max(0, pos-m.visibleRows())]
+	case "pgdown":
+		m.selected = indices[min(len(indices)-1, pos+m.visibleRows())]
+	}
+}
+
+// snapToBoardSelection ensures the selection points at a board-visible card,
+// choosing the nearest visible index at or after the current selection.
+func (m *Model) snapToBoardSelection() {
+	indices := m.boardVisibleIndices()
+	if len(indices) == 0 {
+		return
+	}
+	for _, idx := range indices {
+		if idx == m.selected {
+			return
+		}
+	}
+	for _, idx := range indices {
+		if idx >= m.selected {
+			m.selected = idx
+			return
+		}
+	}
+	m.selected = indices[len(indices)-1]
+}
+
+// scrollBoardToSelection adjusts boardScrollY so the selected card is visible.
+func (m *Model) scrollBoardToSelection() {
+	layout := m.computeBoard()
+	if len(layout.rows) == 0 {
+		m.boardScrollY = 0
+		return
+	}
+	var docID string
+	if m.selected >= 0 && m.selected < len(m.filtered) {
+		docID = m.filtered[m.selected].document.ID
+	}
+	span, ok := layout.cardSpans[docID]
+	if !ok {
+		return
+	}
+	cardTop, cardHeight := span[0], span[1]
+	visible := m.visibleRows()
+	if cardTop < m.boardScrollY {
+		m.boardScrollY = cardTop
+	}
+	if cardTop+cardHeight > m.boardScrollY+visible {
+		m.boardScrollY = cardTop + cardHeight - visible
+	}
+	if m.boardScrollY < 0 {
+		m.boardScrollY = 0
+	}
+	if maxScroll := len(layout.rows) - visible; maxScroll >= 0 && m.boardScrollY > maxScroll {
+		m.boardScrollY = maxScroll
+	}
 }
 
 func (m Model) visibleRows() int {
@@ -578,7 +710,12 @@ func (m Model) View() string {
 		return m.fullscreenView()
 	}
 	contentHeight := m.visibleRows()
-	content := m.treePreviewView()
+	var content string
+	if m.viewMode == viewBoard {
+		content = m.boardView()
+	} else {
+		content = m.treePreviewView()
+	}
 	lines := strings.Split(content, "\n")
 	if len(lines) > contentHeight {
 		lines = lines[:contentHeight]
@@ -660,6 +797,175 @@ func (m Model) treePreviewView() string {
 	list := lipgloss.NewStyle().Width(listWidth).MaxWidth(listWidth).Render(strings.Join(lines, "\n"))
 	preview := lipgloss.NewStyle().Width(previewWidth).MaxWidth(previewWidth).Render(m.preview.View())
 	return lipgloss.JoinHorizontal(lipgloss.Top, list, "  ", preview)
+}
+
+// boardLayout holds the rendered board rows plus each card's vertical span
+// (top row and height in canvas rows), keyed by document ID. It is used both to
+// render the board and to scroll the selected card into view.
+type boardLayout struct {
+	rows      []string
+	cardSpans map[string][2]int // document ID -> {topRow, height}
+}
+
+// computeBoard filters to documents with summaries and lays them out as a
+// masonry grid using shortest-column placement (matching cli_dev's
+// computeMasonryLayout). Card heights are dynamic (full summary content).
+func (m Model) computeBoard() boardLayout {
+	layout := boardLayout{cardSpans: map[string][2]int{}}
+
+	var boardItems []item
+	for _, candidate := range m.filtered {
+		if candidate.document.Summary != "" {
+			boardItems = append(boardItems, candidate)
+		}
+	}
+	if len(boardItems) == 0 {
+		return layout
+	}
+
+	const targetCardWidth = 32
+	const gap = 2
+	numCols := max(1, (m.width+gap)/(targetCardWidth+gap))
+	cardWidth := (m.width - (numCols-1)*gap) / numCols
+
+	type placedCard struct {
+		docID string
+		col   int
+		row   int
+		lines []string
+	}
+	colHeights := make([]int, numCols)
+	var placed []placedCard
+
+	var selectedID string
+	if m.selected >= 0 && m.selected < len(m.filtered) {
+		selectedID = m.filtered[m.selected].document.ID
+	}
+
+	for _, candidate := range boardItems {
+		shortest := 0
+		for c := 1; c < numCols; c++ {
+			if colHeights[c] < colHeights[shortest] {
+				shortest = c
+			}
+		}
+		cardLines := m.renderCard(candidate, cardWidth, candidate.document.ID == selectedID)
+		placed = append(placed, placedCard{docID: candidate.document.ID, col: shortest, row: colHeights[shortest], lines: cardLines})
+		colHeights[shortest] += len(cardLines) + gap
+	}
+
+	totalHeight := 0
+	for _, h := range colHeights {
+		if h > totalHeight {
+			totalHeight = h
+		}
+	}
+	if totalHeight > 0 {
+		totalHeight -= gap // remove trailing gap
+	}
+
+	canvas := make([][]string, totalHeight)
+	for i := range canvas {
+		canvas[i] = make([]string, numCols)
+		for c := range canvas[i] {
+			canvas[i][c] = strings.Repeat(" ", cardWidth)
+		}
+	}
+
+	for _, pc := range placed {
+		layout.cardSpans[pc.docID] = [2]int{pc.row, len(pc.lines)}
+		for lineIdx, line := range pc.lines {
+			if pc.row+lineIdx < len(canvas) {
+				canvas[pc.row+lineIdx][pc.col] = line
+			}
+		}
+	}
+
+	for _, row := range canvas {
+		layout.rows = append(layout.rows, strings.Join(row, strings.Repeat(" ", gap)))
+	}
+	return layout
+}
+
+// boardView renders the masonry board, offset vertically by boardScrollY so the
+// selected card can be scrolled into view.
+func (m Model) boardView() string {
+	layout := m.computeBoard()
+	if len(layout.rows) == 0 {
+		return dimStyle.Render("No documents with summaries. ( summaries will be added by LLM in the future )")
+	}
+	rows := layout.rows
+	if m.boardScrollY > 0 {
+		if m.boardScrollY < len(rows) {
+			rows = rows[m.boardScrollY:]
+		} else {
+			rows = nil
+		}
+	}
+	return strings.Join(rows, "\n")
+}
+
+// renderCard renders a single document as a Unicode box card
+func (m Model) renderCard(candidate item, width int, selected bool) []string {
+	if width < 8 {
+		width = 8
+	}
+	innerW := width - 4 // 2 for border + 2 for padding
+
+	var lines []string
+
+	// Top border with selection indicator
+	if selected {
+		lines = append(lines, accentStyle.Render("╭"+strings.Repeat("─", innerW+2)+"╮"))
+	} else {
+		lines = append(lines, dimStyle.Render("╭"+strings.Repeat("─", innerW+2)+"╮"))
+	}
+
+	// Title line: [uuid] filename
+	uuidPrefix := "[" + shortID(candidate.document.ID) + "]"
+	title := fitWidth(uuidPrefix+" "+candidate.filename, innerW)
+	if selected {
+		lines = append(lines, accentStyle.Render("│ ")+accentStyle.Bold(true).Render(padWidth(title, innerW))+accentStyle.Render(" │"))
+	} else {
+		lines = append(lines, dimStyle.Render("│ ")+padWidth(title, innerW)+dimStyle.Render(" │"))
+	}
+
+	// Separator
+	if selected {
+		lines = append(lines, accentStyle.Render("├"+strings.Repeat("─", innerW+2)+"┤"))
+	} else {
+		lines = append(lines, dimStyle.Render("├"+strings.Repeat("─", innerW+2)+"┤"))
+	}
+
+	// Summary body (full content, card height grows with content)
+	summary := candidate.document.Summary
+	if summary == "" {
+		summary = "(no summary)"
+	}
+	summaryLines := wrapText(summary, innerW)
+	for _, sl := range summaryLines {
+		lines = append(lines, dimStyle.Render("│ ")+padWidth(sl, innerW)+dimStyle.Render(" │"))
+	}
+
+	// Bottom border
+	if selected {
+		lines = append(lines, accentStyle.Render("╰"+strings.Repeat("─", innerW+2)+"╯"))
+	} else {
+		lines = append(lines, dimStyle.Render("╰"+strings.Repeat("─", innerW+2)+"╯"))
+	}
+
+	return lines
+}
+
+// wrapText wraps text to the given display width. It is grapheme-aware and
+// breaks long words (e.g. CJK runs with no spaces) at character boundaries when
+// necessary, so a line never exceeds width and nothing is truncated.
+func wrapText(text string, width int) []string {
+	if width <= 0 {
+		return nil
+	}
+	wrapped := ansi.Wrap(text, width, " ")
+	return strings.Split(wrapped, "\n")
 }
 
 func (m Model) inputView() string {
@@ -770,6 +1076,19 @@ func fitWidth(value string, width int) string {
 		return ""
 	}
 	return ansi.Truncate(value, width, "…")
+}
+
+// padWidth truncates value to width (with ellipsis) then right-pads with spaces
+// so the result has exactly the given display width. Used to keep card borders aligned.
+func padWidth(value string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	truncated := ansi.Truncate(value, width, "…")
+	if w := ansi.StringWidth(truncated); w < width {
+		return truncated + strings.Repeat(" ", width-w)
+	}
+	return truncated
 }
 func fitMiddle(value string, width int) string {
 	if width <= 0 {

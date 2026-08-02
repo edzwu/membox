@@ -10,6 +10,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/muesli/termenv"
 
 	"membox"
@@ -501,5 +502,211 @@ func TestResolveEditorCmd_PerformsIOInsideCommand(t *testing.T) {
 	ready, ok := message.(editReadyMsg)
 	if !ok || ready.err != nil || ready.path != "/tmp/alpha.md" {
 		t.Fatalf("unexpected message: %#v", message)
+	}
+}
+
+func TestRenderCard_LinesHaveEqualDisplayWidth(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	m := New(context.Background(), nil, nil)
+
+	cardWidth := 34
+	summaries := []string{
+		"short",
+		"个人职业目标清单：深入掌握 C++ 等硬核技术，成长为合格的 full-stack engineer 与网络工程师。",
+		"",
+		"a much longer summary that should wrap across several lines because it contains many words and keeps going and going",
+	}
+	for i, summary := range summaries {
+		candidate := item{
+			document: membox.DocumentView{ID: "019aaaaa-bbbb-cccc-dddd-eeeeffff0000", Title: "标题", Summary: summary, Path: "/notes/文档.md"},
+			filename: "文档.md",
+		}
+		for _, selected := range []bool{false, true} {
+			lines := m.renderCard(candidate, cardWidth, selected)
+			for li, line := range lines {
+				if w := ansi.StringWidth(line); w != cardWidth {
+					t.Fatalf("case %d selected=%v line %d width=%d want %d: %q", i, selected, li, w, cardWidth, line)
+				}
+			}
+		}
+	}
+}
+
+func TestBoardView_OnlyShowsDocumentsWithSummary(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	m := New(context.Background(), nil, nil)
+	m.width = 100
+	m.height = 40
+	m.viewMode = viewBoard
+	m.filtered = []item{
+		{document: membox.DocumentView{ID: "019aaaaa-0000-0000-0000-000000000001", Title: "有摘要", Summary: "这是摘要内容", Path: "/a.md"}, filename: "a.md"},
+		{document: membox.DocumentView{ID: "019aaaaa-0000-0000-0000-000000000002", Title: "无摘要", Summary: "", Path: "/b.md"}, filename: "b.md"},
+	}
+	out := m.boardView()
+	// The doc WITH a summary must be rendered (its summary + filename appear).
+	if !strings.Contains(out, "这是摘要内容") {
+		t.Fatalf("board should contain the summarized doc's summary: %q", out)
+	}
+	if !strings.Contains(out, "a.md") {
+		t.Fatalf("board should contain the summarized doc's filename: %q", out)
+	}
+	// The doc WITHOUT a summary must be filtered out (its filename/ID absent).
+	if strings.Contains(out, "b.md") {
+		t.Fatalf("board should NOT contain the doc without summary: %q", out)
+	}
+	if strings.Contains(out, "0002") {
+		t.Fatalf("board should NOT contain the filtered doc's ID: %q", out)
+	}
+}
+
+func TestModel_BoardNavigationOnlyMovesAmongVisibleCards(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.width, model.height = 120, 40
+	docs := []membox.DocumentView{
+		{ID: "id-a", Title: "A", Path: "/tmp/a.md", RelativePath: "a.md"},                       // 0: no summary
+		{ID: "id-b", Title: "B", Path: "/tmp/b.md", RelativePath: "b.md", Summary: "summary b"}, // 1: visible
+		{ID: "id-c", Title: "C", Path: "/tmp/c.md", RelativePath: "c.md"},                       // 2: no summary
+		{ID: "id-d", Title: "D", Path: "/tmp/d.md", RelativePath: "d.md", Summary: "summary d"}, // 3: visible
+	}
+	model.items = documentItems(docs)
+	model.filtered = documentItems(docs)
+	model.viewMode = viewBoard
+
+	step := func(key string) {
+		updated, _ := model.moveSelection(key)
+		model = updated.(Model)
+	}
+
+	// Entering board mode: a non-visible selection snaps to the first visible card.
+	model.selected = 0
+	model.snapToBoardSelection()
+	if model.selected != 1 {
+		t.Fatalf("snap should land on first visible card (index 1), got %d", model.selected)
+	}
+
+	// Down moves to the next visible card (index 3), skipping the summary-less index 2.
+	step("down")
+	if model.selected != 3 {
+		t.Fatalf("down should move to next visible card (index 3), got %d", model.selected)
+	}
+
+	// Down at the last visible card stays put.
+	step("down")
+	if model.selected != 3 {
+		t.Fatalf("down at last visible card should stay at 3, got %d", model.selected)
+	}
+
+	// Up moves back to index 1, skipping index 2.
+	step("up")
+	if model.selected != 1 {
+		t.Fatalf("up should move to previous visible card (index 1), got %d", model.selected)
+	}
+
+	// Up at the first visible card stays put.
+	step("up")
+	if model.selected != 1 {
+		t.Fatalf("up at first visible card should stay at 1, got %d", model.selected)
+	}
+
+	// The selection must always correspond to a card that is actually drawn.
+	if model.filtered[model.selected].document.Summary == "" {
+		t.Fatalf("selection landed on a non-displayed card: %+v", model.filtered[model.selected].document)
+	}
+}
+
+// TestModel_BoardArrowKeysThroughUpdate drives real tea.KeyMsg events through
+// Update() (the exact path a user's keypress takes) and asserts the highlight
+// never lands on a card that is not drawn on the board.
+func TestModel_BoardArrowKeysThroughUpdate(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.width, model.height = 120, 40
+	docs := []membox.DocumentView{
+		{ID: "id-a", Title: "A", Path: "/tmp/a.md", RelativePath: "a.md"},                       // no summary
+		{ID: "id-b", Title: "B", Path: "/tmp/b.md", RelativePath: "b.md", Summary: "summary b"}, // visible
+		{ID: "id-c", Title: "C", Path: "/tmp/c.md", RelativePath: "c.md"},                       // no summary
+		{ID: "id-d", Title: "D", Path: "/tmp/d.md", RelativePath: "d.md", Summary: "summary d"}, // visible
+		{ID: "id-e", Title: "E", Path: "/tmp/e.md", RelativePath: "e.md"},                       // no summary
+	}
+	model.items = documentItems(docs)
+	model.refreshFilter()
+	model.resize()
+
+	send := func(m Model, key tea.KeyMsg) Model {
+		nm, _ := m.Update(key)
+		return nm.(Model)
+	}
+
+	// Enter board mode with Tab (input is inactive by default).
+	model = send(model, tea.KeyMsg{Type: tea.KeyTab})
+	if model.viewMode != viewBoard {
+		t.Fatalf("Tab should enter board mode, got viewMode=%v", model.viewMode)
+	}
+	if model.filtered[model.selected].document.Summary == "" {
+		t.Fatalf("after entering board, selection is on a non-displayed card idx %d", model.selected)
+	}
+
+	// Drive arrow keys through Update; the selection must only ever be on a
+	// displayed (summary) card.
+	for i := 0; i < 12; i++ {
+		model = send(model, tea.KeyMsg{Type: tea.KeyDown})
+		if model.filtered[model.selected].document.Summary == "" {
+			t.Fatalf("down #%d landed on non-displayed card idx %d (ID %s)", i, model.selected, model.filtered[model.selected].document.ID)
+		}
+	}
+	for i := 0; i < 12; i++ {
+		model = send(model, tea.KeyMsg{Type: tea.KeyUp})
+		if model.filtered[model.selected].document.Summary == "" {
+			t.Fatalf("up #%d landed on non-displayed card idx %d (ID %s)", i, model.selected, model.filtered[model.selected].document.ID)
+		}
+	}
+}
+
+// TestWrapText_PreservesCJKContent verifies wrapText breaks long CJK runs
+// (which have no spaces) at character boundaries, keeping every line within the
+// width and preserving all content (nothing dropped, nothing truncated).
+func TestWrapText_PreservesCJKContent(t *testing.T) {
+	s := "个人预算与待购清单，记录想购买的电子设备、家居与车载安全用品，以及信用卡、房贷等各类账单的到期日与金额。"
+	lines := wrapText(s, 28)
+	if len(lines) <= 1 {
+		t.Fatalf("expected the long CJK summary to wrap into multiple lines, got %d: %q", len(lines), lines)
+	}
+	for _, l := range lines {
+		if w := ansi.StringWidth(l); w > 28 {
+			t.Fatalf("line exceeds width: %d > 28: %q", w, l)
+		}
+	}
+	joined := strings.Join(lines, "")
+	for _, r := range s {
+		if r == ' ' {
+			continue
+		}
+		if !strings.ContainsRune(joined, r) {
+			t.Fatalf("rune %q lost during wrapping", r)
+		}
+	}
+}
+
+// TestRenderCard_FullSummaryNoTruncation verifies a card renders the entire
+// summary across wrapped lines with no ellipsis truncation.
+func TestRenderCard_FullSummaryNoTruncation(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	m := New(context.Background(), nil, nil)
+	longSummary := "个人预算与待购清单，记录想购买的电子设备、家居与车载安全用品，以及信用卡、房贷等各类账单的到期日与金额。"
+	candidate := item{
+		document: membox.DocumentView{ID: "019fbe56-64c3-7e3c-861d-4da66742dabf", Title: "budget", Summary: longSummary, Path: "/tmp/budget.md"},
+		filename: "budget.md",
+	}
+	cardLines := m.renderCard(candidate, 32, false)
+	joined := strings.Join(cardLines, "\n")
+	if strings.Contains(joined, "…") {
+		t.Fatalf("card truncated content with ellipsis:\n%s", joined)
+	}
+	for _, r := range longSummary {
+		if r == ' ' {
+			continue
+		}
+		if !strings.ContainsRune(joined, r) {
+			t.Fatalf("summary rune %q missing from rendered card:\n%s", r, joined)
+		}
 	}
 }
