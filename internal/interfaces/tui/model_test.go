@@ -710,3 +710,90 @@ func TestRenderCard_FullSummaryNoTruncation(t *testing.T) {
 		}
 	}
 }
+
+func isQuitCmd(cmd tea.Cmd) bool {
+	if cmd == nil {
+		return false
+	}
+	_, ok := cmd().(tea.QuitMsg)
+	return ok
+}
+
+// TestModel_QIsContextualBackNotQuit verifies q steps back within the TUI
+// (board -> tree, then closes the details pane) instead of quitting.
+func TestModel_QIsContextualBackNotQuit(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.width, model.height = 120, 40
+	model.items = documentItems([]membox.DocumentView{
+		{ID: "id-b", Title: "B", Path: "/tmp/b.md", RelativePath: "b.md", Summary: "summary b"},
+	})
+	model.refreshFilter()
+	model.resize()
+
+	q := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}}
+
+	// q in board view returns to tree view and does NOT quit.
+	model.viewMode = viewBoard
+	updated, cmd := model.Update(q)
+	model = updated.(Model)
+	if model.viewMode != viewTree {
+		t.Fatalf("q in board view should return to tree, got viewMode=%v", model.viewMode)
+	}
+	if isQuitCmd(cmd) {
+		t.Fatal("q must not quit the program")
+	}
+
+	// q in tree view with the details pane open closes it and does NOT quit.
+	model.detailsVisible = true
+	updated, cmd = model.Update(q)
+	model = updated.(Model)
+	if model.detailsVisible {
+		t.Fatal("q in tree view should close the details pane")
+	}
+	if isQuitCmd(cmd) {
+		t.Fatal("q must not quit the program")
+	}
+}
+
+// TestModel_CtrlDQuits verifies Ctrl+D quits the program from any state.
+func TestModel_CtrlDQuits(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.width, model.height = 120, 40
+
+	ctrlD := tea.KeyMsg{Type: tea.KeyCtrlD}
+
+	// Quits from the base navigation state.
+	_, cmd := model.Update(ctrlD)
+	if !isQuitCmd(cmd) {
+		t.Fatal("ctrl+d should quit from navigation state")
+	}
+
+	// Quits from board view too.
+	model.viewMode = viewBoard
+	_, cmd = model.Update(ctrlD)
+	if !isQuitCmd(cmd) {
+		t.Fatal("ctrl+d should quit from board view")
+	}
+}
+
+// TestModel_CtrlCDeletesInputChar verifies Ctrl+C deletes a character in the
+// filter input box and does NOT quit the program.
+func TestModel_CtrlCDeletesInputChar(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.width, model.height = 120, 40
+	model.inputVisible = true
+	model.inputActive = true
+	model.input.Focus()
+	model.input.SetValue("abc")
+
+	ctrlC := tea.KeyMsg{Type: tea.KeyCtrlC}
+	updated, cmd := model.Update(ctrlC)
+	model = updated.(Model)
+
+	if isQuitCmd(cmd) {
+		t.Fatal("ctrl+c must not quit the program")
+	}
+	if got := model.input.Value(); got != "ab" {
+		t.Fatalf("ctrl+c should delete one char from input: got %q, want %q", got, "ab")
+	}
+}

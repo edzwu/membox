@@ -148,7 +148,7 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		m.resize()
 	case tea.KeyMsg:
-		if msg.String() == "ctrl+c" {
+		if msg.String() == "ctrl+d" {
 			return m, tea.Quit
 		}
 		if m.fullscreen {
@@ -268,6 +268,10 @@ func (m Model) updateFullscreen(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateFilterInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Ctrl+C deletes a character in the input box (it no longer quits; Ctrl+D quits).
+	if msg.String() == "ctrl+c" {
+		msg = tea.KeyMsg{Type: tea.KeyBackspace}
+	}
 	switch msg.String() {
 	case "esc":
 		m.hideInput()
@@ -340,7 +344,14 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var commands []tea.Cmd
 	switch msg.String() {
 	case "q":
-		return m, tea.Quit
+		// Contextual "back" within the TUI; Ctrl+D quits the program.
+		if m.viewMode == viewBoard {
+			m.viewMode = viewTree
+			m.keepSelectionVisible()
+		} else if m.detailsVisible {
+			m.detailsVisible = false
+		}
+		return m, nil
 	case "enter":
 		if document, ok := m.selectedDocument(); ok {
 			m.loading = true
@@ -1021,9 +1032,9 @@ func (m Model) modeBadge() string {
 
 func (m Model) hints() string {
 	if m.inputVisible {
-		return "tab mode • ctrl+g details • enter open • esc hide • type to search"
+		return "tab mode • ctrl+g details • ctrl+c del-char • enter open • esc hide • ctrl+d quit"
 	}
-	return "space details • space×2 filter • enter open • ↑↓ select • r rescan • q quit"
+	return "space details • space×2 filter • tab board • enter open • ↑↓ select • q back • ctrl+d quit"
 }
 
 func searchResultItems(items []item, results []membox.SearchResult) []item {
