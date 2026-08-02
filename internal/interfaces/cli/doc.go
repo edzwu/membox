@@ -186,4 +186,11 @@ func newDocOpenCommand(runtime *runtime) *cobra.Command {
 	return command
 }
 
+func displayName(title, path string) string {
+	if title != "" {
+		return title
+	}
+	return path
+}
+
 func shortID(id string) string { return host.ShortDocumentID(id) }

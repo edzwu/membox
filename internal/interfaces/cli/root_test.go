@@ -184,6 +184,180 @@ func TestCLI_PathScanGitTimestampForSpecificPathUsesHistoryAndFollowsRename(t *t
 	}
 }
 
+func TestCLI_NoteNewCreatesDocumentAndManualLink(t *testing.T) {
+	home, notes := filepath.Join(t.TempDir(), "home"), t.TempDir()
+	sourcePath := filepath.Join(notes, "source.md")
+	if err := os.WriteFile(sourcePath, []byte("# Source\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, stderr := runTestCLI(t, "--home", home, "path", "add", notes); code != 0 {
+		t.Fatalf("add failed: %d %s", code, stderr)
+	}
+	code, stdout, stderr := runTestCLI(t, "--home", home, "doc", "list", "--json")
+	if code != 0 {
+		t.Fatalf("list failed: %d %s", code, stderr)
+	}
+	var documents []membox.DocumentView
+	if err := json.Unmarshal([]byte(stdout), &documents); err != nil {
+		t.Fatal(err)
+	}
+	if len(documents) != 1 {
+		t.Fatalf("documents=%d", len(documents))
+	}
+
+	code, stdout, stderr = runTestCLI(t, "--home", home, "note", "new", "Online Softmax Intuition", "--from", documents[0].ID, "--json", "--no-open")
+	if code != 0 {
+		t.Fatalf("note new failed: %d %s", code, stderr)
+	}
+	var created membox.CreateNoteResult
+	if err := json.Unmarshal([]byte(stdout), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.Document.ID == "" || created.Document.Path == "" || created.Link == nil || created.Link.FromDocumentID != documents[0].ID || created.Link.ToDocumentID != created.Document.ID {
+		t.Fatalf("unexpected note result: %+v", created)
+	}
+	body, err := os.ReadFile(created.Document.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "# Online Softmax Intuition") {
+		t.Fatalf("note content=%q", body)
+	}
+
+	if code, _, stderr := runTestCLI(t, "--home", home, "note", "new", "Online Softmax Intuition", "--from", documents[0].ID, "--json", "--no-open"); code != 0 {
+		t.Fatalf("duplicate note new failed: %d %s", code, stderr)
+	}
+	entries, err := filepath.Glob(filepath.Join(notes, "online-softmax-intuition*.md"))
+	if err != nil || len(entries) != 2 {
+		t.Fatalf("expected unique note filenames: entries=%v err=%v", entries, err)
+	}
+
+	code, stdout, stderr = runTestCLI(t, "--home", home, "link", "list", created.Document.ID, "--json")
+	if code != 0 {
+		t.Fatalf("links failed: %d %s", code, stderr)
+	}
+	var graph membox.DocumentGraphView
+	if err := json.Unmarshal([]byte(stdout), &graph); err != nil {
+		t.Fatal(err)
+	}
+	if len(graph.Incoming) != 1 || graph.Incoming[0].ID != documents[0].ID {
+		t.Fatalf("new note does not have source backlink: %+v", graph)
+	}
+}
+
+func TestCLI_DocumentGraphSupportsManualLinksAndTopicMembership(t *testing.T) {
+	home, notes := filepath.Join(t.TempDir(), "home"), t.TempDir()
+	if err := os.WriteFile(filepath.Join(notes, "alpha.md"), []byte("# Alpha\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(notes, "beta.md"), []byte("# Beta\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, stderr := runTestCLI(t, "--home", home, "path", "add", notes); code != 0 {
+		t.Fatalf("add failed: %d %s", code, stderr)
+	}
+	code, stdout, stderr := runTestCLI(t, "--home", home, "doc", "list", "--json")
+	if code != 0 {
+		t.Fatalf("list failed: %d %s", code, stderr)
+	}
+	var documents []membox.DocumentView
+	if err := json.Unmarshal([]byte(stdout), &documents); err != nil {
+		t.Fatal(err)
+	}
+	if len(documents) != 2 {
+		t.Fatalf("documents=%d", len(documents))
+	}
+	alpha, beta := documents[0], documents[1]
+	if alpha.Title != "Alpha" {
+		alpha, beta = beta, alpha
+	}
+
+	code, stdout, stderr = runTestCLI(t, "--home", home, "topic", "create", "Attention", "--json")
+	if code != 0 {
+		t.Fatalf("topic create failed: %d %s", code, stderr)
+	}
+	var created membox.CreateTopicResult
+	if err := json.Unmarshal([]byte(stdout), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.AlreadyExists || created.Topic.Name != "attention" {
+		t.Fatalf("unexpected topic result: %+v", created)
+	}
+	code, stdout, stderr = runTestCLI(t, "--home", home, "topic", "create", "attention", "--json")
+	if code != 0 {
+		t.Fatalf("topic duplicate failed: %d %s", code, stderr)
+	}
+	var duplicate membox.CreateTopicResult
+	if err := json.Unmarshal([]byte(stdout), &duplicate); err != nil {
+		t.Fatal(err)
+	}
+	if !duplicate.AlreadyExists || duplicate.Topic.ID != created.Topic.ID {
+		t.Fatalf("duplicate topic was not idempotent: %+v", duplicate)
+	}
+
+	if code, _, stderr := runTestCLI(t, "--home", home, "topic", "add", "attention", alpha.ID); code != 0 {
+		t.Fatalf("assign topic failed: %d %s", code, stderr)
+	}
+	if code, _, stderr := runTestCLI(t, "--home", home, "link", "add", alpha.ID, beta.ID); code != 0 {
+		t.Fatalf("link failed: %d %s", code, stderr)
+	}
+	if code, _, stderr := runTestCLI(t, "--home", home, "link", "add", alpha.ID, beta.ID); code != 0 {
+		t.Fatalf("duplicate link failed: %d %s", code, stderr)
+	}
+
+	code, stdout, stderr = runTestCLI(t, "--home", home, "link", "list", alpha.ID, "--json")
+	if code != 0 {
+		t.Fatalf("links failed: %d %s", code, stderr)
+	}
+	var graph membox.DocumentGraphView
+	if err := json.Unmarshal([]byte(stdout), &graph); err != nil {
+		t.Fatal(err)
+	}
+	if len(graph.Outgoing) != 1 || graph.Outgoing[0].ID != beta.ID || len(graph.Incoming) != 0 || len(graph.Topics) != 1 || graph.Topics[0].ID != created.Topic.ID {
+		t.Fatalf("unexpected alpha graph: %+v", graph)
+	}
+
+	code, stdout, stderr = runTestCLI(t, "--home", home, "link", "list", beta.ID, "--json")
+	if code != 0 {
+		t.Fatalf("reverse links failed: %d %s", code, stderr)
+	}
+	if err := json.Unmarshal([]byte(stdout), &graph); err != nil {
+		t.Fatal(err)
+	}
+	if len(graph.Incoming) != 1 || graph.Incoming[0].ID != alpha.ID || len(graph.Outgoing) != 0 || len(graph.Topics) != 0 {
+		t.Fatalf("unexpected beta graph: %+v", graph)
+	}
+
+	code, stdout, stderr = runTestCLI(t, "--home", home, "topic", "documents", "attention", "--json")
+	if code != 0 {
+		t.Fatalf("topic documents failed: %d %s", code, stderr)
+	}
+	var topicDocuments membox.TopicDocumentsView
+	if err := json.Unmarshal([]byte(stdout), &topicDocuments); err != nil {
+		t.Fatal(err)
+	}
+	if len(topicDocuments.Documents) != 1 || topicDocuments.Documents[0].ID != alpha.ID {
+		t.Fatalf("unexpected topic documents: %+v", topicDocuments)
+	}
+
+	if code, _, stderr := runTestCLI(t, "--home", home, "link", "remove", alpha.ID, beta.ID); code != 0 {
+		t.Fatalf("unlink failed: %d %s", code, stderr)
+	}
+	if code, _, stderr := runTestCLI(t, "--home", home, "topic", "remove", "attention", alpha.ID); code != 0 {
+		t.Fatalf("remove topic failed: %d %s", code, stderr)
+	}
+	code, stdout, stderr = runTestCLI(t, "--home", home, "link", "list", alpha.ID, "--json")
+	if code != 0 {
+		t.Fatalf("final links failed: %d %s", code, stderr)
+	}
+	if err := json.Unmarshal([]byte(stdout), &graph); err != nil {
+		t.Fatal(err)
+	}
+	if len(graph.Outgoing) != 0 || len(graph.Incoming) != 0 || len(graph.Topics) != 0 {
+		t.Fatalf("graph was not cleared: %+v", graph)
+	}
+}
+
 func TestCLI_CLI002_InvalidLeafFlagPrintsLeafUsage(t *testing.T) {
 	code, _, stderr := runTestCLI(t, "doc", "search", "query", "--limit", "not-a-number")
 	if code != 2 {

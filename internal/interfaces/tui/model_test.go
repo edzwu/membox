@@ -54,6 +54,41 @@ func (f *fakeApp) ResolveDocumentLocation(context.Context, membox.ResolveLocatio
 	return membox.LocationView{DocumentID: "019-alpha", Path: "/tmp/alpha.md", Status: "active"}, nil
 }
 func (f *fakeApp) ReindexDocument(context.Context, membox.ReindexDocumentCommand) error { return nil }
+func (f *fakeApp) DeleteDocument(_ context.Context, command membox.DeleteDocumentCommand) (membox.DeleteDocumentResult, error) {
+	return membox.DeleteDocumentResult{DocumentID: command.Selector, Path: "/tmp/deleted.md"}, nil
+}
+func (f *fakeApp) CreateNote(_ context.Context, command membox.CreateNoteCommand) (membox.CreateNoteResult, error) {
+	document := membox.DocumentView{ID: "new-note", Title: command.Title, Path: "/tmp/new-note.md", RelativePath: "new-note.md", Status: "active"}
+	result := membox.CreateNoteResult{Document: document}
+	if command.FromSelector != "" {
+		result.Link = &membox.LinkView{FromDocumentID: command.FromSelector, ToDocumentID: document.ID, Kind: "manual"}
+	}
+	return result, nil
+}
+func (f *fakeApp) CreateTopic(_ context.Context, command membox.CreateTopicCommand) (membox.CreateTopicResult, error) {
+	return membox.CreateTopicResult{Topic: membox.TopicView{ID: "topic-" + command.Name, Name: command.Name, Path: "/tmp/topic-" + command.Name + ".md"}}, nil
+}
+func (f *fakeApp) ListTopics(context.Context, membox.ListTopicsQuery) ([]membox.TopicView, error) {
+	return []membox.TopicView{{ID: "topic-attention", Name: "attention", Path: "/tmp/topic-attention.md"}}, nil
+}
+func (f *fakeApp) AddDocumentTopic(_ context.Context, command membox.TopicMembershipCommand) (membox.TopicMembershipResult, error) {
+	return membox.TopicMembershipResult{DocumentID: command.DocumentSelector, Topic: membox.TopicView{ID: command.TopicSelector, Name: "attention"}, Added: true}, nil
+}
+func (f *fakeApp) RemoveDocumentTopic(_ context.Context, command membox.TopicMembershipCommand) (membox.TopicMembershipResult, error) {
+	return membox.TopicMembershipResult{DocumentID: command.DocumentSelector, Topic: membox.TopicView{ID: command.TopicSelector, Name: "attention"}, Removed: true}, nil
+}
+func (f *fakeApp) ListTopicDocuments(context.Context, membox.ListTopicDocumentsQuery) (membox.TopicDocumentsView, error) {
+	return membox.TopicDocumentsView{Topic: membox.TopicView{ID: "topic-attention", Name: "attention"}}, nil
+}
+func (f *fakeApp) LinkDocuments(context.Context, membox.LinkDocumentsCommand) (membox.LinkDocumentsResult, error) {
+	return membox.LinkDocumentsResult{Created: true}, nil
+}
+func (f *fakeApp) UnlinkDocuments(context.Context, membox.UnlinkDocumentsCommand) (membox.UnlinkDocumentsResult, error) {
+	return membox.UnlinkDocumentsResult{Removed: true}, nil
+}
+func (f *fakeApp) GetDocumentGraph(context.Context, membox.GetDocumentGraphQuery) (membox.DocumentGraphView, error) {
+	return membox.DocumentGraphView{}, nil
+}
 func (f *fakeApp) ToggleDocumentPin(_ context.Context, command membox.ToggleDocumentPinCommand) (membox.ToggleDocumentPinResult, error) {
 	if f.pins == nil {
 		f.pins = make(map[string]bool)
@@ -382,6 +417,277 @@ func TestModel_HomeAndEndMoveToTreeBoundaries(t *testing.T) {
 	model = updated.(Model)
 	if model.selected != 0 || model.scrollTop != 0 || model.input.Value() != "doc" {
 		t.Fatalf("Home with active input did not focus first row: selected=%d top=%d input=%q", model.selected, model.scrollTop, model.input.Value())
+	}
+}
+
+func TestModel_DeleteConfirmationDeletesFocusedFile(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.width, model.height = 100, 20
+	model.items = documentItems([]membox.DocumentView{{ID: "doc-alpha", Title: "Alpha", Path: "/tmp/alpha.md", RelativePath: "alpha.md"}})
+	model.refreshFilter()
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	model = updated.(Model)
+	if !model.deleteConfirm || !strings.Contains(model.View(), "Delete alpha.md?") {
+		t.Fatalf("delete confirmation missing: %q", model.View())
+	}
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	model = updated.(Model)
+	if !model.loading || command == nil {
+		t.Fatal("delete was not scheduled")
+	}
+	message := command()
+	if batch, ok := message.(tea.BatchMsg); ok {
+		message = batch[1]()
+	}
+	updated, _ = model.Update(message)
+	model = updated.(Model)
+	if model.deleteConfirm || model.statusMessage != "Deleted deleted.md" {
+		t.Fatalf("delete did not complete: confirm=%v status=%q", model.deleteConfirm, model.statusMessage)
+	}
+}
+
+func TestModel_DeleteConfirmationCanBeCanceled(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.items = documentItems([]membox.DocumentView{{ID: "doc-alpha", Title: "Alpha", Path: "/tmp/alpha.md"}})
+	model.refreshFilter()
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	model = updated.(Model)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	model = updated.(Model)
+	if model.deleteConfirm || model.statusMessage != "Delete canceled" {
+		t.Fatalf("delete cancel failed: confirm=%v status=%q", model.deleteConfirm, model.statusMessage)
+	}
+}
+
+func TestModel_CtrlPCyclesInputModes(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+	model = updated.(Model)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+	model = updated.(Model)
+	if !model.inputVisible || model.inputMode != inputModeSearch || model.searchMode != searchModeName {
+		t.Fatalf("double space did not open NAME filter: visible=%v input=%s search=%s", model.inputVisible, model.inputMode, model.searchMode)
+	}
+	for index, expected := range []struct {
+		inputMode  string
+		searchMode string
+	}{
+		{inputModeCmd, searchModeName},
+		{inputModeAgent, searchModeName},
+		{inputModeSearch, searchModeName},
+	} {
+		updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
+		model = updated.(Model)
+		if model.inputMode != expected.inputMode || model.searchMode != expected.searchMode {
+			t.Fatalf("cycle %d: got input=%s search=%s, want %s/%s", index, model.inputMode, model.searchMode, expected.inputMode, expected.searchMode)
+		}
+	}
+	status := model.statusBar()
+	if !strings.Contains(status, "ctrl+p full") {
+		t.Fatalf("status does not show current mode hint: %q", status)
+	}
+}
+
+func TestModel_InputModePersistsAcrossHideAndReopen(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	space := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}}
+	updated, _ := model.Update(space)
+	model = updated.(Model)
+	updated, _ = model.Update(space)
+	model = updated.(Model)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
+	model = updated.(Model)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
+	model = updated.(Model)
+	if model.inputMode != inputModeAgent {
+		t.Fatalf("did not reach agent mode: %s", model.inputMode)
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model = updated.(Model)
+	if model.inputVisible || model.inputMode != inputModeAgent {
+		t.Fatalf("esc did not preserve hidden agent mode: visible=%v mode=%s", model.inputVisible, model.inputMode)
+	}
+	updated, _ = model.Update(space)
+	model = updated.(Model)
+	updated, _ = model.Update(space)
+	model = updated.(Model)
+	if !model.inputVisible || model.inputMode != inputModeAgent || !strings.Contains(model.modeBadge(), " AGENT ") {
+		t.Fatalf("double space did not reopen agent input: visible=%v mode=%s badge=%q", model.inputVisible, model.inputMode, model.modeBadge())
+	}
+}
+
+func TestModel_CommandPaletteProgressiveDisclosure(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.width, model.height = 100, 20
+	model.items = documentItems([]membox.DocumentView{{ID: "doc-alpha", Title: "Alpha", Path: "/tmp/alpha.md", RelativePath: "alpha.md"}})
+	model.refreshFilter()
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+	model = updated.(Model)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+	model = updated.(Model)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
+	model = updated.(Model)
+	if !model.inputVisible || model.inputMode != inputModeCmd || model.cmdMenuVisible {
+		t.Fatalf("ctrl+p did not open quiet command input: visible=%v mode=%s menu=%v", model.inputVisible, model.inputMode, model.cmdMenuVisible)
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	model = updated.(Model)
+	if !model.cmdMenuVisible || len(model.cmdSuggestions) == 0 || model.cmdSuggestions[0].Value != "note" {
+		t.Fatalf("first tab did not disclose top-level commands: %+v", model.cmdSuggestions)
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = updated.(Model)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if model.input.Value() != "topic " || model.cmdMenuVisible {
+		t.Fatalf("topic was not inserted progressively: input=%q menu=%v", model.input.Value(), model.cmdMenuVisible)
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	model = updated.(Model)
+	if len(model.cmdSuggestions) == 0 || model.cmdSuggestions[0].Value != "create" {
+		t.Fatalf("second tab did not disclose topic verbs: %+v", model.cmdSuggestions)
+	}
+	for model.cmdSuggestions[model.cmdSelected].Value != "add" {
+		updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+		model = updated.(Model)
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if model.input.Value() != "topic add " {
+		t.Fatalf("topic add was not inserted: %q", model.input.Value())
+	}
+}
+
+func TestModel_SlashClearStillClearsFiltersInSearchMode(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.dateFilters = []dateFilter{{Label: "+2026"}}
+	model.textFilters = []textFilter{{Value: "alpha", Mode: searchModeName}}
+	model.inputVisible, model.inputActive = true, true
+	model.input.Focus()
+	model.input.SetValue("/clear")
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if len(model.dateFilters) != 0 || len(model.textFilters) != 0 {
+		t.Fatalf("/clear did not clear filters: dates=%+v text=%+v", model.dateFilters, model.textFilters)
+	}
+}
+
+func TestModel_CommandExecutionClearsInputAndHistoryNavigates(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.inputVisible, model.inputActive, model.inputMode = true, true, inputModeCmd
+	model.input.Focus()
+	model.input.SetValue("topic list")
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if command == nil {
+		t.Fatal("topic list did not schedule")
+	}
+	message := command()
+	if batch, ok := message.(tea.BatchMsg); ok {
+		message = batch[1]()
+	}
+	updated, _ = model.Update(message)
+	model = updated.(Model)
+	if model.input.Value() != "" || len(model.commandHistory) != 1 || model.commandHistory[0] != "topic list" {
+		t.Fatalf("command input/history not updated: input=%q history=%+v", model.input.Value(), model.commandHistory)
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyUp})
+	model = updated.(Model)
+	if model.input.Value() != "topic list" {
+		t.Fatalf("up did not recall command: %q", model.input.Value())
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = updated.(Model)
+	if model.input.Value() != "" {
+		t.Fatalf("down did not return to empty draft: %q", model.input.Value())
+	}
+}
+
+func TestModel_CommandFuzzyArgumentSuggestionsIncludeUUIDAndFilename(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.items = documentItems([]membox.DocumentView{{ID: "870abcdef-1234", Title: "Alpha", Path: "/tmp/alpha.md", RelativePath: "alpha.md"}})
+	model.refreshFilter()
+	var matches []commandSuggestion
+	for _, suggestion := range model.commandArgumentSuggestions([]string{"link", "list"}, 2, "870a") {
+		if suggestion.Value != "@selected" {
+			matches = append(matches, suggestion)
+		}
+	}
+	if len(matches) != 1 || matches[0].Value != "870abcdef-1234" || !strings.Contains(matches[0].Description, "Alpha") {
+		t.Fatalf("fuzzy suggestions=%+v", matches)
+	}
+}
+
+func TestModel_CommandTabShowsFuzzyDocumentChoices(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.width, model.height = 100, 20
+	model.items = documentItems([]membox.DocumentView{
+		{ID: "9c4fabcdef-1111", Title: "Alpha", Path: "/tmp/alpha.md", RelativePath: "alpha.md"},
+		{ID: "9c4fabcdef-2222", Title: "Alpha Review", Path: "/tmp/alpha-review.md", RelativePath: "alpha-review.md"},
+	})
+	model.refreshFilter()
+	model.inputVisible, model.inputActive, model.inputMode = true, true, inputModeCmd
+	model.input.Focus()
+	model.input.SetValue("link add 9c4f")
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	model = updated.(Model)
+	if !model.cmdMenuVisible || len(model.cmdSuggestions) != 3 {
+		t.Fatalf("fuzzy menu did not show conflicts: visible=%v suggestions=%+v", model.cmdMenuVisible, model.cmdSuggestions)
+	}
+	view := model.inputView()
+	if !strings.Contains(view, "9c4f") || !strings.Contains(view, "alpha.md") || !strings.Contains(view, "alpha-review.md") {
+		t.Fatalf("menu does not show uuid and filename: %q", view)
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = updated.(Model)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if model.input.Value() != "link add 9c4fabcdef-1111 " {
+		t.Fatalf("selected conflict was not inserted: %q", model.input.Value())
+	}
+}
+
+func TestModel_AgentModeUsesBadgeAndPlaceholderError(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+	model = updated.(Model)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+	model = updated.(Model)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
+	model = updated.(Model)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
+	model = updated.(Model)
+	if model.inputMode != inputModeAgent || !strings.Contains(model.modeBadge(), " AGENT ") {
+		t.Fatalf("ctrl+p did not cycle to agent mode: mode=%s badge=%q", model.inputMode, model.modeBadge())
+	}
+	model.input.SetValue("summarize current document")
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if model.filterErr == nil || !strings.Contains(model.filterErr.Error(), "not connected") {
+		t.Fatalf("agent placeholder error missing: %v", model.filterErr)
+	}
+}
+
+func TestModel_LinkListShowsGraphFocusCardsByDirection(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.width, model.height = 120, 30
+	focus := membox.DocumentView{ID: "focus", Title: "Focus", Path: "/tmp/focus.md", Summary: "focus summary"}
+	outgoing := membox.DocumentView{ID: "out", Title: "Outgoing", Path: "/tmp/out.md", Summary: "out summary"}
+	incoming := membox.DocumentView{ID: "in", Title: "Incoming", Path: "/tmp/in.md", Summary: "in summary"}
+	updated, _ := model.Update(graphFocusMsg{documentID: focus.ID, cards: []membox.DocumentView{focus, outgoing, incoming}, incoming: 1})
+	model = updated.(Model)
+	view := model.View()
+	if model.viewMode != viewBoard || !strings.Contains(view, "● focus") || !strings.Contains(view, "├─ →") || !strings.Contains(view, "└─ ←") {
+		t.Fatalf("graph focus board missing thread markers: %q", view)
+	}
+	if strings.Contains(view, "╭") || strings.Contains(view, "╰") {
+		t.Fatalf("graph list should not use card borders: %q", view)
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	model = updated.(Model)
+	if model.graphFocusID != "" || model.viewMode != viewTree {
+		t.Fatalf("q did not leave graph focus: focus=%s mode=%s", model.graphFocusID, model.viewMode)
 	}
 }
 
@@ -767,7 +1073,7 @@ func TestModel_ViewUsesTerminalHeightExactly(t *testing.T) {
 	if len(lines) != model.height {
 		t.Fatalf("view height=%d terminal height=%d lines=%q", len(lines), model.height, lines)
 	}
-	if !strings.Contains(lines[len(lines)-1], "tab mode") {
+	if !strings.Contains(lines[len(lines)-1], "ctrl+p full") {
 		t.Fatalf("status bar is not bottom: %q", lines[len(lines)-1])
 	}
 	filter, err := parseDateFilter("+2026-07", time.Now())

@@ -44,6 +44,16 @@ type App interface {
 	ReadDocument(context.Context, membox.ReadDocumentQuery) ([]byte, error)
 	ResolveDocumentLocation(context.Context, membox.ResolveLocationQuery) (membox.LocationView, error)
 	ReindexDocument(context.Context, membox.ReindexDocumentCommand) error
+	DeleteDocument(context.Context, membox.DeleteDocumentCommand) (membox.DeleteDocumentResult, error)
+	CreateNote(context.Context, membox.CreateNoteCommand) (membox.CreateNoteResult, error)
+	CreateTopic(context.Context, membox.CreateTopicCommand) (membox.CreateTopicResult, error)
+	ListTopics(context.Context, membox.ListTopicsQuery) ([]membox.TopicView, error)
+	AddDocumentTopic(context.Context, membox.TopicMembershipCommand) (membox.TopicMembershipResult, error)
+	RemoveDocumentTopic(context.Context, membox.TopicMembershipCommand) (membox.TopicMembershipResult, error)
+	ListTopicDocuments(context.Context, membox.ListTopicDocumentsQuery) (membox.TopicDocumentsView, error)
+	LinkDocuments(context.Context, membox.LinkDocumentsCommand) (membox.LinkDocumentsResult, error)
+	UnlinkDocuments(context.Context, membox.UnlinkDocumentsCommand) (membox.UnlinkDocumentsResult, error)
+	GetDocumentGraph(context.Context, membox.GetDocumentGraphQuery) (membox.DocumentGraphView, error)
 	ToggleDocumentPin(context.Context, membox.ToggleDocumentPinCommand) (membox.ToggleDocumentPinResult, error)
 	ScanPaths(context.Context, membox.ScanPathsCommand) (membox.ScanReport, error)
 	ListPaths(context.Context) ([]membox.PathView, error)
@@ -61,6 +71,31 @@ type textFilter struct {
 	Value    string
 	Mode     string
 	Sequence uint64
+}
+
+const (
+	inputModeSearch = "search"
+	inputModeCmd    = "cmd"
+	inputModeAgent  = "agent"
+)
+
+type commandSuggestion struct {
+	Value       string
+	Display     string
+	Description string
+	Action      func() tea.Msg
+}
+
+type commandResultMsg struct {
+	text string
+	err  error
+}
+
+type graphFocusMsg struct {
+	documentID string
+	cards      []membox.DocumentView
+	incoming   int
+	err        error
 }
 
 type Model struct {
@@ -89,16 +124,29 @@ type Model struct {
 	fullscreen     bool
 	fullDocument   *membox.DocumentView
 
-	loading       bool
-	err           error
-	filterErr     error
-	width, height int
-	listSequence  uint64
-	spaceSequence uint64
-	lastKeyAt     time.Time
-	searchMode    string
-	viewMode      string
-	sortMode      string
+	loading        bool
+	err            error
+	filterErr      error
+	statusMessage  string
+	width, height  int
+	listSequence   uint64
+	spaceSequence  uint64
+	lastKeyAt      time.Time
+	searchMode     string
+	inputMode      string
+	deleteConfirm  bool
+	deleteSelector string
+	deletePath     string
+	commandHistory []string
+	historyIndex   int
+	cmdSuggestions []commandSuggestion
+	cmdSelected    int
+	cmdMenuVisible bool
+	viewMode       string
+	sortMode       string
+	graphFocusID   string
+	graphCards     []membox.DocumentView
+	graphIncoming  int
 }
 
 type searchMsg struct {
@@ -139,6 +187,17 @@ type pinMsg struct {
 	err        error
 }
 type openMsg struct{ err error }
+type noteCreatedMsg struct {
+	document membox.DocumentView
+	command  *exec.Cmd
+	err      error
+}
+type topicCreatedMsg struct{ topic membox.TopicView }
+type deleteResultMsg struct {
+	documentID string
+	path       string
+	err        error
+}
 type spaceTimeoutMsg struct{ sequence uint64 }
 
 func New(ctx context.Context, app App, launcher host.Launcher) Model {
@@ -148,7 +207,7 @@ func New(ctx context.Context, app App, launcher host.Launcher) Model {
 	spin := spinner.New()
 	spin.Spinner = spinner.Dot
 	vp := viewport.New(40, 10)
-	model := Model{ctx: ctx, app: app, launcher: launcher, input: input, spinner: spin, preview: vp, searchMode: searchModeName, viewMode: viewTree, sortMode: sortModeName}
+	model := Model{ctx: ctx, app: app, launcher: launcher, input: input, spinner: spin, preview: vp, searchMode: searchModeName, inputMode: inputModeSearch, viewMode: viewTree, sortMode: sortModeName}
 	model.preview.SetContent(previewPlaceholder("Loading documents…"))
 	return model
 }
@@ -259,6 +318,56 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case openMsg:
 		m.err = msg.err
+	case noteCreatedMsg:
+		m.loading, m.err = false, msg.err
+		if msg.err == nil {
+			m.items = append(m.items, documentItems([]membox.DocumentView{msg.document})...)
+			m.refreshFilter()
+			for index, candidate := range m.filtered {
+				if candidate.document.ID == msg.document.ID {
+					m.selected = index
+					break
+				}
+			}
+			m.keepSelectionVisible()
+			m.statusMessage = shortID(msg.document.ID) + " " + filepath.Base(msg.document.Path)
+			m.clearExecutedCommand()
+			if msg.command != nil {
+				return m, tea.ExecProcess(msg.command, func(err error) tea.Msg {
+					return editorDoneMsg{selector: msg.document.ID, viewer: true, err: err}
+				})
+			}
+		}
+		m.clearExecutedCommand()
+	case topicCreatedMsg:
+		m.loading = false
+		m.statusMessage = "Topic ready: " + msg.topic.Name
+		m.clearExecutedCommand()
+	case deleteResultMsg:
+		m.loading, m.err = false, msg.err
+		if msg.err == nil {
+			m.deleteConfirm, m.deleteSelector, m.deletePath = false, "", ""
+			m.statusMessage = "Deleted " + filepath.Base(msg.path)
+			commands = append(commands, listDocumentsCmd(m.ctx, m.app, m.listSequence))
+		}
+		m.clearExecutedCommand()
+	case graphFocusMsg:
+		m.loading, m.err = false, msg.err
+		if msg.err == nil {
+			m.graphFocusID = msg.documentID
+			m.graphCards = msg.cards
+			m.graphIncoming = msg.incoming
+			m.viewMode = viewBoard
+			m.boardScrollY = 0
+			m.statusMessage = "graph focus " + shortID(msg.documentID)
+		}
+		m.clearExecutedCommand()
+	case commandResultMsg:
+		m.loading, m.err = false, msg.err
+		if msg.err == nil {
+			m.statusMessage = msg.text
+		}
+		m.clearExecutedCommand()
 	case spaceTimeoutMsg:
 		if msg.sequence == m.spaceSequence {
 			m.spaceSequence = 0
@@ -302,6 +411,15 @@ func (m Model) updateFullscreen(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateFilterInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if msg.String() == "ctrl+p" {
+		return m, m.cycleInputMode()
+	}
+	if m.inputMode == inputModeCmd {
+		return m.updateCommandInput(msg)
+	}
+	if m.inputMode == inputModeAgent {
+		return m.updateAgentInput(msg)
+	}
 	// Ctrl+C deletes a character in the input box (it no longer quits; Ctrl+D quits).
 	if msg.String() == "ctrl+c" {
 		msg = tea.KeyMsg{Type: tea.KeyBackspace}
@@ -368,22 +486,448 @@ func (m Model) updateFilterInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.spaceSequence = 0
 	m.lastKeyAt = time.Time{}
 	m.filterErr = nil
+	m.statusMessage = ""
 	var command tea.Cmd
 	m.input, command = m.input.Update(msg)
 	return m, m.filterChanged(command)
 }
 
+func (m Model) updateAgentInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.hideInput()
+		return m, nil
+	case "enter":
+		if strings.TrimSpace(m.input.Value()) == "" {
+			return m, nil
+		}
+		m.filterErr = fmt.Errorf("agent is not connected yet")
+		return m, nil
+	case "ctrl+u":
+		m.input.SetValue("")
+		return m, nil
+	default:
+		m.statusMessage = ""
+		var command tea.Cmd
+		m.input, command = m.input.Update(msg)
+		return m, command
+	}
+}
+
+func (m Model) updateCommandInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		if m.cmdMenuVisible {
+			m.cmdMenuVisible = false
+			return m, nil
+		}
+		m.filterErr = nil
+		m.hideInput()
+		return m, nil
+	case "up", "down":
+		if m.cmdMenuVisible {
+			if len(m.cmdSuggestions) == 0 {
+				return m, nil
+			}
+			if msg.String() == "up" {
+				m.cmdSelected = max(0, m.cmdSelected-1)
+			} else {
+				m.cmdSelected = min(len(m.cmdSuggestions)-1, m.cmdSelected+1)
+			}
+			return m, nil
+		}
+		if len(m.commandHistory) == 0 {
+			return m, nil
+		}
+		if msg.String() == "up" {
+			if m.historyIndex > 0 {
+				m.historyIndex--
+			}
+		} else {
+			if m.historyIndex < len(m.commandHistory) {
+				m.historyIndex++
+			}
+		}
+		if m.historyIndex == len(m.commandHistory) {
+			m.input.SetValue("")
+		} else {
+			m.input.SetValue(m.commandHistory[m.historyIndex])
+		}
+		m.input.CursorEnd()
+		return m, nil
+	case "tab":
+		m.cmdSuggestions = m.commandSuggestions()
+		m.cmdSelected = 0
+		m.cmdMenuVisible = len(m.cmdSuggestions) > 0
+		if len(m.cmdSuggestions) == 0 {
+			m.filterErr = fmt.Errorf("no command suggestions")
+		} else {
+			m.filterErr = nil
+		}
+		return m, nil
+	case "enter":
+		if m.cmdMenuVisible && len(m.cmdSuggestions) > 0 {
+			return m.chooseCommandSuggestion(m.cmdSuggestions[m.cmdSelected])
+		}
+		return m.executeCommandInput()
+	case "ctrl+u":
+		m.input.SetValue("")
+		m.historyIndex = len(m.commandHistory)
+		m.cmdMenuVisible = false
+		return m, nil
+	default:
+		m.cmdMenuVisible = false
+		m.filterErr = nil
+		m.statusMessage = ""
+		var command tea.Cmd
+		m.input, command = m.input.Update(msg)
+		return m, command
+	}
+}
+
+func (m Model) chooseCommandSuggestion(suggestion commandSuggestion) (tea.Model, tea.Cmd) {
+	if suggestion.Action != nil {
+		m.loading = true
+		m.cmdMenuVisible = false
+		return m, tea.Batch(m.spinner.Tick, func() tea.Msg { return suggestion.Action() })
+	}
+	m.replaceLastCommandToken(suggestion.Value)
+	m.cmdMenuVisible = false
+	m.cmdSuggestions = nil
+	m.filterErr = nil
+	return m, nil
+}
+
+func (m *Model) replaceLastCommandToken(value string) {
+	raw := m.input.Value()
+	if strings.HasSuffix(raw, " ") || strings.HasSuffix(raw, "\t") {
+		m.input.SetValue(raw + value)
+	} else {
+		trimmed := strings.TrimRight(raw, " \t")
+		separator := strings.LastIndexAny(trimmed, " \t")
+		if separator < 0 {
+			m.input.SetValue(value)
+		} else {
+			m.input.SetValue(trimmed[:separator+1] + value)
+		}
+	}
+	if !strings.HasSuffix(m.input.Value(), " ") {
+		m.input.SetValue(m.input.Value() + " ")
+	}
+	m.input.CursorEnd()
+}
+
+func (m Model) executeCommandInput() (tea.Model, tea.Cmd) {
+	tokens := commandTokens(m.input.Value())
+	if len(tokens) == 0 {
+		return m, nil
+	}
+	action, usage, err := m.commandAction(tokens)
+	if err != nil {
+		m.filterErr = fmt.Errorf("%v; usage: %s", err, usage)
+		return m, nil
+	}
+	m.loading = true
+	m.cmdMenuVisible = false
+	return m, tea.Batch(m.spinner.Tick, func() tea.Msg { return action() })
+}
+
+func commandTokens(value string) []string {
+	return strings.Fields(strings.TrimSpace(value))
+}
+
+func (m Model) commandInputStructure() (tokens []string, index int, partial string) {
+	raw := m.input.Value()
+	tokens = commandTokens(raw)
+	if strings.HasSuffix(raw, " ") || strings.HasSuffix(raw, "\t") {
+		return tokens, len(tokens), ""
+	}
+	if len(tokens) == 0 {
+		return nil, 0, ""
+	}
+	return tokens[:len(tokens)-1], len(tokens) - 1, tokens[len(tokens)-1]
+}
+
+func (m Model) commandSuggestions() []commandSuggestion {
+	tokens, index, partial := m.commandInputStructure()
+	if index == 0 {
+		return filterCommandSuggestions([]commandSuggestion{
+			{Value: "note", Display: "note", Description: "Create and manage notes"},
+			{Value: "topic", Display: "topic", Description: "Manage topic documents"},
+			{Value: "link", Display: "link", Description: "Manage document links"},
+		}, partial)
+	}
+	if index == 1 {
+		switch tokens[0] {
+		case "note":
+			return filterCommandSuggestions([]commandSuggestion{{Value: "new", Display: "new", Description: "Create a note from the selected document"}}, partial)
+		case "topic":
+			return filterCommandSuggestions([]commandSuggestion{
+				{Value: "create", Display: "create", Description: "Create a topic document"},
+				{Value: "list", Display: "list", Description: "List topics"},
+				{Value: "add", Display: "add", Description: "Add document to topic"},
+				{Value: "remove", Display: "remove", Description: "Remove document from topic"},
+				{Value: "documents", Display: "documents", Description: "List documents in topic"},
+			}, partial)
+		case "link":
+			return filterCommandSuggestions([]commandSuggestion{
+				{Value: "add", Display: "add", Description: "Link two documents"},
+				{Value: "remove", Display: "remove", Description: "Remove a document link"},
+				{Value: "list", Display: "list", Description: "Show links and topics"},
+			}, partial)
+		}
+		return nil
+	}
+	return m.commandArgumentSuggestions(tokens, index, partial)
+}
+
+func filterCommandSuggestions(suggestions []commandSuggestion, partial string) []commandSuggestion {
+	if partial == "" {
+		return suggestions
+	}
+	partial = strings.ToLower(partial)
+	out := make([]commandSuggestion, 0, len(suggestions))
+	for _, suggestion := range suggestions {
+		value := strings.ToLower(suggestion.Value)
+		display := strings.ToLower(suggestion.Display)
+		description := strings.ToLower(suggestion.Description)
+		if strings.HasPrefix(value, partial) || strings.HasPrefix(display, partial) || strings.Contains(description, partial) {
+			out = append(out, suggestion)
+		}
+	}
+	return out
+}
+
+func (m Model) commandArgumentSuggestions(tokens []string, index int, partial string) []commandSuggestion {
+	if len(tokens) < 2 {
+		return nil
+	}
+	resource, verb := tokens[0], tokens[1]
+	selected := ""
+	if document, ok := m.selectedDocument(); ok {
+		selected = document.ID
+	}
+	documentSuggestions := func() []commandSuggestion {
+		var out []commandSuggestion
+		if selected != "" {
+			out = append(out, commandSuggestion{Value: "@selected", Display: "@selected", Description: "Current document: " + selected})
+		}
+		for _, candidate := range m.items {
+			label := displayTitle(candidate.document.Title, candidate.document.Path)
+			out = append(out, commandSuggestion{Value: candidate.document.ID, Display: shortID(candidate.document.ID), Description: candidate.filename + " " + label})
+		}
+		return filterCommandSuggestions(out, partial)
+	}
+	topicSuggestions := func() []commandSuggestion {
+		var out []commandSuggestion
+		for _, candidate := range m.items {
+			base := filepath.Base(candidate.document.RelativePath)
+			if !strings.HasPrefix(base, "topic-") || !strings.HasSuffix(strings.ToLower(base), ".md") {
+				continue
+			}
+			name := strings.TrimSuffix(strings.TrimPrefix(base, "topic-"), filepath.Ext(base))
+			out = append(out, commandSuggestion{Value: candidate.document.ID, Display: shortID(candidate.document.ID), Description: strings.ReplaceAll(name, "-", " ")})
+		}
+		return filterCommandSuggestions(out, partial)
+	}
+	switch resource {
+	case "topic":
+		switch verb {
+		case "add", "remove":
+			if index == 2 {
+				return topicSuggestions()
+			}
+			if index == 3 {
+				return documentSuggestions()
+			}
+		case "documents":
+			if index == 2 {
+				return topicSuggestions()
+			}
+		}
+	case "link":
+		if (verb == "add" || verb == "remove") && (index == 2 || index == 3) {
+			return documentSuggestions()
+		}
+		if verb == "list" && index == 2 {
+			return documentSuggestions()
+		}
+	}
+	return nil
+}
+
+func (m Model) commandAction(tokens []string) (func() tea.Msg, string, error) {
+	selected := ""
+	if document, ok := m.selectedDocument(); ok {
+		selected = document.ID
+	}
+	selector := func(value string) string {
+		if value == "@selected" {
+			return selected
+		}
+		return value
+	}
+	if len(tokens) < 2 {
+		return nil, strings.Join(tokens, " "), fmt.Errorf("command verb is required")
+	}
+	switch tokens[0] {
+	case "note":
+		if tokens[1] == "new" && len(tokens) >= 3 {
+			title := strings.Join(tokens[2:], " ")
+			return func() tea.Msg {
+				result, err := m.app.CreateNote(m.ctx, membox.CreateNoteCommand{Title: title, FromSelector: selected})
+				if err != nil {
+					return commandResultMsg{err: err}
+				}
+				editor, editorErr := m.launcher.EditorCommand(m.ctx, result.Document.Path)
+				if editorErr != nil {
+					return noteCreatedMsg{document: result.Document, err: editorErr}
+				}
+				return noteCreatedMsg{document: result.Document, command: editor}
+			}, "note new <title>", nil
+		}
+		return nil, "note new <title>", fmt.Errorf("invalid note command")
+	case "topic":
+		switch tokens[1] {
+		case "create":
+			if len(tokens) < 3 {
+				return nil, "topic create <name>", fmt.Errorf("topic name is required")
+			}
+			name := strings.Join(tokens[2:], " ")
+			return func() tea.Msg {
+				result, err := m.app.CreateTopic(m.ctx, membox.CreateTopicCommand{Name: name})
+				if err != nil {
+					return commandResultMsg{err: err}
+				}
+				return topicCreatedMsg{topic: result.Topic}
+			}, "topic create <name>", nil
+		case "list":
+			if len(tokens) != 2 {
+				return nil, "topic list", fmt.Errorf("topic list accepts no arguments")
+			}
+			return func() tea.Msg {
+				topics, err := m.app.ListTopics(m.ctx, membox.ListTopicsQuery{})
+				if err != nil {
+					return commandResultMsg{err: err}
+				}
+				return commandResultMsg{text: fmt.Sprintf("%d topic(s): %s", len(topics), topicNames(topics))}
+			}, "topic list", nil
+		case "add", "remove":
+			if len(tokens) != 4 {
+				return nil, "topic " + tokens[1] + " <topic-id> <document-id>", fmt.Errorf("topic and document are required")
+			}
+			command := membox.TopicMembershipCommand{DocumentSelector: selector(tokens[3]), TopicSelector: selector(tokens[2])}
+			return func() tea.Msg {
+				var result membox.TopicMembershipResult
+				var err error
+				if tokens[1] == "add" {
+					result, err = m.app.AddDocumentTopic(m.ctx, command)
+				} else {
+					result, err = m.app.RemoveDocumentTopic(m.ctx, command)
+				}
+				if err != nil {
+					return commandResultMsg{err: err}
+				}
+				verb := "added to"
+				if tokens[1] == "remove" {
+					verb = "removed from"
+				}
+				return commandResultMsg{text: fmt.Sprintf("Document %s topic %q", verb, result.Topic.Name)}
+			}, "topic " + tokens[1] + " <topic-id> <document-id>", nil
+		case "documents":
+			if len(tokens) != 3 {
+				return nil, "topic documents <topic-id>", fmt.Errorf("topic is required")
+			}
+			return func() tea.Msg {
+				result, err := m.app.ListTopicDocuments(m.ctx, membox.ListTopicDocumentsQuery{Selector: selector(tokens[2])})
+				if err != nil {
+					return commandResultMsg{err: err}
+				}
+				return commandResultMsg{text: fmt.Sprintf("topic %q has %d document(s)", result.Topic.Name, len(result.Documents))}
+			}, "topic documents <topic-id>", nil
+		}
+	case "link":
+		switch tokens[1] {
+		case "add", "remove":
+			if len(tokens) != 4 {
+				return nil, "link " + tokens[1] + " <from-id> <to-id>", fmt.Errorf("from and to documents are required")
+			}
+			fromSelector, toSelector := selector(tokens[2]), selector(tokens[3])
+			return func() tea.Msg {
+				var err error
+				if tokens[1] == "add" {
+					_, err = m.app.LinkDocuments(m.ctx, membox.LinkDocumentsCommand{FromSelector: fromSelector, ToSelector: toSelector})
+				} else {
+					_, err = m.app.UnlinkDocuments(m.ctx, membox.UnlinkDocumentsCommand{FromSelector: fromSelector, ToSelector: toSelector})
+				}
+				if err != nil {
+					return commandResultMsg{err: err}
+				}
+				verb := "linked"
+				if tokens[1] == "remove" {
+					verb = "unlinked"
+				}
+				return commandResultMsg{text: fmt.Sprintf("Documents %s", verb)}
+			}, "link " + tokens[1] + " <from-id> <to-id>", nil
+		case "list":
+			if len(tokens) != 3 {
+				return nil, "link list <document-id>", fmt.Errorf("document is required")
+			}
+			return func() tea.Msg {
+				selectorValue := selector(tokens[2])
+				graph, err := m.app.GetDocumentGraph(m.ctx, membox.GetDocumentGraphQuery{Selector: selectorValue})
+				if err != nil {
+					return commandResultMsg{err: err}
+				}
+				cards := make([]membox.DocumentView, 0, 1+len(graph.Outgoing)+len(graph.Incoming))
+				cards = append(cards, graph.Focus)
+				cards = append(cards, graph.Outgoing...)
+				cards = append(cards, graph.Incoming...)
+				return graphFocusMsg{documentID: graph.Focus.ID, cards: cards, incoming: len(graph.Incoming)}
+			}, "link list <document-id>", nil
+		}
+	}
+	return nil, strings.Join(tokens, " "), fmt.Errorf("unknown command %q", tokens[0])
+}
+
+func topicNames(topics []membox.TopicView) string {
+	names := make([]string, 0, len(topics))
+	for _, topic := range topics {
+		names = append(names, topic.Name)
+	}
+	return strings.Join(names, ", ")
+}
+
 func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var commands []tea.Cmd
+	if m.deleteConfirm {
+		switch msg.String() {
+		case "y", "enter":
+			m.loading = true
+			selector := m.deleteSelector
+			commands = append(commands, m.spinner.Tick, deleteDocumentCmd(m.ctx, m.app, selector))
+		case "n", "esc", "q":
+			m.deleteConfirm, m.deleteSelector, m.deletePath = false, "", ""
+			m.statusMessage = "Delete canceled"
+		}
+		return m, tea.Batch(commands...)
+	}
 	switch msg.String() {
 	case "q":
 		// Contextual "back" within the TUI; Ctrl+D quits the program.
-		if m.viewMode == viewBoard {
+		if m.graphFocusID != "" {
+			m.graphFocusID = ""
+			m.graphCards = nil
+			m.graphIncoming = 0
+			m.viewMode = viewTree
+			m.keepSelectionVisible()
+		} else if m.viewMode == viewBoard {
 			m.viewMode = viewTree
 			m.keepSelectionVisible()
 		} else if m.detailsVisible {
 			m.detailsVisible = false
 		}
+		m.statusMessage = ""
 		return m, nil
 	case "enter":
 		if document, ok := m.selectedDocument(); ok {
@@ -395,7 +939,7 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// double space confirmed: toggle input
 			m.spaceSequence++
 			m.lastKeyAt = time.Time{}
-			commands = append(commands, m.toggleInput())
+			commands = append(commands, m.openInput(m.inputMode))
 			return m, tea.Batch(commands...)
 		}
 		// first space: schedule delayed details toggle
@@ -405,6 +949,9 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		commands = append(commands, tea.Tick(doubleSpaceWindow, func(time.Time) tea.Msg { return spaceTimeoutMsg{sequence: sequence} }))
 	case "tab":
 		// Toggle between tree and board view when input is not active
+		m.graphFocusID = ""
+		m.graphCards = nil
+		m.graphIncoming = 0
 		if m.viewMode == viewTree {
 			m.viewMode = viewBoard
 			// Snap the highlight to a card that is actually drawn on the board.
@@ -416,6 +963,7 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "up", "down", "pgup", "pgdown", "k", "j":
+		m.deleteConfirm, m.deleteSelector, m.deletePath = false, "", ""
 		if msg.String() == "k" {
 			return m.moveSelection("up")
 		}
@@ -428,6 +976,8 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.moveSelection(msg.String())
 		}
 		return m, nil
+	case "ctrl+p":
+		return m, m.cycleInputMode()
 	case "s":
 		m.toggleSort()
 		return m, m.loadPreview()
@@ -436,6 +986,14 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.loading = true
 			commands = append(commands, m.spinner.Tick, togglePinCmd(m.ctx, m.app, document.ID))
 		}
+	case "d":
+		if document, ok := m.selectedDocument(); ok {
+			m.deleteConfirm = true
+			m.deleteSelector = document.ID
+			m.deletePath = document.Path
+			m.statusMessage = ""
+		}
+		return m, nil
 	case "r":
 		m.loading = true
 		commands = append(commands, m.spinner.Tick, scanCmd(m.ctx, m.app))
@@ -451,6 +1009,7 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	default:
 		m.spaceSequence = 0
 		m.lastKeyAt = time.Time{}
+		m.statusMessage = ""
 	}
 	return m, tea.Batch(commands...)
 }
@@ -606,12 +1165,18 @@ func (m Model) visibleRows() int {
 		if m.filterCount() > 0 {
 			reserved++ // filter tags
 		}
+		if m.cmdMenuVisible {
+			reserved += m.commandMenuRows()
+		}
 	}
 	if m.detailsVisible {
 		reserved += 2 // empty details content and top border
 		if _, ok := m.selectedDocument(); ok {
 			reserved++ // selected-document metadata uses a second content row
 		}
+	}
+	if m.deleteConfirm {
+		reserved += 3
 	}
 	return max(1, m.height-reserved)
 }
@@ -658,24 +1223,69 @@ func (m *Model) keepSelectionVisible() {
 	m.scrollTop = min(max(pinned, start), maxStart)
 }
 
+func (m *Model) openInput(mode string) tea.Cmd {
+	m.inputVisible = true
+	m.inputActive = true
+	m.inputMode = mode
+	m.input.Focus()
+	m.input.SetValue("")
+	m.historyIndex = len(m.commandHistory)
+	m.cmdSuggestions = nil
+	m.cmdSelected = 0
+	m.cmdMenuVisible = false
+	m.filterErr = nil
+	m.keepSelectionVisible()
+	return textinput.Blink
+}
+
 func (m *Model) toggleInput() tea.Cmd {
 	if m.inputVisible {
 		m.hideInput()
 		return m.filterChanged(nil)
 	}
-	m.inputVisible = true
-	m.inputActive = true
-	m.input.Focus()
-	m.input.SetValue("")
-	m.keepSelectionVisible()
-	return textinput.Blink
+	return m.openInput(m.inputMode)
+}
+
+func (m *Model) cycleInputMode() tea.Cmd {
+	switch m.inputMode {
+	case inputModeSearch:
+		m.inputMode = inputModeCmd
+	case inputModeCmd:
+		m.inputMode = inputModeAgent
+	case inputModeAgent:
+		m.inputMode = inputModeSearch
+	}
+	m.cmdSuggestions = nil
+	m.cmdSelected = 0
+	m.cmdMenuVisible = false
+	m.filterErr = nil
+	return m.filterChanged(nil)
 }
 
 func (m *Model) hideInput() {
 	m.inputVisible = false
 	m.inputActive = false
+	m.cmdSuggestions = nil
+	m.cmdSelected = 0
+	m.cmdMenuVisible = false
 	m.input.Blur()
 	m.input.SetValue("")
+}
+
+func (m *Model) clearExecutedCommand() {
+	command := strings.TrimSpace(m.input.Value())
+	if command != "" && (len(m.commandHistory) == 0 || m.commandHistory[len(m.commandHistory)-1] != command) {
+		m.commandHistory = append(m.commandHistory, command)
+		if len(m.commandHistory) > 50 {
+			m.commandHistory = m.commandHistory[len(m.commandHistory)-50:]
+		}
+	}
+	m.input.SetValue("")
+	m.input.CursorEnd()
+	m.cmdSuggestions = nil
+	m.cmdSelected = 0
+	m.cmdMenuVisible = false
+	m.historyIndex = len(m.commandHistory)
 }
 
 func (m *Model) commitFilterToken() (bool, error) {
@@ -1048,6 +1658,9 @@ func (m Model) View() string {
 	if m.detailsVisible {
 		parts = append(parts, m.detailsView())
 	}
+	if m.deleteConfirm {
+		parts = append(parts, m.deleteConfirmView())
+	}
 	if m.inputVisible {
 		parts = append(parts, m.inputView())
 	}
@@ -1068,6 +1681,16 @@ func (m Model) detailsView() string {
 	timeLine := dimStyle.Render("modified ") + dateOnly(document.UpdatedAt)
 	first := lipgloss.JoinHorizontal(lipgloss.Top, left, strings.Repeat(" ", max(2, m.width-4-lipgloss.Width(left)-lipgloss.Width(right))), right)
 	content := fitWidth(first, max(10, m.width-4)) + "\n" + fitWidth(timeLine, max(10, m.width-4))
+	return border.Render(content)
+}
+
+func (m Model) deleteConfirmView() string {
+	width := max(10, m.width-2)
+	border := lipgloss.NewStyle().Width(width).MaxWidth(width).Border(lipgloss.NormalBorder(), true, false, false, false).BorderForeground(colors.Error)
+	name := filepath.Base(m.deletePath)
+	question := "Delete " + name + "?"
+	hint := "y confirm • n/esc cancel"
+	content := fitWidth(errorStyle.Render(question), width) + "\n" + fitWidth(dimStyle.Render(hint), width)
 	return border.Render(content)
 }
 
@@ -1250,6 +1873,9 @@ func (m Model) computeBoard() boardLayout {
 // boardView renders the masonry board, offset vertically by boardScrollY so the
 // selected card can be scrolled into view.
 func (m Model) boardView() string {
+	if m.graphFocusID != "" {
+		return m.graphBoardView()
+	}
 	layout := m.computeBoard()
 	if len(layout.rows) == 0 {
 		return dimStyle.Render("No documents with summaries. ( summaries will be added by LLM in the future )")
@@ -1263,6 +1889,55 @@ func (m Model) boardView() string {
 		}
 	}
 	return strings.Join(rows, "\n")
+}
+
+func (m Model) graphBoardView() string {
+	if len(m.graphCards) == 0 {
+		return dimStyle.Render("No linked documents.")
+	}
+	center := m.graphCards[0]
+	centerItem := documentItems([]membox.DocumentView{center})[0]
+	width := max(24, m.width-8)
+	var lines []string
+	lines = append(lines, accentStyle.Render("● focus")+dimStyle.Render("  ["+shortID(center.ID)+"] "+centerItem.filename))
+	for _, line := range wrapText(displayTitle(center.Title, center.Path), width-2) {
+		lines = append(lines, dimStyle.Render("  ")+line)
+	}
+	if center.Summary != "" {
+		for _, line := range wrapText(center.Summary, width-2) {
+			lines = append(lines, dimStyle.Render("  ")+mutedStyle.Render(line))
+		}
+	}
+	if len(m.graphCards) > 1 {
+		lines = append(lines, dimStyle.Render("│"))
+		related := documentItems(m.graphCards[1:])
+		for index, candidate := range related {
+			direction := "→"
+			if index >= len(m.graphCards)-1-m.graphIncoming {
+				direction = "←"
+			}
+			branch := "├─"
+			continuation := "│ "
+			if index+1 == len(related) {
+				branch = "└─"
+				continuation = "  "
+			}
+			lines = append(lines, dimStyle.Render(branch)+" "+accentStyle.Render(direction)+" ["+shortID(candidate.document.ID)+"] "+candidate.filename)
+			title := displayTitle(candidate.document.Title, candidate.document.Path)
+			for _, line := range wrapText(title, width-2) {
+				lines = append(lines, dimStyle.Render(continuation)+" "+line)
+			}
+			if candidate.document.Summary != "" {
+				for _, line := range wrapText(candidate.document.Summary, width-2) {
+					lines = append(lines, dimStyle.Render(continuation)+" "+mutedStyle.Render(line))
+				}
+			}
+			if index+1 < len(related) {
+				lines = append(lines, dimStyle.Render("│"))
+			}
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // renderCard renders a single document as a Unicode box card
@@ -1328,6 +2003,13 @@ func wrapText(text string, width int) []string {
 	return strings.Split(wrapped, "\n")
 }
 
+func (m Model) commandMenuRows() int {
+	if !m.cmdMenuVisible {
+		return 0
+	}
+	return min(8, max(1, len(m.cmdSuggestions)))
+}
+
 func (m Model) tagsView() string {
 	if m.filterCount() == 0 {
 		return ""
@@ -1371,10 +2053,40 @@ func (m Model) inputView() string {
 	line := lipgloss.NewStyle().Width(innerWidth).MaxWidth(innerWidth).Inline(true).Render(badge + " " + field)
 	border := lipgloss.NewStyle().Width(innerWidth).MaxWidth(innerWidth).Border(lipgloss.NormalBorder(), true, false, false, false).BorderForeground(colors.BorderAccent)
 	input := border.Render(line)
+	if menu := m.commandMenuView(); menu != "" {
+		return menu + "\n" + input
+	}
 	if tags := m.tagsView(); tags != "" {
 		return tags + "\n" + input
 	}
 	return input
+}
+
+func (m Model) commandMenuView() string {
+	if !m.cmdMenuVisible {
+		return ""
+	}
+	innerWidth := max(10, m.width-2)
+	if len(m.cmdSuggestions) == 0 {
+		return dimStyle.Render("no suggestions")
+	}
+	rows := m.commandMenuRows()
+	start := min(max(0, m.cmdSelected-rows+1), max(0, len(m.cmdSuggestions)-rows))
+	end := min(len(m.cmdSuggestions), start+rows)
+	var lines []string
+	for index := start; index < end; index++ {
+		suggestion := m.cmdSuggestions[index]
+		value := fitWidth(suggestion.Display, 14)
+		description := fitWidth(suggestion.Description, max(10, innerWidth-16))
+		line := value + "  " + dimStyle.Render(description)
+		if index == m.cmdSelected {
+			line = lipgloss.NewStyle().Foreground(colors.Accent).Background(colors.SelectedBG).Width(innerWidth).Inline(true).Render("> " + line)
+		} else {
+			line = lipgloss.NewStyle().Width(innerWidth).Inline(true).Render("  " + line)
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m Model) statusBar() string {
@@ -1384,13 +2096,31 @@ func (m Model) statusBar() string {
 	if m.loading {
 		right = m.spinner.View() + " " + right
 	}
-	if m.filterErr != nil {
+	if m.deleteConfirm {
+		right += errorStyle.Render("delete " + filepath.Base(m.deletePath))
+	} else if m.filterErr != nil {
 		right += errorStyle.Render("Invalid filter: " + m.filterErr.Error())
 	} else if m.err != nil {
 		right += errorStyle.Render("Error: " + m.err.Error())
+	} else if m.statusMessage != "" {
+		right += accentStyle.Render(m.statusMessage)
 	} else {
 		if m.inputVisible {
-			right += accentStyle.Render("filter") + dimStyle.Render(fmt.Sprintf(" %d/%d", len(m.filtered), len(m.items)))
+			mode := "name"
+			switch m.inputMode {
+			case inputModeCmd:
+				mode = "cmd"
+			case inputModeAgent:
+				mode = "agent"
+			default:
+				if m.searchMode == searchModeFull {
+					mode = "full"
+				}
+			}
+			right += accentStyle.Render(mode) + dimStyle.Render(fmt.Sprintf(" %d/%d", len(m.filtered), len(m.items)))
+			if m.cmdMenuVisible {
+				right += dimStyle.Render(fmt.Sprintf(" • %d suggestion(s)", len(m.cmdSuggestions)))
+			}
 		} else {
 			if m.filterCount() > 0 {
 				right += accentStyle.Render(fmt.Sprintf("%d tag(s) ", m.filterCount()))
@@ -1414,23 +2144,50 @@ func (m Model) modeBadge() string {
 	mode := " NAME "
 	background := lipgloss.AdaptiveColor{Dark: "#3159b8", Light: "#d9e8ff"}
 	foreground := lipgloss.AdaptiveColor{Dark: "#ffffff", Light: "#1b3a5b"}
-	if m.searchMode == searchModeFull {
-		mode = " FULL "
-		background = lipgloss.AdaptiveColor{Dark: "#2f7d4a", Light: "#c9f0d8"}
-		foreground = lipgloss.AdaptiveColor{Dark: "#f4fff8", Light: "#173f26"}
+	switch m.inputMode {
+	case inputModeCmd:
+		mode = " CMD "
+		background = lipgloss.AdaptiveColor{Dark: "#555555", Light: "#dddddd"}
+		foreground = lipgloss.AdaptiveColor{Dark: "#ffffff", Light: "#333333"}
+	case inputModeAgent:
+		mode = " AGENT "
+		background = lipgloss.AdaptiveColor{Dark: "#7048a8", Light: "#eadcff"}
+		foreground = lipgloss.AdaptiveColor{Dark: "#ffffff", Light: "#3c1f63"}
+	default:
+		if m.searchMode == searchModeFull {
+			mode = " FULL "
+			background = lipgloss.AdaptiveColor{Dark: "#2f7d4a", Light: "#c9f0d8"}
+			foreground = lipgloss.AdaptiveColor{Dark: "#f4fff8", Light: "#173f26"}
+		}
 	}
 	return lipgloss.NewStyle().Background(background).Foreground(foreground).Bold(true).Inline(true).Render(mode)
 }
 
 func (m Model) hints() string {
 	if m.inputVisible {
-		return "space date tag • enter text tag/open • backspace last • /clear • tab mode • esc hide"
+		switch m.inputMode {
+		case inputModeCmd:
+			if m.cmdMenuVisible {
+				return "command • ↑↓ select • tab refresh • enter choose • ctrl+p agent • esc menu"
+			}
+			return "command • ↑↓ history • tab browse • enter run • ctrl+p agent • esc hide"
+		case inputModeAgent:
+			return "agent • enter ask • ctrl+u clear • ctrl+p name • esc hide"
+		default:
+			if m.searchMode == searchModeFull {
+				return "full search • enter text tag/open • ctrl+p cmd • tab name • esc hide"
+			}
+			return "space date tag • enter text tag/open • ctrl+p full • backspace last • /clear • esc hide"
+		}
+	}
+	if m.deleteConfirm {
+		return "delete file? • y confirm • n/esc cancel"
 	}
 	sortLabel := "name"
 	if m.sortMode == sortModeTime {
 		sortLabel = "newest"
 	}
-	return "s sort:" + sortLabel + " • t pin • space details • space×2 filter • tab board • enter open • ↑↓ • ctrl+d quit"
+	return "s sort:" + sortLabel + " • t pin • d delete • space details • space×2 input • enter open • ctrl+d quit"
 }
 
 func searchResultItems(items []item, results []membox.SearchResult, dateFilters []dateFilter, nameQueries []string) []item {
@@ -1572,6 +2329,12 @@ func togglePinCmd(ctx context.Context, app App, selector string) tea.Cmd {
 	return func() tea.Msg {
 		result, err := app.ToggleDocumentPin(ctx, membox.ToggleDocumentPinCommand{Selector: selector})
 		return pinMsg{documentID: result.DocumentID, pinned: result.Pinned, err: err}
+	}
+}
+func deleteDocumentCmd(ctx context.Context, app App, selector string) tea.Cmd {
+	return func() tea.Msg {
+		result, err := app.DeleteDocument(ctx, membox.DeleteDocumentCommand{Selector: selector})
+		return deleteResultMsg{documentID: result.DocumentID, path: result.Path, err: err}
 	}
 }
 func openCmd(ctx context.Context, app App, launcher host.Launcher, selector string) tea.Cmd {

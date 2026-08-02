@@ -29,6 +29,11 @@ go build -o mm ./cmd/mm
 ./mm doc show <document-id>
 ./mm doc cat <document-id>
 ./mm doc edit <document-id>
+./mm note new "Online Softmax Intuition" --from <document-id>
+./mm topic create attention
+./mm topic add <topic-id> <document-id>
+./mm link add <from-id> <to-id>
+./mm link list <document-id>
 ./mm path scan
 ./mm path scan --timestamp=git
 ./mm index status
@@ -81,6 +86,68 @@ Open ranges such as `+2026-07..` and `+..2026-07` are supported. Enter on ordina
 Outside the filter input, press `s` to toggle between filename order and modified-time order. Time order shows the newest documents first and places documents without a timestamp last; changing the sort focuses the new first row. In the tree view, Home and End jump to the first and last rows.
 
 Press `t` to toggle the selected document's pinned state. Pinned documents stay visible in a marked, sticky section at the top regardless of scrolling, details height, or the active sort mode, and pins persist across TUI restarts.
+
+Press `d` to delete the focused Markdown file after a `y/n` confirmation. This is a real filesystem delete; membox immediately rescans the containing path and preserves the document UUID in `missing` status so links, pins, and history remain recoverable if the file is restored.
+
+### Command palette and agent input
+
+The TUI reuses the bottom input field for distinct modes, identified by the colored badge. Open it with Space × 2, then use Ctrl+P to cycle modes:
+
+- `NAME`: filename/ID filtering
+- `FULL`: full-text search
+- `CMD`: deterministic commands
+- `AGENT`: natural-language prompts (agent backend is not connected yet)
+
+In `CMD` mode, press Tab to progressively disclose commands and arguments. Choose a suggestion with ↑/↓ and Enter; Tab inserts it without executing. Supported commands mirror the CLI:
+
+```text
+note new <title>
+topic create <name>
+topic list
+topic add <topic-id> <document-id>
+topic remove <topic-id> <document-id>
+topic documents <topic-id>
+link add <from-id> <to-id>
+link remove <from-id> <to-id>
+link list <document-id>
+```
+
+Use `/clear` in `NAME`/`FULL` mode to remove all filter tags.
+
+In `CMD` mode, `link list <document-id>` opens a graph-focused board. The focused document appears first, followed by forward and backward linked cards; direction markers distinguish `→` outgoing from `←` incoming. Press `q` to leave the graph focus and return to the tree.
+
+`@selected` refers to the currently selected document in argument positions.
+
+## Document graph and topics
+
+Relationships are stored only in SQLite; membox does not modify Markdown content to create links.
+
+Create a note while reading another document:
+
+```bash
+./mm note new "Online Softmax Intuition" --from <document-id>
+./mm note new "Online Softmax Intuition" --from <document-id> --no-open
+```
+
+The command creates the Markdown file, registers its document UUID, links it from the source document, and returns both the new document UUID and absolute path. It opens the note in the configured editor by default; use `--no-open` for automation.
+
+Topics are ordinary root-level `topic-*.md` documents, so they can be searched, edited, pinned, Git-tracked, and used as human-readable index pages.
+
+```bash
+# document -> document manual links
+./mm link add <from-id> <to-id>
+./mm link remove <from-id> <to-id>
+./mm link list <document-id>
+
+# document -> topic memberships
+./mm topic create attention
+./mm topic list
+./mm topic add <topic-id> <document-id>
+./mm topic remove <topic-id> <document-id>
+./mm topic documents <topic-id>
+```
+
+A document can belong to multiple topics, and a topic can contain multiple documents. `link list` shows outgoing links, incoming links, and assigned topics.
 
 ## Development
 
