@@ -65,7 +65,8 @@ CREATE TABLE IF NOT EXISTS paths (
 CREATE TABLE IF NOT EXISTS documents (
     id TEXT PRIMARY KEY,
     created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
+    updated_at INTEGER NOT NULL,
+    pinned INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS document_locations (
     document_id TEXT PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
@@ -141,6 +142,33 @@ CREATE INDEX IF NOT EXISTS locations_status ON document_locations(status);
 source_created_at=COALESCE(source_created_at,CASE WHEN mtime>0 THEN mtime/1000000 ELSE indexed_at END),
 source_updated_at=COALESCE(source_updated_at,CASE WHEN mtime>0 THEN mtime/1000000 ELSE indexed_at END)`); err != nil {
 		return fmt.Errorf("backfilling document source timestamps: %w", err)
+	}
+	var hasPinned bool
+	documentRows, err := s.db.Query(`PRAGMA table_info(documents)`)
+	if err != nil {
+		return fmt.Errorf("checking documents columns: %w", err)
+	}
+	for documentRows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull int
+		var dfltValue sql.NullString
+		var pk int
+		if err := documentRows.Scan(&cid, &name, &ctype, &notnull, &dfltValue, &pk); err != nil {
+			documentRows.Close()
+			return fmt.Errorf("scanning documents table_info: %w", err)
+		}
+		if name == "pinned" {
+			hasPinned = true
+		}
+	}
+	if err := documentRows.Close(); err != nil {
+		return err
+	}
+	if !hasPinned {
+		if _, err := s.db.Exec(`ALTER TABLE documents ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return fmt.Errorf("adding documents.pinned: %w", err)
+		}
 	}
 	return nil
 }
@@ -289,7 +317,7 @@ func (s *Store) DocumentsForPath(ctx context.Context, id catalog.IndexedPathID) 
 	return out, rows.Err()
 }
 
-const documentSelect = `SELECT d.id,d.created_at,d.updated_at,l.path_id,l.relative_path,l.file_key,l.status,
+const documentSelect = `SELECT d.id,d.created_at,d.updated_at,d.pinned,l.path_id,l.relative_path,l.file_key,l.status,
 COALESCE(i.title,''),COALESCE(i.summary,''),COALESCE(i.mtime,0),COALESCE(i.size,0),COALESCE(i.sha256,''),i.indexed_at,
 COALESCE(i.source_created_at,CASE WHEN i.mtime>0 THEN i.mtime/1000000 ELSE d.created_at END),
 COALESCE(i.source_updated_at,CASE WHEN i.mtime>0 THEN i.mtime/1000000 ELSE d.updated_at END),p.root_path
@@ -298,9 +326,9 @@ JOIN paths p ON p.id=l.path_id LEFT JOIN document_index i ON i.document_id=d.id`
 
 func scanDocument(scanner interface{ Scan(...any) error }) (*catalog.Document, string, error) {
 	var id, relative, fileKey, status, title, summary, hash, root string
-	var created, updated, pathID, mtime, size, sourceCreated, sourceUpdated int64
+	var created, updated, pinned, pathID, mtime, size, sourceCreated, sourceUpdated int64
 	var indexed sql.NullInt64
-	if err := scanner.Scan(&id, &created, &updated, &pathID, &relative, &fileKey, &status, &title, &summary, &mtime, &size, &hash, &indexed, &sourceCreated, &sourceUpdated, &root); err != nil {
+	if err := scanner.Scan(&id, &created, &updated, &pinned, &pathID, &relative, &fileKey, &status, &title, &summary, &mtime, &size, &hash, &indexed, &sourceCreated, &sourceUpdated, &root); err != nil {
 		return nil, "", err
 	}
 	location, err := catalog.NewLocation(catalog.IndexedPathID(pathID), relative)
@@ -314,7 +342,7 @@ func scanDocument(scanner interface{ Scan(...any) error }) (*catalog.Document, s
 	doc, err := catalog.RehydrateDocument(catalog.DocumentID(id), location, catalog.FileKey(fileKey), catalog.DocumentStatus(status), catalog.IndexState{
 		Title: title, Summary: summary, MTime: mtime, Size: size, SHA256: hash, IndexedAt: indexedAt,
 		SourceCreatedAt: fromMillis(sourceCreated), SourceUpdatedAt: fromMillis(sourceUpdated),
-	}, fromMillis(created), fromMillis(updated))
+	}, fromMillis(created), fromMillis(updated), pinned != 0)
 	if err != nil {
 		return nil, "", fmt.Errorf("rehydrating document %q: %w", id, err)
 	}
@@ -379,6 +407,21 @@ func (s *Store) SaveSourceTimes(ctx context.Context, documents []*catalog.Docume
 	return tx.Commit()
 }
 
+func (s *Store) SavePinned(ctx context.Context, documentID catalog.DocumentID, pinned bool) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE documents SET pinned=? WHERE id=?`, pinned, documentID)
+	if err != nil {
+		return fmt.Errorf("saving pin for document %s: %w", documentID, err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows != 1 {
+		return fmt.Errorf("document %s not found while saving pin", documentID)
+	}
+	return nil
+}
+
 func savePath(ctx context.Context, tx *sql.Tx, path *catalog.IndexedPath) error {
 	var last any
 	if path.LastScanAt != nil {
@@ -393,8 +436,8 @@ func saveDocument(ctx context.Context, tx *sql.Tx, save port.ScanSave) error {
 	if d == nil {
 		return errors.New("cannot save nil document")
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO documents(id,created_at,updated_at) VALUES(?,?,?)
-ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at`, d.ID, millis(d.CreatedAt), millis(d.UpdatedAt)); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO documents(id,created_at,updated_at,pinned) VALUES(?,?,?,?)
+ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at,pinned=excluded.pinned`, d.ID, millis(d.CreatedAt), millis(d.UpdatedAt), d.Pinned); err != nil {
 		return fmt.Errorf("saving document: %w", err)
 	}
 	lastSeen := any(nil)

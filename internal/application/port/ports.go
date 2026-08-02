@@ -81,6 +81,7 @@ type CatalogStore interface {
 	SaveScan(ctx context.Context, indexedPath *catalog.IndexedPath, saves []ScanSave) error
 	SaveDocument(ctx context.Context, save ScanSave) error
 	SaveSourceTimes(ctx context.Context, documents []*catalog.Document) error
+	SavePinned(ctx context.Context, documentID catalog.DocumentID, pinned bool) error
 	Search(ctx context.Context, query string, limit int) ([]SearchHit, error)
 	ListDocuments(ctx context.Context, limit int, includeUnavailable bool) ([]DocumentRecord, error)
 	ResolveDocument(ctx context.Context, selector string) (*catalog.Document, string, error)

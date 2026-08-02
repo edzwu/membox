@@ -29,7 +29,10 @@ func (fakeLauncher) OpenCommand(context.Context, string) (*exec.Cmd, error) {
 	return exec.Command("true"), nil
 }
 
-type fakeApp struct{ resolved int }
+type fakeApp struct {
+	resolved int
+	pins     map[string]bool
+}
 
 func (f *fakeApp) AddPath(context.Context, membox.AddPathCommand) (membox.AddPathResult, error) {
 	return membox.AddPathResult{}, nil
@@ -51,6 +54,13 @@ func (f *fakeApp) ResolveDocumentLocation(context.Context, membox.ResolveLocatio
 	return membox.LocationView{DocumentID: "019-alpha", Path: "/tmp/alpha.md", Status: "active"}, nil
 }
 func (f *fakeApp) ReindexDocument(context.Context, membox.ReindexDocumentCommand) error { return nil }
+func (f *fakeApp) ToggleDocumentPin(_ context.Context, command membox.ToggleDocumentPinCommand) (membox.ToggleDocumentPinResult, error) {
+	if f.pins == nil {
+		f.pins = make(map[string]bool)
+	}
+	f.pins[command.Selector] = !f.pins[command.Selector]
+	return membox.ToggleDocumentPinResult{DocumentID: command.Selector, Pinned: f.pins[command.Selector]}, nil
+}
 func (f *fakeApp) ScanPaths(context.Context, membox.ScanPathsCommand) (membox.ScanReport, error) {
 	return membox.ScanReport{}, nil
 }
@@ -251,6 +261,92 @@ func TestModel_SortToggleOrdersNewestFirstAndFocusesFirstRow(t *testing.T) {
 	}
 	if model.selected != 0 || model.filtered[model.selected].document.ID != "alpha" {
 		t.Fatalf("second toggle did not focus restored first row: selected=%d document=%s", model.selected, model.filtered[model.selected].document.ID)
+	}
+}
+
+func TestModel_PinToggleMovesDocumentToTopAndShowsMarker(t *testing.T) {
+	app := &fakeApp{}
+	model := New(context.Background(), app, fakeLauncher{})
+	model.width, model.height = 100, 20
+	model.items = documentItems([]membox.DocumentView{
+		{ID: "alpha", Path: "/tmp/alpha.md"},
+		{ID: "beta", Path: "/tmp/beta.md"},
+	})
+	model.refreshFilter()
+	model.selected = 1
+
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+	model = updated.(Model)
+	if !model.loading || command == nil {
+		t.Fatal("t did not schedule pin toggle")
+	}
+	message := togglePinCmd(context.Background(), app, "beta")().(pinMsg)
+	updated, _ = model.Update(message)
+	model = updated.(Model)
+	if !model.filtered[0].document.Pinned || model.filtered[0].document.ID != "beta" || model.selected != 0 {
+		t.Fatalf("pinned document did not move to top: selected=%d filtered=%+v", model.selected, model.filtered)
+	}
+	if view := model.treePreviewView(); !strings.Contains(view, "▌") {
+		t.Fatalf("pinned document has no marker: %q", view)
+	}
+
+	message = togglePinCmd(context.Background(), app, "beta")().(pinMsg)
+	updated, _ = model.Update(message)
+	model = updated.(Model)
+	if model.filtered[0].document.ID != "alpha" || model.filtered[1].document.Pinned {
+		t.Fatalf("unfixed document did not return to name order: %+v", model.filtered)
+	}
+	if view := model.treePreviewView(); strings.Contains(view, "▌") {
+		t.Fatalf("unfixed document still has marker: %q", view)
+	}
+}
+
+func TestModel_PinnedRowStaysVisibleWhenDetailsReduceTreeHeight(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.width, model.height = 100, 10
+	documents := []membox.DocumentView{{ID: "pinned", Path: "/tmp/pinned.md", Pinned: true}}
+	for index := 0; index < 20; index++ {
+		documents = append(documents, membox.DocumentView{ID: fmt.Sprintf("doc-%02d", index), Path: fmt.Sprintf("/tmp/doc-%02d.md", index)})
+	}
+	model.items = documentItems(documents)
+	model.refreshFilter()
+	model.selected = len(model.filtered) - 1
+	model.keepSelectionVisible()
+	if view := model.treePreviewView(); !strings.Contains(view, "pinned.md") || !strings.Contains(view, "doc-19.md") {
+		t.Fatalf("pinned or selected row missing before details: %q", view)
+	}
+
+	space := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}}
+	updated, _ := model.Update(space)
+	model = updated.(Model)
+	updated, _ = model.Update(spaceTimeoutMsg{sequence: model.spaceSequence})
+	model = updated.(Model)
+	if !model.detailsVisible {
+		t.Fatal("space did not open details")
+	}
+	view := model.View()
+	if lines := strings.Split(strings.TrimRight(view, "\n"), "\n"); len(lines) != model.height {
+		t.Fatalf("details view height=%d, want terminal height=%d: %q", len(lines), model.height, view)
+	}
+	if !strings.Contains(view, "pinned.md") || !strings.Contains(view, "doc-19.md") {
+		t.Fatalf("details height hid pinned or selected row from full view: %q", view)
+	}
+	indices := model.treeVisibleIndices()
+	if len(indices) == 0 || indices[0] != 0 {
+		t.Fatalf("pinned row is not reserved at top: %v", indices)
+	}
+}
+
+func TestModel_PinnedDocumentsStayFirstInNewestSort(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.sortMode = sortModeTime
+	model.items = documentItems([]membox.DocumentView{
+		{ID: "old-pinned", Path: "/tmp/old.md", Pinned: true, UpdatedAt: time.Date(2020, 1, 1, 0, 0, 0, 0, time.Local)},
+		{ID: "new", Path: "/tmp/new.md", UpdatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.Local)},
+	})
+	model.refreshFilter()
+	if model.filtered[0].document.ID != "old-pinned" {
+		t.Fatalf("newest sort displaced pinned document: %+v", model.filtered)
 	}
 }
 

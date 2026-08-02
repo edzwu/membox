@@ -80,6 +80,8 @@ Open ranges such as `+2026-07..` and `+..2026-07` are supported. Enter on ordina
 
 Outside the filter input, press `s` to toggle between filename order and modified-time order. Time order shows the newest documents first and places documents without a timestamp last; changing the sort focuses the new first row. In the tree view, Home and End jump to the first and last rows.
 
+Press `t` to toggle the selected document's pinned state. Pinned documents stay visible in a marked, sticky section at the top regardless of scrolling, details height, or the active sort mode, and pins persist across TUI restarts.
+
 ## Development
 
 ```bash

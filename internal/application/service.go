@@ -420,6 +420,23 @@ func (s *Service) ReadDocument(ctx context.Context, selector string) ([]byte, er
 	return s.reader.Read(ctx, absolute)
 }
 
+type ToggleDocumentPinResult struct {
+	DocumentID catalog.DocumentID
+	Pinned     bool
+}
+
+func (s *Service) ToggleDocumentPin(ctx context.Context, selector string) (ToggleDocumentPinResult, error) {
+	document, _, err := s.ResolveDocument(ctx, selector)
+	if err != nil {
+		return ToggleDocumentPinResult{}, err
+	}
+	document.SetPinned(!document.Pinned)
+	if err := s.store.SavePinned(ctx, document.ID, document.Pinned); err != nil {
+		return ToggleDocumentPinResult{}, err
+	}
+	return ToggleDocumentPinResult{DocumentID: document.ID, Pinned: document.Pinned}, nil
+}
+
 func (s *Service) ReindexDocument(ctx context.Context, selector string) error {
 	document, absolute, err := s.ResolveDocument(ctx, selector)
 	if err != nil {

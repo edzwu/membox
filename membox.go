@@ -155,6 +155,7 @@ type DocumentView struct {
 	PathID       int64      `json:"path_id"`
 	RelativePath string     `json:"relative_path"`
 	Status       string     `json:"status"`
+	Pinned       bool       `json:"pinned"`
 	Title        string     `json:"title"`
 	Summary      string     `json:"summary"`
 	MTime        int64      `json:"mtime"`
@@ -187,7 +188,7 @@ func (b *Box) GetDocument(ctx context.Context, query GetDocumentQuery) (Document
 
 func documentView(document *catalog.Document, path string) DocumentView {
 	view := DocumentView{ID: string(document.ID), Path: path, PathID: int64(document.Location.PathID), RelativePath: document.Location.RelativePath,
-		Status: string(document.Status), Title: document.Index.Title, Summary: document.Index.Summary, MTime: document.Index.MTime, Size: document.Index.Size,
+		Status: string(document.Status), Pinned: document.Pinned, Title: document.Index.Title, Summary: document.Index.Summary, MTime: document.Index.MTime, Size: document.Index.Size,
 		SHA256: document.Index.SHA256, CreatedAt: document.Index.SourceCreatedAt, UpdatedAt: document.Index.SourceUpdatedAt}
 	if !document.Index.IndexedAt.IsZero() {
 		value := document.Index.IndexedAt
@@ -211,6 +212,17 @@ type ReadDocumentQuery struct{ Selector string }
 
 func (b *Box) ReadDocument(ctx context.Context, query ReadDocumentQuery) ([]byte, error) {
 	return b.service.ReadDocument(ctx, query.Selector)
+}
+
+type ToggleDocumentPinCommand struct{ Selector string }
+type ToggleDocumentPinResult struct {
+	DocumentID string `json:"document_id"`
+	Pinned     bool   `json:"pinned"`
+}
+
+func (b *Box) ToggleDocumentPin(ctx context.Context, command ToggleDocumentPinCommand) (ToggleDocumentPinResult, error) {
+	result, err := b.service.ToggleDocumentPin(ctx, command.Selector)
+	return ToggleDocumentPinResult{DocumentID: string(result.DocumentID), Pinned: result.Pinned}, err
 }
 
 type ReindexDocumentCommand struct{ Selector string }

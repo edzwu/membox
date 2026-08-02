@@ -112,6 +112,46 @@ func TestMVP_PathAddSearchEditRenameAndRestoreIdentity(t *testing.T) {
 	}
 }
 
+func TestDocumentPinPersistsAcrossReopenAndTogglesOff(t *testing.T) {
+	ctx := context.Background()
+	home, notes := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(notes, "pinned.md"), []byte("# Pinned\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	box, err := membox.Open(membox.Config{Home: home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := box.AddPath(ctx, membox.AddPathCommand{Directory: notes}); err != nil {
+		t.Fatal(err)
+	}
+	documents, err := box.ListDocuments(ctx, membox.ListDocumentsQuery{Limit: 10})
+	if err != nil || len(documents) != 1 {
+		t.Fatalf("listing document: count=%d err=%v", len(documents), err)
+	}
+	result, err := box.ToggleDocumentPin(ctx, membox.ToggleDocumentPinCommand{Selector: documents[0].ID})
+	if err != nil || !result.Pinned {
+		t.Fatalf("pinning document: result=%+v err=%v", result, err)
+	}
+	if err := box.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	box, err = membox.Open(membox.Config{Home: home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer box.Close()
+	document, err := box.GetDocument(ctx, membox.GetDocumentQuery{Selector: documents[0].ID})
+	if err != nil || !document.Pinned {
+		t.Fatalf("pin did not persist: document=%+v err=%v", document, err)
+	}
+	result, err = box.ToggleDocumentPin(ctx, membox.ToggleDocumentPinCommand{Selector: document.ID})
+	if err != nil || result.Pinned {
+		t.Fatalf("unpinning document: result=%+v err=%v", result, err)
+	}
+}
+
 func TestMVP_DoesNotCreateMarkdownCopiesOrBlobs(t *testing.T) {
 	ctx := context.Background()
 	home, notes := t.TempDir(), t.TempDir()

@@ -80,6 +80,7 @@ type Document struct {
 	Index     IndexState
 	CreatedAt time.Time
 	UpdatedAt time.Time
+	Pinned    bool
 }
 
 func NewDocument(id DocumentID, observation Observation, now time.Time) (*Document, error) {
@@ -104,7 +105,7 @@ func NewDocument(id DocumentID, observation Observation, now time.Time) (*Docume
 	}, nil
 }
 
-func RehydrateDocument(id DocumentID, location Location, fileKey FileKey, status DocumentStatus, index IndexState, createdAt, updatedAt time.Time) (*Document, error) {
+func RehydrateDocument(id DocumentID, location Location, fileKey FileKey, status DocumentStatus, index IndexState, createdAt, updatedAt time.Time, pinned bool) (*Document, error) {
 	if strings.TrimSpace(string(id)) == "" {
 		return nil, errors.New("document ID is required")
 	}
@@ -119,7 +120,7 @@ func RehydrateDocument(id DocumentID, location Location, fileKey FileKey, status
 	if createdAt.IsZero() || updatedAt.IsZero() {
 		return nil, errors.New("document timestamps are required")
 	}
-	return &Document{ID: id, Location: location, FileKey: fileKey, Status: status, Index: index, CreatedAt: createdAt, UpdatedAt: updatedAt}, nil
+	return &Document{ID: id, Location: location, FileKey: fileKey, Status: status, Index: index, CreatedAt: createdAt, UpdatedAt: updatedAt, Pinned: pinned}, nil
 }
 
 func (d *Document) Observe(observation Observation, now time.Time) error {
@@ -158,6 +159,8 @@ func (d *Document) MarkUntracked(now time.Time) {
 // SetSourceTimes replaces the document dates shown to users with dates from
 // the content's source history (for example, Git). Aggregate audit timestamps
 // remain separate from these source timestamps.
+func (d *Document) SetPinned(pinned bool) { d.Pinned = pinned }
+
 func (d *Document) SetSourceTimes(createdAt, updatedAt time.Time) error {
 	if createdAt.IsZero() || updatedAt.IsZero() {
 		return errors.New("source timestamps are required")

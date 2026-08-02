@@ -44,6 +44,7 @@ type App interface {
 	ReadDocument(context.Context, membox.ReadDocumentQuery) ([]byte, error)
 	ResolveDocumentLocation(context.Context, membox.ResolveLocationQuery) (membox.LocationView, error)
 	ReindexDocument(context.Context, membox.ReindexDocumentCommand) error
+	ToggleDocumentPin(context.Context, membox.ToggleDocumentPinCommand) (membox.ToggleDocumentPinResult, error)
 	ScanPaths(context.Context, membox.ScanPathsCommand) (membox.ScanReport, error)
 	ListPaths(context.Context) ([]membox.PathView, error)
 	GetIndexStatus(context.Context) (membox.IndexStatusView, error)
@@ -132,6 +133,11 @@ type editorDoneMsg struct {
 	err      error
 }
 type reindexMsg struct{ err error }
+type pinMsg struct {
+	documentID string
+	pinned     bool
+	err        error
+}
 type openMsg struct{ err error }
 type spaceTimeoutMsg struct{ sequence uint64 }
 
@@ -245,6 +251,11 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading, m.err = false, msg.err
 		if msg.err == nil {
 			commands = append(commands, m.loadPreview())
+		}
+	case pinMsg:
+		m.loading, m.err = false, msg.err
+		if msg.err == nil {
+			m.applyPinnedState(msg.documentID, msg.pinned)
 		}
 	case openMsg:
 		m.err = msg.err
@@ -420,6 +431,11 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "s":
 		m.toggleSort()
 		return m, m.loadPreview()
+	case "t":
+		if document, ok := m.selectedDocument(); ok {
+			m.loading = true
+			commands = append(commands, m.spinner.Tick, togglePinCmd(m.ctx, m.app, document.ID))
+		}
 	case "r":
 		m.loading = true
 		commands = append(commands, m.spinner.Tick, scanCmd(m.ctx, m.app))
@@ -580,31 +596,66 @@ func (m *Model) scrollBoardToSelection() {
 }
 
 func (m Model) visibleRows() int {
+	// Reserve the exact number of rows rendered below the tree. The details
+	// pane is one row taller when a document is selected (two fields plus its
+	// top border); failing to account for that extra row makes the terminal
+	// clip the first tree row, which is often the pinned row.
+	reserved := 1 // status bar
 	if m.inputVisible {
-		tagRows := 0
+		reserved += 2 // input content and top border
 		if m.filterCount() > 0 {
-			tagRows = 1
+			reserved++ // filter tags
 		}
-		if m.detailsVisible {
-			return max(3, m.height-5-tagRows)
-		}
-		return max(3, m.height-3-tagRows)
 	}
 	if m.detailsVisible {
-		return max(3, m.height-3)
+		reserved += 2 // empty details content and top border
+		if _, ok := m.selectedDocument(); ok {
+			reserved++ // selected-document metadata uses a second content row
+		}
 	}
-	return max(3, m.height-1)
+	return max(1, m.height-reserved)
+}
+
+func (m Model) pinnedCount() int {
+	count := 0
+	for count < len(m.filtered) && m.filtered[count].document.Pinned {
+		count++
+	}
+	return count
 }
 
 func (m *Model) keepSelectionVisible() {
 	visible := m.visibleRows()
-	if m.selected < m.scrollTop {
-		m.scrollTop = m.selected
+	pinned := m.pinnedCount()
+	if pinned == 0 {
+		if m.selected < m.scrollTop {
+			m.scrollTop = m.selected
+		}
+		if m.selected >= m.scrollTop+visible {
+			m.scrollTop = m.selected - visible + 1
+		}
+		m.scrollTop = min(max(0, m.scrollTop), max(0, len(m.filtered)-visible))
+		return
 	}
-	if m.selected >= m.scrollTop+visible {
-		m.scrollTop = m.selected - visible + 1
+	// Pinned rows own the top of the tree viewport. scrollTop addresses only
+	// the unpinned region, whose height changes when details/input rows appear.
+	if m.selected < pinned {
+		return
 	}
-	m.scrollTop = min(max(0, m.scrollTop), max(0, len(m.filtered)-visible))
+	unpinnedVisible := max(0, visible-min(pinned, visible))
+	if unpinnedVisible == 0 {
+		m.scrollTop = pinned
+		return
+	}
+	start := max(pinned, m.scrollTop)
+	if m.selected < start {
+		start = m.selected
+	}
+	if m.selected >= start+unpinnedVisible {
+		start = m.selected - unpinnedVisible + 1
+	}
+	maxStart := max(pinned, len(m.filtered)-unpinnedVisible)
+	m.scrollTop = min(max(pinned, start), maxStart)
 }
 
 func (m *Model) toggleInput() tea.Cmd {
@@ -770,6 +821,35 @@ func (m *Model) refreshFilter() {
 	m.keepSelectionVisible()
 }
 
+func (m *Model) applyPinnedState(documentID string, pinned bool) {
+	for index := range m.items {
+		if m.items[index].document.ID == documentID {
+			m.items[index].document.Pinned = pinned
+			break
+		}
+	}
+	for index := range m.filtered {
+		if m.filtered[index].document.ID == documentID {
+			m.filtered[index].document.Pinned = pinned
+			break
+		}
+	}
+	m.sortFiltered()
+	for index, candidate := range m.filtered {
+		if candidate.document.ID == documentID {
+			m.selected = index
+			break
+		}
+	}
+	if pinned {
+		m.scrollTop = 0
+	}
+	m.keepSelectionVisible()
+	if m.viewMode == viewBoard {
+		m.scrollBoardToSelection()
+	}
+}
+
 func (m *Model) toggleSort() {
 	if m.sortMode == sortModeTime {
 		m.sortMode = sortModeName
@@ -800,6 +880,9 @@ func (m *Model) sortFiltered() {
 	}
 	sort.SliceStable(m.filtered, func(i, j int) bool {
 		left, right := m.filtered[i], m.filtered[j]
+		if left.document.Pinned != right.document.Pinned {
+			return left.document.Pinned
+		}
 		if m.sortMode == sortModeTime && !left.document.UpdatedAt.Equal(right.document.UpdatedAt) {
 			return left.document.UpdatedAt.After(right.document.UpdatedAt)
 		}
@@ -997,11 +1080,46 @@ func (m Model) fullscreenView() string {
 	return header + "\n" + m.preview.View() + "\n" + footer
 }
 
+func (m Model) treeVisibleIndices() []int {
+	visible := m.visibleRows()
+	pinned := m.pinnedCount()
+	if pinned == 0 {
+		start := min(max(0, m.scrollTop), max(0, len(m.filtered)-visible))
+		end := min(len(m.filtered), start+visible)
+		indices := make([]int, 0, end-start)
+		for index := start; index < end; index++ {
+			indices = append(indices, index)
+		}
+		return indices
+	}
+	if pinned >= visible {
+		start := 0
+		if m.selected < pinned && m.selected >= visible {
+			start = m.selected - visible + 1
+		}
+		end := min(pinned, start+visible)
+		indices := make([]int, 0, end-start)
+		for index := start; index < end; index++ {
+			indices = append(indices, index)
+		}
+		return indices
+	}
+	indices := make([]int, 0, visible)
+	for index := 0; index < pinned; index++ {
+		indices = append(indices, index)
+	}
+	unpinnedVisible := visible - pinned
+	start := min(max(pinned, m.scrollTop), max(pinned, len(m.filtered)-unpinnedVisible))
+	end := min(len(m.filtered), start+unpinnedVisible)
+	for index := start; index < end; index++ {
+		indices = append(indices, index)
+	}
+	return indices
+}
+
 func (m Model) treePreviewView() string {
 	listWidth, previewWidth := m.layoutWidths()
-	visible := m.visibleRows()
-	start := min(max(0, m.scrollTop), max(0, len(m.filtered)-visible))
-	end := min(len(m.filtered), start+visible)
+	indices := m.treeVisibleIndices()
 	uuidWidth := 4
 	filenameWidth := max(12, listWidth-uuidWidth-8)
 	if listWidth >= 72 {
@@ -1010,8 +1128,12 @@ func (m Model) treePreviewView() string {
 		filenameWidth = max(14, listWidth-uuidWidth-20)
 	}
 	var lines []string
-	for i := start; i < end; i++ {
+	for _, i := range indices {
 		candidate := m.filtered[i]
+		pin := ""
+		if candidate.document.Pinned {
+			pin = lipgloss.NewStyle().Foreground(colors.Warning).Bold(true).Render("▌") + " "
+		}
 		uuid := dimStyle.Render(fitWidth(shortID(candidate.document.ID), uuidWidth))
 		filename := fitMiddle(candidate.filename, filenameWidth)
 		dates := ""
@@ -1021,7 +1143,7 @@ func (m Model) treePreviewView() string {
 		} else if listWidth >= 52 {
 			dates = dimStyle.Render("  " + dateOnly(candidate.document.UpdatedAt))
 		}
-		line := lipgloss.NewStyle().Width(listWidth - 2).MaxWidth(listWidth - 2).Inline(true).Render(uuid + "  " + filename + dates)
+		line := lipgloss.NewStyle().Width(listWidth - 2).MaxWidth(listWidth - 2).Inline(true).Render(pin + uuid + "  " + filename + dates)
 		if i == m.selected {
 			line = lipgloss.NewStyle().Foreground(colors.Accent).Background(colors.SelectedBG).Width(listWidth - 2).Inline(true).Render("> " + line)
 		} else {
@@ -1308,7 +1430,7 @@ func (m Model) hints() string {
 	if m.sortMode == sortModeTime {
 		sortLabel = "newest"
 	}
-	return "s sort:" + sortLabel + " • space details • space×2 filter • tab board • enter open • ↑↓ select • q back • ctrl+d quit"
+	return "s sort:" + sortLabel + " • t pin • space details • space×2 filter • tab board • enter open • ↑↓ • ctrl+d quit"
 }
 
 func searchResultItems(items []item, results []membox.SearchResult, dateFilters []dateFilter, nameQueries []string) []item {
@@ -1444,6 +1566,12 @@ func resolveEditorCmd(ctx context.Context, app App, selector string) tea.Cmd {
 func reindexCmd(ctx context.Context, app App, selector string) tea.Cmd {
 	return func() tea.Msg {
 		return reindexMsg{err: app.ReindexDocument(ctx, membox.ReindexDocumentCommand{Selector: selector})}
+	}
+}
+func togglePinCmd(ctx context.Context, app App, selector string) tea.Cmd {
+	return func() tea.Msg {
+		result, err := app.ToggleDocumentPin(ctx, membox.ToggleDocumentPinCommand{Selector: selector})
+		return pinMsg{documentID: result.DocumentID, pinned: result.Pinned, err: err}
 	}
 }
 func openCmd(ctx context.Context, app App, launcher host.Launcher, selector string) tea.Cmd {

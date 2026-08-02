@@ -178,6 +178,7 @@ CLI 保留简洁名词 `path`；Go domain 中使用 `IndexedPath`，避免与 `p
 - 当前 `Location`
 - document status
 - 当前 `IndexState`
+- 用户固定状态 `pinned`
 - `created_at`、`updated_at`
 
 行为由 aggregate method 表达，而不是由 handler 任意修改字段：
@@ -856,7 +857,8 @@ CREATE TABLE paths (
 CREATE TABLE documents (
     id TEXT PRIMARY KEY,
     created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
+    updated_at INTEGER NOT NULL,
+    pinned INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE document_locations (
