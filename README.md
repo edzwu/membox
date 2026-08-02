@@ -74,7 +74,9 @@ In the TUI filter input, type a date token and press Space or Enter to turn it i
 +m:7d                          modified in the last seven calendar days
 ```
 
-Open ranges such as `+2026-07..` and `+..2026-07` are supported. `/clear` removes all date tags; Backspace on an empty input removes the last tag. Esc hides the input without clearing active tags.
+Open ranges such as `+2026-07..` and `+..2026-07` are supported. Enter on ordinary text commits it as a purple filter tag; NAME and FULL tags retain the mode in which they were created, and all text and date tags use AND semantics. Enter on an empty input opens the selected document.
+
+`/clear` removes all filter tags; Backspace on an empty input removes the most recently added tag. Esc hides the input without clearing active tags.
 
 Outside the filter input, press `s` to toggle between filename order and modified-time order. Time order shows the newest documents first and places documents without a timestamp last.
 

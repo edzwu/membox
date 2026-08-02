@@ -303,6 +303,71 @@ func TestModel_DraftDateTagDoesNotParticipateInTextFilter(t *testing.T) {
 	}
 }
 
+func TestModel_TextPatternsCommitAsTagsWithANDSemantics(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.width, model.height = 120, 24
+	model.items = documentItems([]membox.DocumentView{
+		{ID: "alpha-report", Title: "Alpha report", Path: "/tmp/alpha-report.md"},
+		{ID: "beta-report", Title: "Beta report", Path: "/tmp/beta-report.md"},
+		{ID: "alpha-note", Title: "Alpha note", Path: "/tmp/alpha-note.md"},
+	})
+	model.inputVisible, model.inputActive = true, true
+	model.input.Focus()
+	model.input.SetValue("report")
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if len(model.textFilters) != 1 || model.textFilters[0].Mode != searchModeName || model.input.Value() != "" || len(model.filtered) != 2 {
+		t.Fatalf("name pattern was not committed: tags=%+v input=%q filtered=%+v", model.textFilters, model.input.Value(), model.filtered)
+	}
+	if view := model.inputView(); !strings.Contains(view, "N: report") {
+		t.Fatalf("name tag is not rendered above input: %q", view)
+	}
+
+	model.input.SetValue("alpha")
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if len(model.textFilters) != 2 || len(model.filtered) != 1 || model.filtered[0].document.ID != "alpha-report" {
+		t.Fatalf("name tags do not use AND semantics: tags=%+v filtered=%+v", model.textFilters, model.filtered)
+	}
+
+	// Enter on an empty input retains the old open-document behavior.
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if model.inputVisible || !model.loading || command == nil {
+		t.Fatalf("empty Enter did not open selected document: visible=%v loading=%v command=%v", model.inputVisible, model.loading, command)
+	}
+}
+
+func TestModel_NameAndFullTextTagsKeepTheirModesAndIntersect(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.width, model.height = 120, 24
+	model.items = documentItems([]membox.DocumentView{
+		{ID: "alpha", Title: "Alpha", Path: "/tmp/alpha.md"},
+		{ID: "beta", Title: "Beta", Path: "/tmp/beta.md"},
+	})
+	model.inputVisible, model.inputActive = true, true
+	model.input.Focus()
+	model.input.SetValue("alpha")
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	model = updated.(Model)
+	model.input.SetValue("flash attention")
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if len(model.textFilters) != 2 || model.textFilters[0].Mode != searchModeName || model.textFilters[1].Mode != searchModeFull {
+		t.Fatalf("text tag modes were not retained: %+v", model.textFilters)
+	}
+	if !strings.Contains(model.inputView(), "N: alpha") || !strings.Contains(model.inputView(), "F: flash attention") {
+		t.Fatalf("mode labels missing from tags: %q", model.inputView())
+	}
+	updated, _ = model.Update(searchMsg{query: "flash attention", results: []membox.SearchResult{{DocumentID: "alpha"}, {DocumentID: "beta"}}})
+	model = updated.(Model)
+	if len(model.filtered) != 1 || model.filtered[0].document.ID != "alpha" {
+		t.Fatalf("NAME and FULL tags did not intersect: %+v", model.filtered)
+	}
+}
+
 func TestModel_DateTagsRenderAndFilterWithANDSemantics(t *testing.T) {
 	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
 	model.width, model.height = 120, 24
@@ -352,7 +417,7 @@ func TestModel_FullSearchResultsRespectDateTags(t *testing.T) {
 	}
 }
 
-func TestModel_ClearAndBackspaceRemoveDateTags(t *testing.T) {
+func TestModel_ClearAndBackspaceRemoveAllFilterTags(t *testing.T) {
 	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
 	model.items = documentItems([]membox.DocumentView{{ID: "one", Path: "/tmp/one.md", UpdatedAt: time.Date(2026, 7, 1, 0, 0, 0, 0, time.Local)}})
 	model.inputVisible, model.inputActive = true, true
@@ -363,20 +428,34 @@ func TestModel_ClearAndBackspaceRemoveDateTags(t *testing.T) {
 	if len(model.dateFilters) != 1 {
 		t.Fatal("date tag was not added")
 	}
+	model.input.SetValue("one")
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if len(model.textFilters) != 1 {
+		t.Fatal("text tag was not added")
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	model = updated.(Model)
+	if len(model.textFilters) != 0 || len(model.dateFilters) != 1 {
+		t.Fatal("empty backspace did not remove the latest text tag first")
+	}
 	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyBackspace})
 	model = updated.(Model)
 	if len(model.dateFilters) != 0 {
-		t.Fatal("empty backspace did not remove last date tag")
+		t.Fatal("second empty backspace did not remove date tag")
 	}
 
 	model.input.SetValue("+2026")
 	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(Model)
+	model.input.SetValue("one")
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
 	model.input.SetValue("/clear")
 	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(Model)
-	if len(model.dateFilters) != 0 || model.input.Value() != "" {
-		t.Fatalf("/clear did not clear tags: tags=%+v input=%q", model.dateFilters, model.input.Value())
+	if len(model.dateFilters) != 0 || len(model.textFilters) != 0 || model.input.Value() != "" {
+		t.Fatalf("/clear did not clear all tags: dates=%+v text=%+v input=%q", model.dateFilters, model.textFilters, model.input.Value())
 	}
 }
 

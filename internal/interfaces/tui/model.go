@@ -56,6 +56,12 @@ type item struct {
 	match    string
 }
 
+type textFilter struct {
+	Value    string
+	Mode     string
+	Sequence uint64
+}
+
 type Model struct {
 	ctx      context.Context
 	app      App
@@ -65,14 +71,16 @@ type Model struct {
 	preview viewport.Model
 	spinner spinner.Model
 
-	items         []item
-	filtered      []item
-	dateFilters   []dateFilter
-	selected      int
-	scrollTop     int
-	boardScrollY  int
-	rawContent    string
-	rawDocumentID string
+	items          []item
+	filtered       []item
+	dateFilters    []dateFilter
+	textFilters    []textFilter
+	filterSequence uint64
+	selected       int
+	scrollTop      int
+	boardScrollY   int
+	rawContent     string
+	rawDocumentID  string
 
 	inputVisible   bool
 	inputActive    bool
@@ -168,10 +176,10 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m.updateNavigation(msg)
 	case searchMsg:
-		if textFilterQuery(m.input.Value()) == msg.query && m.searchMode == searchModeFull {
+		if m.fullTextFilterQuery() == msg.query {
 			m.loading, m.err = false, msg.err
 			if msg.err == nil {
-				m.filtered = searchResultItems(m.items, msg.results, m.dateFilters)
+				m.filtered = searchResultItems(m.items, msg.results, m.dateFilters, m.nameTextFilterQueries())
 				m.sortFiltered()
 				m.selected = 0
 				m.keepSelectionVisible()
@@ -187,7 +195,12 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				m.selected = 0
 				m.scrollTop = 0
 				m.refreshFilter()
-				commands = append(commands, m.loadPreview())
+				if query := m.fullTextFilterQuery(); query != "" {
+					m.loading = true
+					commands = append(commands, m.spinner.Tick, searchDocumentsCmd(m.ctx, m.app, query))
+				} else {
+					commands = append(commands, m.loadPreview())
+				}
 			}
 		}
 	case previewMsg:
@@ -286,8 +299,7 @@ func (m Model) updateFilterInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		m.filterErr = nil
 		m.hideInput()
-		m.refreshFilter()
-		return m, m.loadPreview()
+		return m, m.filterChanged(nil)
 	case "tab":
 		if m.searchMode == searchModeName {
 			m.searchMode = searchModeFull
@@ -308,6 +320,9 @@ func (m Model) updateFilterInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, m.filterChanged(nil)
 		}
+		if m.commitTextFilter() {
+			return m, m.filterChanged(nil)
+		}
 		m.hideInput()
 		if document, ok := m.selectedDocument(); ok {
 			m.loading = true
@@ -320,8 +335,7 @@ func (m Model) updateFilterInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.input.SetValue("")
 		return m, m.filterChanged(nil)
 	case "backspace":
-		if m.input.Value() == "" && len(m.dateFilters) > 0 {
-			m.dateFilters = m.dateFilters[:len(m.dateFilters)-1]
+		if m.input.Value() == "" && m.removeLastFilter() {
 			return m, m.filterChanged(nil)
 		}
 	case "space", " ":
@@ -554,7 +568,7 @@ func (m *Model) scrollBoardToSelection() {
 func (m Model) visibleRows() int {
 	if m.inputVisible {
 		tagRows := 0
-		if len(m.dateFilters) > 0 {
+		if m.filterCount() > 0 {
 			tagRows = 1
 		}
 		if m.detailsVisible {
@@ -582,8 +596,7 @@ func (m *Model) keepSelectionVisible() {
 func (m *Model) toggleInput() tea.Cmd {
 	if m.inputVisible {
 		m.hideInput()
-		m.refreshFilter()
-		return m.loadPreview()
+		return m.filterChanged(nil)
 	}
 	m.inputVisible = true
 	m.inputActive = true
@@ -615,8 +628,12 @@ func (m *Model) commitFilterToken() (bool, error) {
 	}
 	if token == "/clear" {
 		m.dateFilters = nil
+		m.textFilters = nil
 		m.input.SetValue(remainingInput)
 		return true, nil
+	}
+	if strings.HasPrefix(token, "/") {
+		return true, fmt.Errorf("unknown filter command %q", token)
 	}
 	if !strings.HasPrefix(token, "+") {
 		return false, nil
@@ -631,16 +648,88 @@ func (m *Model) commitFilterToken() (bool, error) {
 			return true, nil
 		}
 	}
+	filter.Sequence = m.nextFilterSequence()
 	m.dateFilters = append(m.dateFilters, filter)
 	m.input.SetValue(remainingInput)
 	return true, nil
 }
 
+func (m *Model) commitTextFilter() bool {
+	value := strings.TrimSpace(m.input.Value())
+	if value == "" {
+		return false
+	}
+	for _, existing := range m.textFilters {
+		if existing.Mode == m.searchMode && strings.EqualFold(existing.Value, value) {
+			m.input.SetValue("")
+			return true
+		}
+	}
+	m.textFilters = append(m.textFilters, textFilter{Value: value, Mode: m.searchMode, Sequence: m.nextFilterSequence()})
+	m.input.SetValue("")
+	return true
+}
+
+func (m *Model) nextFilterSequence() uint64 {
+	m.filterSequence++
+	return m.filterSequence
+}
+
+func (m Model) filterCount() int { return len(m.dateFilters) + len(m.textFilters) }
+
+func (m *Model) removeLastFilter() bool {
+	if m.filterCount() == 0 {
+		return false
+	}
+	dateSequence, textSequence := uint64(0), uint64(0)
+	if len(m.dateFilters) > 0 {
+		dateSequence = m.dateFilters[len(m.dateFilters)-1].Sequence
+	}
+	if len(m.textFilters) > 0 {
+		textSequence = m.textFilters[len(m.textFilters)-1].Sequence
+	}
+	if len(m.textFilters) > 0 && (len(m.dateFilters) == 0 || textSequence >= dateSequence) {
+		m.textFilters = m.textFilters[:len(m.textFilters)-1]
+	} else {
+		m.dateFilters = m.dateFilters[:len(m.dateFilters)-1]
+	}
+	return true
+}
+
+func (m Model) nameTextFilterQueries() []string {
+	queries := make([]string, 0, len(m.textFilters)+1)
+	for _, filter := range m.textFilters {
+		if filter.Mode == searchModeName {
+			queries = append(queries, filter.Value)
+		}
+	}
+	if m.inputVisible && m.searchMode == searchModeName {
+		if draft := textFilterQuery(m.input.Value()); draft != "" {
+			queries = append(queries, draft)
+		}
+	}
+	return queries
+}
+
+func (m Model) fullTextFilterQuery() string {
+	queries := make([]string, 0, len(m.textFilters)+1)
+	for _, filter := range m.textFilters {
+		if filter.Mode == searchModeFull {
+			queries = append(queries, filter.Value)
+		}
+	}
+	if m.inputVisible && m.searchMode == searchModeFull {
+		if draft := textFilterQuery(m.input.Value()); draft != "" {
+			queries = append(queries, draft)
+		}
+	}
+	return strings.Join(queries, " ")
+}
+
 func (m *Model) filterChanged(inputCommand tea.Cmd) tea.Cmd {
 	m.filterErr = nil
 	m.applyPreviewContent()
-	query := textFilterQuery(m.input.Value())
-	if m.searchMode == searchModeFull && query != "" {
+	if query := m.fullTextFilterQuery(); query != "" {
 		m.loading = true
 		return tea.Batch(inputCommand, m.spinner.Tick, searchDocumentsCmd(m.ctx, m.app, query))
 	}
@@ -650,11 +739,10 @@ func (m *Model) filterChanged(inputCommand tea.Cmd) tea.Cmd {
 }
 
 func (m *Model) refreshFilter() {
-	query := strings.ToLower(textFilterQuery(m.input.Value()))
+	nameQueries := m.nameTextFilterQueries()
 	m.filtered = m.filtered[:0]
 	for _, candidate := range m.items {
-		textMatches := !m.inputVisible || query == "" || wordsMatch(candidate.match, query)
-		if textMatches && matchesDateFilters(candidate.document, m.dateFilters) {
+		if matchesTextFilters(candidate.match, nameQueries) && matchesDateFilters(candidate.document, m.dateFilters) {
 			m.filtered = append(m.filtered, candidate)
 		}
 	}
@@ -714,8 +802,8 @@ func (m *Model) sortFiltered() {
 }
 
 // textFilterQuery removes an in-progress command token from the end of the
-// input. Date tags only affect results after Space or Enter commits them, so a
-// draft such as +m:7d must not temporarily empty the filename or FTS results.
+// input. Command tags only affect results after Space or Enter commits them, so
+// a draft such as +m:7d must not temporarily empty filename or FTS results.
 func textFilterQuery(value string) string {
 	value = strings.TrimSpace(value)
 	separator := strings.LastIndexAny(value, " \t")
@@ -730,6 +818,15 @@ func textFilterQuery(value string) string {
 		return strings.TrimSpace(value[:separator])
 	}
 	return value
+}
+
+func matchesTextFilters(value string, queries []string) bool {
+	for _, query := range queries {
+		if !wordsMatch(value, strings.ToLower(query)) {
+			return false
+		}
+	}
+	return true
 }
 
 func wordsMatch(value, query string) bool {
@@ -765,8 +862,11 @@ func (m Model) loadPreview() tea.Cmd {
 
 func (m *Model) applyPreviewContent() {
 	query := ""
-	if m.inputVisible || m.searchMode == searchModeFull {
+	if m.inputVisible {
 		query = textFilterQuery(m.input.Value())
+	}
+	if query == "" && len(m.textFilters) > 0 {
+		query = m.textFilters[len(m.textFilters)-1].Value
 	}
 	content := highlightQuery(m.rawContent, query)
 	m.preview.SetContent(content)
@@ -1101,18 +1201,35 @@ func wrapText(text string, width int) []string {
 }
 
 func (m Model) tagsView() string {
-	if len(m.dateFilters) == 0 {
+	if m.filterCount() == 0 {
 		return ""
 	}
 	modifiedStyle := lipgloss.NewStyle().Background(lipgloss.AdaptiveColor{Dark: "#3159b8", Light: "#d9e8ff"}).Foreground(lipgloss.AdaptiveColor{Dark: "#ffffff", Light: "#1b3a5b"}).Bold(true)
 	createdStyle := lipgloss.NewStyle().Background(lipgloss.AdaptiveColor{Dark: "#8a5a00", Light: "#ffe2a8"}).Foreground(lipgloss.AdaptiveColor{Dark: "#fff7e6", Light: "#5b3900"}).Bold(true)
-	parts := make([]string, 0, len(m.dateFilters))
+	textStyle := lipgloss.NewStyle().Background(lipgloss.AdaptiveColor{Dark: "#7048a8", Light: "#eadcff"}).Foreground(lipgloss.AdaptiveColor{Dark: "#ffffff", Light: "#3c1f63"}).Bold(true)
+	type renderedTag struct {
+		sequence uint64
+		value    string
+	}
+	tags := make([]renderedTag, 0, m.filterCount())
 	for _, filter := range m.dateFilters {
 		style := modifiedStyle
 		if filter.Field == dateFilterCreated {
 			style = createdStyle
 		}
-		parts = append(parts, style.Render(" "+filter.Label+" "))
+		tags = append(tags, renderedTag{sequence: filter.Sequence, value: style.Render(" " + filter.Label + " ")})
+	}
+	for _, filter := range m.textFilters {
+		mode := "N"
+		if filter.Mode == searchModeFull {
+			mode = "F"
+		}
+		tags = append(tags, renderedTag{sequence: filter.Sequence, value: textStyle.Render(" " + mode + ": " + filter.Value + " ")})
+	}
+	sort.SliceStable(tags, func(i, j int) bool { return tags[i].sequence < tags[j].sequence })
+	parts := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		parts = append(parts, tag.value)
 	}
 	return ansi.Truncate(strings.Join(parts, " "), max(10, m.width-2), "…")
 }
@@ -1147,8 +1264,8 @@ func (m Model) statusBar() string {
 		if m.inputVisible {
 			right += accentStyle.Render("filter") + dimStyle.Render(fmt.Sprintf(" %d/%d", len(m.filtered), len(m.items)))
 		} else {
-			if len(m.dateFilters) > 0 {
-				right += accentStyle.Render(fmt.Sprintf("%d tag(s) ", len(m.dateFilters)))
+			if m.filterCount() > 0 {
+				right += accentStyle.Render(fmt.Sprintf("%d tag(s) ", m.filterCount()))
 			}
 			if document, ok := m.selectedDocument(); ok {
 				right += dimStyle.Render(shortID(document.ID) + " " + displayTitle(document.Title, document.Path))
@@ -1179,7 +1296,7 @@ func (m Model) modeBadge() string {
 
 func (m Model) hints() string {
 	if m.inputVisible {
-		return "space tag • backspace last • /clear • tab mode • esc hide"
+		return "space date tag • enter text tag/open • backspace last • /clear • tab mode • esc hide"
 	}
 	sortLabel := "name"
 	if m.sortMode == sortModeTime {
@@ -1188,14 +1305,14 @@ func (m Model) hints() string {
 	return "s sort:" + sortLabel + " • space details • space×2 filter • tab board • enter open • ↑↓ select • q back • ctrl+d quit"
 }
 
-func searchResultItems(items []item, results []membox.SearchResult, filters []dateFilter) []item {
+func searchResultItems(items []item, results []membox.SearchResult, dateFilters []dateFilter, nameQueries []string) []item {
 	allowed := make(map[string]bool, len(results))
 	for _, result := range results {
 		allowed[result.DocumentID] = true
 	}
 	filtered := make([]item, 0, len(results))
 	for _, candidate := range items {
-		if allowed[candidate.document.ID] && matchesDateFilters(candidate.document, filters) {
+		if allowed[candidate.document.ID] && matchesDateFilters(candidate.document, dateFilters) && matchesTextFilters(candidate.match, nameQueries) {
 			filtered = append(filtered, candidate)
 		}
 	}

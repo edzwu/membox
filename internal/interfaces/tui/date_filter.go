@@ -18,10 +18,11 @@ const (
 )
 
 type dateFilter struct {
-	Label string
-	Field dateFilterField
-	Start *time.Time
-	End   *time.Time // exclusive
+	Label    string
+	Field    dateFilterField
+	Start    *time.Time
+	End      *time.Time // exclusive
+	Sequence uint64
 }
 
 func (filter dateFilter) matches(document membox.DocumentView) bool {
