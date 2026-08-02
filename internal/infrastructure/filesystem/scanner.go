@@ -144,6 +144,36 @@ func (s *Scanner) ObserveFile(ctx context.Context, location catalog.Location, ab
 	}, nil
 }
 
+type Writer struct{}
+
+func (Writer) WriteNew(ctx context.Context, absolutePath string, body []byte) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	file, err := os.OpenFile(absolutePath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return fmt.Errorf("creating document %q: %w", absolutePath, err)
+	}
+	if _, err := file.Write(body); err != nil {
+		file.Close()
+		return fmt.Errorf("writing document %q: %w", absolutePath, err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("closing document %q: %w", absolutePath, err)
+	}
+	return nil
+}
+
+func (Writer) Remove(ctx context.Context, absolutePath string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := os.Remove(absolutePath); err != nil {
+		return fmt.Errorf("deleting document %q: %w", absolutePath, err)
+	}
+	return nil
+}
+
 func isMarkdown(name string) bool {
 	switch strings.ToLower(filepath.Ext(name)) {
 	case ".md", ".markdown":

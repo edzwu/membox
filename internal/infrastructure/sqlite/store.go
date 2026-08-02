@@ -170,7 +170,81 @@ source_updated_at=COALESCE(source_updated_at,CASE WHEN mtime>0 THEN mtime/100000
 			return fmt.Errorf("adding documents.pinned: %w", err)
 		}
 	}
-	return nil
+	return s.migrateGraphSchema()
+}
+
+func (s *Store) migrateGraphSchema() error {
+	var nodesTable bool
+	if err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='graph_nodes')`).Scan(&nodesTable); err != nil {
+		return fmt.Errorf("checking legacy graph schema: %w", err)
+	}
+	if nodesTable {
+		if _, err := s.db.Exec(`DROP INDEX IF EXISTS graph_nodes_kind_name`); err != nil {
+			return fmt.Errorf("dropping legacy graph_nodes index: %w", err)
+		}
+		if _, err := s.db.Exec(`DROP TABLE graph_nodes`); err != nil {
+			return fmt.Errorf("dropping legacy graph_nodes: %w", err)
+		}
+	}
+	var edgesTable bool
+	if err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='graph_edges')`).Scan(&edgesTable); err != nil {
+		return fmt.Errorf("checking graph_edges table: %w", err)
+	}
+	var usesNodeColumns bool
+	if edgesTable {
+		if err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM pragma_table_info('graph_edges') WHERE name='from_node_id')`).Scan(&usesNodeColumns); err != nil {
+			return fmt.Errorf("checking graph_edges columns: %w", err)
+		}
+	}
+	if edgesTable && !usesNodeColumns {
+		_, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS graph_edges_from ON graph_edges(from_document_id);
+CREATE INDEX IF NOT EXISTS graph_edges_to ON graph_edges(to_document_id)`)
+		return err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if edgesTable {
+		if _, err := tx.Exec(`DROP INDEX IF EXISTS graph_edges_from`); err != nil {
+			return fmt.Errorf("dropping legacy graph edge index: %w", err)
+		}
+		if _, err := tx.Exec(`DROP INDEX IF EXISTS graph_edges_to`); err != nil {
+			return fmt.Errorf("dropping legacy graph edge index: %w", err)
+		}
+		if _, err := tx.Exec(`ALTER TABLE graph_edges RENAME TO graph_edges_old`); err != nil {
+			return fmt.Errorf("renaming legacy graph_edges: %w", err)
+		}
+	}
+	if _, err := tx.Exec(`CREATE TABLE graph_edges (
+from_document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+to_document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+kind TEXT NOT NULL CHECK(kind IN ('manual','member')),
+created_at INTEGER NOT NULL,
+updated_at INTEGER NOT NULL,
+PRIMARY KEY (from_document_id, to_document_id, kind)
+)`); err != nil {
+		return fmt.Errorf("creating document graph_edges: %w", err)
+	}
+	if usesNodeColumns {
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO graph_edges(from_document_id,to_document_id,kind,created_at,updated_at)
+SELECT from_node_id,to_node_id,kind,created_at,updated_at FROM graph_edges_old`); err != nil {
+			return fmt.Errorf("copying graph edges: %w", err)
+		}
+	}
+	if edgesTable {
+		if _, err := tx.Exec(`DROP TABLE graph_edges_old`); err != nil {
+			return fmt.Errorf("dropping legacy graph_edges: %w", err)
+		}
+	}
+	if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS graph_edges_from ON graph_edges(from_document_id)`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS graph_edges_to ON graph_edges(to_document_id)`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) AddOrReactivatePath(ctx context.Context, root string, now time.Time) (*catalog.IndexedPath, bool, error) {
@@ -420,6 +494,140 @@ func (s *Store) SavePinned(ctx context.Context, documentID catalog.DocumentID, p
 		return fmt.Errorf("document %s not found while saving pin", documentID)
 	}
 	return nil
+}
+
+func (s *Store) ResolveTopic(ctx context.Context, selector string) (*catalog.Document, string, error) {
+	selector = strings.TrimSpace(selector)
+	if selector == "" {
+		return nil, "", errors.New("topic selector is required")
+	}
+	records, err := s.topicDocumentRecords(ctx, ` WHERE l.relative_path LIKE 'topic-%.md' AND l.status != 'untracked' AND (d.id=? OR lower(l.relative_path)=lower(?) OR lower(COALESCE(i.title,''))=lower(?) OR lower(REPLACE(COALESCE(i.title,''),' ','-'))=lower(?))`, selector, "topic-"+topicFileSlug(selector)+".md", selector, selector)
+	if err != nil {
+		return nil, "", err
+	}
+	if len(records) == 0 {
+		return nil, "", fmt.Errorf("topic %q not found", selector)
+	}
+	if len(records) > 1 {
+		return nil, "", fmt.Errorf("topic selector %q is ambiguous", selector)
+	}
+	return records[0].Document, records[0].AbsolutePath, nil
+}
+
+func (s *Store) ListTopics(ctx context.Context) ([]port.DocumentRecord, error) {
+	return s.topicDocumentRecords(ctx, ` WHERE l.relative_path LIKE 'topic-%.md' AND l.status != 'untracked'`)
+}
+
+func (s *Store) topicDocumentRecords(ctx context.Context, where string, arguments ...any) ([]port.DocumentRecord, error) {
+	rows, err := s.db.QueryContext(ctx, documentSelect+where+` ORDER BY lower(COALESCE(i.title,'')), lower(l.relative_path), d.id`, arguments...)
+	if err != nil {
+		return nil, fmt.Errorf("listing topic documents: %w", err)
+	}
+	defer rows.Close()
+	var records []port.DocumentRecord
+	for rows.Next() {
+		document, absolutePath, err := scanDocument(rows)
+		if err != nil {
+			return nil, err
+		}
+		if _, isTopic := catalog.TopicNameForDocument(document); !isTopic {
+			continue
+		}
+		records = append(records, port.DocumentRecord{Document: document, AbsolutePath: absolutePath})
+	}
+	return records, rows.Err()
+}
+
+func topicFileSlug(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	var builder strings.Builder
+	lastDash := false
+	for _, r := range value {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
+			builder.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		if !lastDash && builder.Len() > 0 {
+			builder.WriteByte('-')
+			lastDash = true
+		}
+	}
+	return strings.Trim(builder.String(), "-")
+}
+
+func (s *Store) AddEdge(ctx context.Context, edge catalog.GraphEdge) (bool, error) {
+	result, err := s.db.ExecContext(ctx, `INSERT INTO graph_edges(from_document_id,to_document_id,kind,created_at,updated_at)
+VALUES(?,?,?,?,?) ON CONFLICT(from_document_id,to_document_id,kind) DO NOTHING`,
+		edge.FromDocumentID, edge.ToDocumentID, edge.Kind, millis(edge.CreatedAt), millis(edge.UpdatedAt))
+	if err != nil {
+		return false, fmt.Errorf("saving graph edge: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return rows == 1, nil
+}
+
+func (s *Store) RemoveEdge(ctx context.Context, fromDocumentID, toDocumentID catalog.DocumentID, kind catalog.EdgeKind) (bool, error) {
+	result, err := s.db.ExecContext(ctx, `DELETE FROM graph_edges WHERE from_document_id=? AND to_document_id=? AND kind=?`, fromDocumentID, toDocumentID, kind)
+	if err != nil {
+		return false, fmt.Errorf("removing graph edge: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return rows > 0, nil
+}
+
+func (s *Store) GetDocumentGraph(ctx context.Context, documentID catalog.DocumentID) ([]port.DocumentRecord, []port.DocumentRecord, []port.DocumentRecord, error) {
+	outgoing, err := s.documentsByIDs(ctx, `SELECT e.to_document_id FROM graph_edges e WHERE e.from_document_id=? AND e.kind='manual' ORDER BY e.created_at, e.to_document_id`, documentID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	incoming, err := s.documentsByIDs(ctx, `SELECT e.from_document_id FROM graph_edges e WHERE e.to_document_id=? AND e.kind='manual' ORDER BY e.created_at, e.from_document_id`, documentID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	topics, err := s.documentsByIDs(ctx, `SELECT e.to_document_id FROM graph_edges e WHERE e.from_document_id=? AND e.kind='member' ORDER BY e.created_at, e.to_document_id`, documentID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return outgoing, incoming, topics, nil
+}
+
+func (s *Store) documentsByIDs(ctx context.Context, query string, argument any) ([]port.DocumentRecord, error) {
+	rows, err := s.db.QueryContext(ctx, query, argument)
+	if err != nil {
+		return nil, fmt.Errorf("listing graph document IDs: %w", err)
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	records := make([]port.DocumentRecord, 0, len(ids))
+	for _, id := range ids {
+		document, absolutePath, err := s.ResolveDocument(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, port.DocumentRecord{Document: document, AbsolutePath: absolutePath})
+	}
+	return records, nil
+}
+
+func (s *Store) ListTopicDocuments(ctx context.Context, topicDocumentID catalog.DocumentID) ([]port.DocumentRecord, error) {
+	return s.documentsByIDs(ctx, `SELECT e.from_document_id FROM graph_edges e WHERE e.to_document_id=? AND e.kind='member' ORDER BY e.created_at, e.from_document_id`, topicDocumentID)
 }
 
 func savePath(ctx context.Context, tx *sql.Tx, path *catalog.IndexedPath) error {

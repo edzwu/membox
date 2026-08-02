@@ -888,7 +888,18 @@ CREATE VIRTUAL TABLE document_fts USING fts5(
     path,
     body
 );
+
+CREATE TABLE graph_edges (
+    from_document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    to_document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK(kind IN ('manual','member')),
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (from_document_id, to_document_id, kind)
+);
 ```
+
+Graph projection 的语义最小集合：`document -> document` 使用 `manual`，`document -> topic document` 使用 `member`。Topic 是根目录 `topic-*.md` 的普通 Document；文档可以有多个 topic，topic 可以包含多个文档。Markdown 内容不会被关系功能改写。
 
 初始化连接：
 

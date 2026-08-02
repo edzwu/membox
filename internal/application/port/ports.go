@@ -24,6 +24,11 @@ type MarkdownScanner interface {
 	ObserveFile(ctx context.Context, location catalog.Location, absolutePath string) (catalog.Observation, error)
 }
 
+type ContentWriter interface {
+	WriteNew(ctx context.Context, absolutePath string, body []byte) error
+	Remove(ctx context.Context, absolutePath string) error
+}
+
 type ContentReader interface {
 	Read(ctx context.Context, absolutePath string) ([]byte, error)
 }
@@ -63,6 +68,15 @@ type DocumentRecord struct {
 	AbsolutePath string
 }
 
+type GraphStore interface {
+	ResolveTopic(ctx context.Context, selector string) (*catalog.Document, string, error)
+	ListTopics(ctx context.Context) ([]DocumentRecord, error)
+	AddEdge(ctx context.Context, edge catalog.GraphEdge) (created bool, err error)
+	RemoveEdge(ctx context.Context, fromDocumentID, toDocumentID catalog.DocumentID, kind catalog.EdgeKind) (removed bool, err error)
+	GetDocumentGraph(ctx context.Context, documentID catalog.DocumentID) (outgoing []DocumentRecord, incoming []DocumentRecord, topics []DocumentRecord, err error)
+	ListTopicDocuments(ctx context.Context, topicDocumentID catalog.DocumentID) ([]DocumentRecord, error)
+}
+
 type ScanSave struct {
 	Document *catalog.Document
 	Body     []byte
@@ -85,6 +99,7 @@ type CatalogStore interface {
 	Search(ctx context.Context, query string, limit int) ([]SearchHit, error)
 	ListDocuments(ctx context.Context, limit int, includeUnavailable bool) ([]DocumentRecord, error)
 	ResolveDocument(ctx context.Context, selector string) (*catalog.Document, string, error)
+	GraphStore
 	Status(ctx context.Context) (StatusSnapshot, error)
 }
 

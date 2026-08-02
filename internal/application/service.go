@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"membox/internal/application/port"
 	"membox/internal/domain/catalog"
@@ -16,13 +18,14 @@ type Service struct {
 	store   port.CatalogStore
 	scanner port.MarkdownScanner
 	reader  port.ContentReader
+	writer  port.ContentWriter
 	ids     port.IDGenerator
 	clock   port.Clock
 	history port.GitHistory
 }
 
-func NewService(store port.CatalogStore, scanner port.MarkdownScanner, reader port.ContentReader, ids port.IDGenerator, clock port.Clock, history port.GitHistory) *Service {
-	return &Service{store: store, scanner: scanner, reader: reader, ids: ids, clock: clock, history: history}
+func NewService(store port.CatalogStore, scanner port.MarkdownScanner, reader port.ContentReader, writer port.ContentWriter, ids port.IDGenerator, clock port.Clock, history port.GitHistory) *Service {
+	return &Service{store: store, scanner: scanner, reader: reader, writer: writer, ids: ids, clock: clock, history: history}
 }
 
 func (s *Service) Close() error { return s.store.Close() }
@@ -453,6 +456,273 @@ func (s *Service) ReindexDocument(ctx context.Context, selector string) error {
 		return err
 	}
 	return s.store.SaveDocument(ctx, port.ScanSave{Document: document, Body: observation.Body, Reindex: true})
+}
+
+func (s *Service) DeleteDocumentFile(ctx context.Context, selector string) (catalog.Document, string, error) {
+	document, absolute, err := s.ResolveDocument(ctx, selector)
+	if err != nil {
+		return catalog.Document{}, "", err
+	}
+	if document.Status != catalog.DocumentActive {
+		return catalog.Document{}, "", fmt.Errorf("document %s is %s at %s", document.ID, document.Status, absolute)
+	}
+	if err := s.writer.Remove(ctx, absolute); err != nil {
+		return catalog.Document{}, "", err
+	}
+	indexedPath, err := s.store.ResolvePath(ctx, strconv.FormatInt(int64(document.Location.PathID), 10), false)
+	if err != nil {
+		return *document, absolute, err
+	}
+	if _, err := s.scanOne(ctx, indexedPath); err != nil {
+		return *document, absolute, err
+	}
+	return *document, absolute, nil
+}
+
+func (s *Service) ListTopics(ctx context.Context) ([]port.DocumentRecord, error) {
+	return s.store.ListTopics(ctx)
+}
+
+func (s *Service) ResolveTopicSelector(ctx context.Context, selector string) (*catalog.Document, string, error) {
+	return s.store.ResolveTopic(ctx, strings.TrimSpace(selector))
+}
+
+type CreateNoteOptions struct {
+	Title        string
+	FromSelector string
+	Topic        bool
+}
+
+type CreateNoteResult struct {
+	Document *catalog.Document
+	Path     string
+	Link     *catalog.GraphEdge
+}
+
+func (s *Service) CreateNote(ctx context.Context, opts CreateNoteOptions) (CreateNoteResult, error) {
+	title := strings.TrimSpace(opts.Title)
+	if title == "" {
+		return CreateNoteResult{}, errors.New("note title is required")
+	}
+	var from *catalog.Document
+	if strings.TrimSpace(opts.FromSelector) != "" {
+		resolved, _, err := s.ResolveDocument(ctx, opts.FromSelector)
+		if err != nil {
+			return CreateNoteResult{}, err
+		}
+		from = resolved
+	}
+	indexedPath, err := s.defaultCreatePath(ctx)
+	if err != nil {
+		return CreateNoteResult{}, err
+	}
+	slug := noteSlug(title)
+	if slug == "" {
+		return CreateNoteResult{}, errors.New("note title does not produce a filename")
+	}
+	filename := slug + ".md"
+	if opts.Topic {
+		filename = "topic-" + slug + ".md"
+		if existing, absolute, err := s.store.ResolveTopic(ctx, title); err == nil {
+			return CreateNoteResult{Document: existing, Path: absolute}, nil
+		}
+	}
+	absolute, err := s.availableNotePath(indexedPath.Root, filename)
+	if err != nil {
+		return CreateNoteResult{}, err
+	}
+	body := []byte("# " + title + "\n\n")
+	if err := s.writer.WriteNew(ctx, absolute, body); err != nil {
+		return CreateNoteResult{}, err
+	}
+	report, err := s.scanOne(ctx, indexedPath)
+	if err != nil {
+		return CreateNoteResult{}, err
+	}
+	if report.Added == 0 {
+		return CreateNoteResult{}, fmt.Errorf("created note %q was not indexed", absolute)
+	}
+	relative, err := filepath.Rel(indexedPath.Root, absolute)
+	if err != nil {
+		return CreateNoteResult{}, err
+	}
+	documents, err := s.store.DocumentsForPath(ctx, indexedPath.ID)
+	if err != nil {
+		return CreateNoteResult{}, err
+	}
+	var created *catalog.Document
+	for _, document := range documents {
+		if document.Location.RelativePath == filepath.ToSlash(relative) && document.Status == catalog.DocumentActive {
+			created = document
+			break
+		}
+	}
+	if created == nil {
+		return CreateNoteResult{}, fmt.Errorf("created note %q was not indexed", absolute)
+	}
+	result := CreateNoteResult{Document: created, Path: absolute}
+	if from != nil {
+		edge, err := catalog.NewGraphEdge(from.ID, created.ID, catalog.EdgeManual, s.clock.Now())
+		if err != nil {
+			return CreateNoteResult{}, err
+		}
+		if _, err := s.store.AddEdge(ctx, edge); err != nil {
+			return CreateNoteResult{}, err
+		}
+		result.Link = &edge
+	}
+	return result, nil
+}
+
+func (s *Service) defaultCreatePath(ctx context.Context) (*catalog.IndexedPath, error) {
+	summaries, err := s.store.ListPaths(ctx, false)
+	if err != nil {
+		return nil, err
+	}
+	if len(summaries) == 0 {
+		return nil, errors.New("no configured paths; add one with mm path add")
+	}
+	path := summaries[0].Path
+	return &path, nil
+}
+
+func (s *Service) availableNotePath(root, filename string) (string, error) {
+	if strings.Contains(filename, "/") || strings.Contains(filename, "\\") || filename == "" {
+		return "", fmt.Errorf("invalid note filename %q", filename)
+	}
+	for index := 0; ; index++ {
+		candidate := filename
+		if index > 0 {
+			extension := filepath.Ext(filename)
+			candidate = strings.TrimSuffix(filename, extension) + "-" + strconv.Itoa(index+1) + extension
+		}
+		absolute := filepath.Join(root, candidate)
+		if _, err := os.Stat(absolute); err == nil {
+			continue
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+		return absolute, nil
+	}
+}
+
+func noteSlug(title string) string {
+	var builder strings.Builder
+	lastDash := false
+	for _, r := range strings.ToLower(strings.TrimSpace(title)) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			builder.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		if !lastDash && builder.Len() > 0 {
+			builder.WriteByte('-')
+			lastDash = true
+		}
+	}
+	return strings.Trim(builder.String(), "-")
+}
+
+func (s *Service) AddDocumentTopic(ctx context.Context, documentSelector, topicSelector string) (bool, error) {
+	document, _, err := s.ResolveDocument(ctx, documentSelector)
+	if err != nil {
+		return false, err
+	}
+	topic, _, err := s.store.ResolveTopic(ctx, strings.TrimSpace(topicSelector))
+	if err != nil {
+		return false, err
+	}
+	edge, err := catalog.NewGraphEdge(document.ID, topic.ID, catalog.EdgeMember, s.clock.Now())
+	if err != nil {
+		return false, err
+	}
+	return s.store.AddEdge(ctx, edge)
+}
+
+func (s *Service) RemoveDocumentTopic(ctx context.Context, documentSelector, topicSelector string) (bool, error) {
+	document, _, err := s.ResolveDocument(ctx, documentSelector)
+	if err != nil {
+		return false, err
+	}
+	topic, _, err := s.store.ResolveTopic(ctx, strings.TrimSpace(topicSelector))
+	if err != nil {
+		return false, err
+	}
+	return s.store.RemoveEdge(ctx, document.ID, topic.ID, catalog.EdgeMember)
+}
+
+type DocumentLinkResult struct {
+	Created       bool
+	AlreadyExists bool
+}
+
+func (s *Service) LinkDocuments(ctx context.Context, fromSelector, toSelector string) (DocumentLinkResult, error) {
+	fromDocument, _, err := s.ResolveDocument(ctx, fromSelector)
+	if err != nil {
+		return DocumentLinkResult{}, err
+	}
+	toDocument, _, err := s.ResolveDocument(ctx, toSelector)
+	if err != nil {
+		return DocumentLinkResult{}, err
+	}
+	edge, err := catalog.NewGraphEdge(fromDocument.ID, toDocument.ID, catalog.EdgeManual, s.clock.Now())
+	if err != nil {
+		return DocumentLinkResult{}, err
+	}
+	created, err := s.store.AddEdge(ctx, edge)
+	if err != nil {
+		return DocumentLinkResult{}, err
+	}
+	return DocumentLinkResult{Created: created, AlreadyExists: !created}, nil
+}
+
+func (s *Service) UnlinkDocuments(ctx context.Context, fromSelector, toSelector string) (bool, error) {
+	fromDocument, _, err := s.ResolveDocument(ctx, fromSelector)
+	if err != nil {
+		return false, err
+	}
+	toDocument, _, err := s.ResolveDocument(ctx, toSelector)
+	if err != nil {
+		return false, err
+	}
+	return s.store.RemoveEdge(ctx, fromDocument.ID, toDocument.ID, catalog.EdgeManual)
+}
+
+func (s *Service) GetDocumentGraph(ctx context.Context, selector string) (*catalog.Document, catalog.DocumentGraph, error) {
+	document, _, err := s.ResolveDocument(ctx, selector)
+	if err != nil {
+		return nil, catalog.DocumentGraph{}, err
+	}
+	outgoing, incoming, topics, err := s.store.GetDocumentGraph(ctx, document.ID)
+	if err != nil {
+		return nil, catalog.DocumentGraph{}, err
+	}
+	graph := catalog.DocumentGraph{
+		Outgoing: documentLinks(outgoing),
+		Incoming: documentLinks(incoming),
+		Topics:   documentLinks(topics),
+	}
+	return document, graph, nil
+}
+
+func documentLinks(records []port.DocumentRecord) []catalog.DocumentLink {
+	links := make([]catalog.DocumentLink, 0, len(records))
+	for _, record := range records {
+		links = append(links, catalog.DocumentLink{Document: record.Document, Path: record.AbsolutePath})
+	}
+	return links
+}
+
+func (s *Service) ListTopicDocuments(ctx context.Context, selector string) (*catalog.Document, string, []catalog.DocumentLink, error) {
+	topic, absolute, err := s.store.ResolveTopic(ctx, strings.TrimSpace(selector))
+	if err != nil {
+		return nil, "", nil, err
+	}
+	records, err := s.store.ListTopicDocuments(ctx, topic.ID)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	return topic, absolute, documentLinks(records), nil
 }
 
 func (s *Service) Status(ctx context.Context) (port.StatusSnapshot, error) {

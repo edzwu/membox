@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"membox/internal/application"
@@ -208,6 +209,215 @@ func (b *Box) ResolveDocumentLocation(ctx context.Context, query ResolveLocation
 	return LocationView{DocumentID: string(document.ID), Path: path, Status: string(document.Status)}, nil
 }
 
+type CreateNoteCommand struct {
+	Title        string
+	FromSelector string
+}
+
+type LinkView struct {
+	FromDocumentID string `json:"from_document_id"`
+	ToDocumentID   string `json:"to_document_id"`
+	Kind           string `json:"kind"`
+}
+
+type CreateNoteResult struct {
+	Document DocumentView `json:"document"`
+	Link     *LinkView    `json:"link,omitempty"`
+}
+
+func (b *Box) CreateNote(ctx context.Context, command CreateNoteCommand) (CreateNoteResult, error) {
+	result, err := b.service.CreateNote(ctx, application.CreateNoteOptions{Title: command.Title, FromSelector: command.FromSelector})
+	if err != nil {
+		return CreateNoteResult{}, err
+	}
+	view := CreateNoteResult{Document: documentView(result.Document, result.Path)}
+	if result.Link != nil {
+		view.Link = &LinkView{FromDocumentID: string(result.Link.FromDocumentID), ToDocumentID: string(result.Link.ToDocumentID), Kind: string(result.Link.Kind)}
+	}
+	return view, nil
+}
+
+type TopicView struct {
+	ID           string    `json:"id"`
+	Name         string    `json:"name"`
+	Path         string    `json:"path"`
+	RelativePath string    `json:"relative_path"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+func topicView(record port.DocumentRecord) TopicView {
+	name, _ := catalog.TopicNameForDocument(record.Document)
+	if name == "" {
+		name = record.Document.Index.Title
+	}
+	return TopicView{ID: string(record.Document.ID), Name: name, Path: record.AbsolutePath, RelativePath: record.Document.Location.RelativePath, CreatedAt: record.Document.CreatedAt, UpdatedAt: record.Document.UpdatedAt}
+}
+
+type ListTopicsQuery struct{}
+
+func (b *Box) ListTopics(ctx context.Context, _ ListTopicsQuery) ([]TopicView, error) {
+	topics, err := b.service.ListTopics(ctx)
+	if err != nil {
+		return nil, err
+	}
+	views := make([]TopicView, 0, len(topics))
+	for _, record := range topics {
+		views = append(views, topicView(record))
+	}
+	return views, nil
+}
+
+type CreateTopicCommand struct{ Name string }
+
+type CreateTopicResult struct {
+	Topic         TopicView `json:"topic"`
+	AlreadyExists bool      `json:"already_exists"`
+}
+
+func (b *Box) CreateTopic(ctx context.Context, command CreateTopicCommand) (CreateTopicResult, error) {
+	name := strings.TrimSpace(command.Name)
+	if name == "" {
+		return CreateTopicResult{}, errors.New("topic name is required")
+	}
+	before, err := b.service.ListTopics(ctx)
+	if err != nil {
+		return CreateTopicResult{}, err
+	}
+	for _, existing := range before {
+		topicName, _ := catalog.TopicNameForDocument(existing.Document)
+		if strings.EqualFold(topicName, name) || strings.EqualFold(existing.Document.Index.Title, name) {
+			return CreateTopicResult{Topic: topicView(existing), AlreadyExists: true}, nil
+		}
+	}
+	created, err := b.service.CreateNote(ctx, application.CreateNoteOptions{Title: name, Topic: true})
+	if err != nil {
+		return CreateTopicResult{}, err
+	}
+	return CreateTopicResult{Topic: topicView(port.DocumentRecord{Document: created.Document, AbsolutePath: created.Path})}, nil
+}
+
+type TopicMembershipCommand struct {
+	DocumentSelector string
+	TopicSelector    string
+}
+
+type TopicMembershipResult struct {
+	DocumentID    string    `json:"document_id"`
+	Topic         TopicView `json:"topic"`
+	Added         bool      `json:"added"`
+	Removed       bool      `json:"removed"`
+	AlreadyExists bool      `json:"already_exists,omitempty"`
+}
+
+func (b *Box) AddDocumentTopic(ctx context.Context, command TopicMembershipCommand) (TopicMembershipResult, error) {
+	document, _, err := b.service.ResolveDocument(ctx, command.DocumentSelector)
+	if err != nil {
+		return TopicMembershipResult{}, err
+	}
+	topic, _, err := b.service.ResolveTopicSelector(ctx, command.TopicSelector)
+	if err != nil {
+		return TopicMembershipResult{}, err
+	}
+	added, err := b.service.AddDocumentTopic(ctx, command.DocumentSelector, command.TopicSelector)
+	return TopicMembershipResult{DocumentID: string(document.ID), Topic: topicView(port.DocumentRecord{Document: topic}), Added: added, AlreadyExists: !added}, err
+}
+
+func (b *Box) RemoveDocumentTopic(ctx context.Context, command TopicMembershipCommand) (TopicMembershipResult, error) {
+	document, _, err := b.service.ResolveDocument(ctx, command.DocumentSelector)
+	if err != nil {
+		return TopicMembershipResult{}, err
+	}
+	topic, _, err := b.service.ResolveTopicSelector(ctx, command.TopicSelector)
+	if err != nil {
+		return TopicMembershipResult{}, err
+	}
+	removed, err := b.service.RemoveDocumentTopic(ctx, command.DocumentSelector, command.TopicSelector)
+	return TopicMembershipResult{DocumentID: string(document.ID), Topic: topicView(port.DocumentRecord{Document: topic}), Removed: removed}, err
+}
+
+type ListTopicDocumentsQuery struct{ Selector string }
+type TopicDocumentsView struct {
+	Topic     TopicView      `json:"topic"`
+	Documents []DocumentView `json:"documents"`
+}
+
+func (b *Box) ListTopicDocuments(ctx context.Context, query ListTopicDocumentsQuery) (TopicDocumentsView, error) {
+	topic, topicPath, links, err := b.service.ListTopicDocuments(ctx, query.Selector)
+	if err != nil {
+		return TopicDocumentsView{}, err
+	}
+	result := TopicDocumentsView{Topic: topicView(port.DocumentRecord{Document: topic, AbsolutePath: topicPath}), Documents: make([]DocumentView, 0, len(links))}
+	for _, link := range links {
+		result.Documents = append(result.Documents, documentView(link.Document, link.Path))
+	}
+	return result, nil
+}
+
+type LinkDocumentsCommand struct {
+	FromSelector string
+	ToSelector   string
+}
+
+type LinkDocumentsResult struct {
+	Created       bool `json:"created"`
+	AlreadyExists bool `json:"already_exists"`
+}
+
+func (b *Box) LinkDocuments(ctx context.Context, command LinkDocumentsCommand) (LinkDocumentsResult, error) {
+	result, err := b.service.LinkDocuments(ctx, command.FromSelector, command.ToSelector)
+	return LinkDocumentsResult{Created: result.Created, AlreadyExists: result.AlreadyExists}, err
+}
+
+type UnlinkDocumentsCommand struct {
+	FromSelector string
+	ToSelector   string
+}
+
+type UnlinkDocumentsResult struct {
+	Removed bool `json:"removed"`
+}
+
+func (b *Box) UnlinkDocuments(ctx context.Context, command UnlinkDocumentsCommand) (UnlinkDocumentsResult, error) {
+	removed, err := b.service.UnlinkDocuments(ctx, command.FromSelector, command.ToSelector)
+	return UnlinkDocumentsResult{Removed: removed}, err
+}
+
+type GetDocumentGraphQuery struct{ Selector string }
+type DocumentGraphView struct {
+	Focus    DocumentView   `json:"focus"`
+	Outgoing []DocumentView `json:"outgoing"`
+	Incoming []DocumentView `json:"incoming"`
+	Topics   []TopicView    `json:"topics"`
+}
+
+func (b *Box) GetDocumentGraph(ctx context.Context, query GetDocumentGraphQuery) (DocumentGraphView, error) {
+	document, graph, err := b.service.GetDocumentGraph(ctx, query.Selector)
+	if err != nil {
+		return DocumentGraphView{}, err
+	}
+	focusPath := ""
+	if _, path, resolveErr := b.service.ResolveDocument(ctx, string(document.ID)); resolveErr == nil {
+		focusPath = path
+	}
+	result := DocumentGraphView{
+		Focus:    documentView(document, focusPath),
+		Outgoing: make([]DocumentView, 0, len(graph.Outgoing)),
+		Incoming: make([]DocumentView, 0, len(graph.Incoming)),
+		Topics:   make([]TopicView, 0, len(graph.Topics)),
+	}
+	for _, link := range graph.Outgoing {
+		result.Outgoing = append(result.Outgoing, documentView(link.Document, link.Path))
+	}
+	for _, link := range graph.Incoming {
+		result.Incoming = append(result.Incoming, documentView(link.Document, link.Path))
+	}
+	for _, link := range graph.Topics {
+		result.Topics = append(result.Topics, topicView(port.DocumentRecord{Document: link.Document, AbsolutePath: link.Path}))
+	}
+	return result, nil
+}
+
 type ReadDocumentQuery struct{ Selector string }
 
 func (b *Box) ReadDocument(ctx context.Context, query ReadDocumentQuery) ([]byte, error) {
@@ -223,6 +433,17 @@ type ToggleDocumentPinResult struct {
 func (b *Box) ToggleDocumentPin(ctx context.Context, command ToggleDocumentPinCommand) (ToggleDocumentPinResult, error) {
 	result, err := b.service.ToggleDocumentPin(ctx, command.Selector)
 	return ToggleDocumentPinResult{DocumentID: string(result.DocumentID), Pinned: result.Pinned}, err
+}
+
+type DeleteDocumentCommand struct{ Selector string }
+type DeleteDocumentResult struct {
+	DocumentID string `json:"document_id"`
+	Path       string `json:"path"`
+}
+
+func (b *Box) DeleteDocument(ctx context.Context, command DeleteDocumentCommand) (DeleteDocumentResult, error) {
+	document, path, err := b.service.DeleteDocumentFile(ctx, command.Selector)
+	return DeleteDocumentResult{DocumentID: string(document.ID), Path: path}, err
 }
 
 type ReindexDocumentCommand struct{ Selector string }

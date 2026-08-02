@@ -112,6 +112,44 @@ func TestMVP_PathAddSearchEditRenameAndRestoreIdentity(t *testing.T) {
 	}
 }
 
+func TestDocumentDeleteFileRemovesFileAndMarksMissingAfterScan(t *testing.T) {
+	ctx := context.Background()
+	home, notes := t.TempDir(), t.TempDir()
+	path := filepath.Join(notes, "delete.md")
+	if err := os.WriteFile(path, []byte("# Delete\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	box, err := membox.Open(membox.Config{Home: home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer box.Close()
+	if _, err := box.AddPath(ctx, membox.AddPathCommand{Directory: notes}); err != nil {
+		t.Fatal(err)
+	}
+	documents, err := box.ListDocuments(ctx, membox.ListDocumentsQuery{Limit: 10})
+	if err != nil || len(documents) != 1 {
+		t.Fatalf("list failed: count=%d err=%v", len(documents), err)
+	}
+	result, err := box.DeleteDocument(ctx, membox.DeleteDocumentCommand{Selector: documents[0].ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.DocumentID != documents[0].ID || result.Path != documents[0].Path {
+		t.Fatalf("unexpected delete result: %+v", result)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("file still exists: %v", err)
+	}
+	document, err := box.GetDocument(ctx, membox.GetDocumentQuery{Selector: documents[0].ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if document.Status != "missing" {
+		t.Fatalf("deleted document status=%s", document.Status)
+	}
+}
+
 func TestDocumentPinPersistsAcrossReopenAndTogglesOff(t *testing.T) {
 	ctx := context.Background()
 	home, notes := t.TempDir(), t.TempDir()

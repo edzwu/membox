@@ -14,5 +14,5 @@ func Open(databasePath string) (*application.Service, error) {
 		return nil, err
 	}
 	scanner := filesystem.NewScanner()
-	return application.NewService(store, scanner, filesystem.Reader{}, system.IDGenerator{}, system.Clock{}, git.History{}), nil
+	return application.NewService(store, scanner, filesystem.Reader{}, filesystem.Writer{}, system.IDGenerator{}, system.Clock{}, git.History{}), nil
 }
