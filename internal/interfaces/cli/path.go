@@ -98,8 +98,10 @@ func newPathRemoveCommand(runtime *runtime) *cobra.Command {
 
 func newPathScanCommand(runtime *runtime) *cobra.Command {
 	var jsonOutput bool
+	var timestampSource string
 	command := &cobra.Command{Use: "scan [path-id-or-directory]", Short: "Scan configured paths", Args: maxArgs(1)}
 	command.Flags().BoolVar(&jsonOutput, "json", false, "output JSON")
+	command.Flags().StringVar(&timestampSource, "timestamp", "filesystem", "document timestamp source: filesystem or git")
 	command.RunE = func(cmd *cobra.Command, args []string) error {
 		selector := ""
 		if len(args) == 1 {
@@ -109,7 +111,7 @@ func newPathScanCommand(runtime *runtime) *cobra.Command {
 		if err != nil {
 			return err
 		}
-		report, scanErr := box.ScanPaths(cmd.Context(), membox.ScanPathsCommand{Selector: selector})
+		report, scanErr := box.ScanPaths(cmd.Context(), membox.ScanPathsCommand{Selector: selector, TimestampSource: timestampSource})
 		if jsonOutput {
 			if err := writeJSON(cmd, report); err != nil {
 				return err
@@ -131,6 +133,14 @@ func printScanSummary(cmd *cobra.Command, report membox.ScanReport) {
 	fmt.Fprintf(cmd.OutOrStdout(), "  missing:           %d\n", report.Missing)
 	fmt.Fprintf(cmd.OutOrStdout(), "  possible renames:  %d\n", report.PossibleRenames)
 	fmt.Fprintf(cmd.OutOrStdout(), "  errors:            %d\n", report.Errors)
+	if report.TimestampSource == "git" {
+		fmt.Fprintln(cmd.OutOrStdout(), "Git timestamps")
+		fmt.Fprintf(cmd.OutOrStdout(), "  Git paths:         %d\n", report.GitPaths)
+		fmt.Fprintf(cmd.OutOrStdout(), "  updated:           %d\n", report.TimestampsUpdated)
+		fmt.Fprintf(cmd.OutOrStdout(), "  unchanged:         %d\n", report.TimestampsUnchanged)
+		fmt.Fprintf(cmd.OutOrStdout(), "  no Git history:    %d\n", report.NoGitHistory)
+		fmt.Fprintf(cmd.OutOrStdout(), "  non-Git paths:     %d\n", report.NonGitPaths)
+	}
 }
 
 func writeJSON(cmd *cobra.Command, value any) error {

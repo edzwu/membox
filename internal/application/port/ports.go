@@ -34,6 +34,18 @@ type IDGenerator interface {
 
 type Clock interface{ Now() time.Time }
 
+type RevisionTimes struct {
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// GitHistory reads source timestamps without exposing process execution to the
+// application layer. RepositoryRoot returns applicable=false for non-Git paths.
+type GitHistory interface {
+	RepositoryRoot(ctx context.Context, directory string) (root string, applicable bool, err error)
+	FileTimes(ctx context.Context, repositoryRoot, absolutePath string) (RevisionTimes, bool, error)
+}
+
 type PathSummary struct {
 	Path          catalog.IndexedPath
 	DocumentCount int
@@ -68,6 +80,7 @@ type CatalogStore interface {
 	DocumentsForPath(ctx context.Context, id catalog.IndexedPathID) ([]*catalog.Document, error)
 	SaveScan(ctx context.Context, indexedPath *catalog.IndexedPath, saves []ScanSave) error
 	SaveDocument(ctx context.Context, save ScanSave) error
+	SaveSourceTimes(ctx context.Context, documents []*catalog.Document) error
 	Search(ctx context.Context, query string, limit int) ([]SearchHit, error)
 	ListDocuments(ctx context.Context, limit int, includeUnavailable bool) ([]DocumentRecord, error)
 	ResolveDocument(ctx context.Context, selector string) (*catalog.Document, string, error)

@@ -99,12 +99,16 @@ func TestModel_DefaultShowsUUIDAndOriginalFilename(t *testing.T) {
 func TestModel_TreeShowsDatesWhenSpaceAllows(t *testing.T) {
 	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
 	model.width, model.height = 180, 24
+	created := time.Date(2024, 1, 3, 12, 0, 0, 0, time.Local)
 	updated := time.Date(2026, 8, 2, 12, 0, 0, 0, time.Local)
-	model.items = documentItems([]membox.DocumentView{{ID: "019fbe56-64c3-7e3c-861d-4da66742dabf", Title: "Alpha", Path: "/tmp/alpha.md", MTime: updated.UnixNano()}})
+	model.items = documentItems([]membox.DocumentView{{
+		ID: "019fbe56-64c3-7e3c-861d-4da66742dabf", Title: "Alpha", Path: "/tmp/alpha.md",
+		CreatedAt: created, UpdatedAt: updated,
+	}})
 	model.refreshFilter()
 	view := model.treePreviewView()
-	if !strings.Contains(view, "2026-08-02  2026-08-02") {
-		t.Fatalf("tree does not contain filesystem modified date: %q", view)
+	if !strings.Contains(view, "2024-01-03  2026-08-02") {
+		t.Fatalf("tree does not contain document source dates: %q", view)
 	}
 }
 
@@ -114,7 +118,7 @@ func TestModel_FocusedDocumentShowsDetailsPanel(t *testing.T) {
 	updated := time.Date(2026, 8, 2, 12, 0, 0, 0, time.Local)
 	model.items = documentItems([]membox.DocumentView{{
 		ID: "019fbe56-64c3-7e3c-861d-4da66742dabf", Title: "Alpha", Path: "/tmp/alpha.md",
-		MTime: updated.UnixNano(),
+		UpdatedAt: updated,
 	}})
 	model.refreshFilter()
 	model.detailsVisible = true
@@ -126,7 +130,7 @@ func TestModel_FocusedDocumentShowsDetailsPanel(t *testing.T) {
 		t.Fatalf("details missing disk path: %q", view)
 	}
 	if !strings.Contains(view, "2026-08-02") {
-		t.Fatalf("details missing filesystem modified date: %q", view)
+		t.Fatalf("details missing document modified date: %q", view)
 	}
 }
 
@@ -200,7 +204,7 @@ func TestModel_DoubleSpaceDoesNotToggleDetails(t *testing.T) {
 	}
 }
 
-func TestModel_DoubleSpaceTogglesInput(t *testing.T) {
+func TestModel_DoubleSpaceOpensInputAndSpacesRemainAvailableForText(t *testing.T) {
 	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
 	space := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}}
 	updated, _ := model.Update(space)
@@ -214,8 +218,8 @@ func TestModel_DoubleSpaceTogglesInput(t *testing.T) {
 	model = updated.(Model)
 	updated, _ = model.Update(space)
 	model = updated.(Model)
-	if model.inputVisible || model.inputActive {
-		t.Fatalf("double space did not hide input")
+	if !model.inputVisible || !model.inputActive || model.input.Value() != "  " {
+		t.Fatalf("spaces in active filter changed input state: visible=%v active=%v value=%q", model.inputVisible, model.inputActive, model.input.Value())
 	}
 }
 
@@ -236,6 +240,105 @@ func TestModel_FilterNarrowsResults(t *testing.T) {
 	model.refreshFilter()
 	if len(model.filtered) != 1 || model.filtered[0].document.ID != "019-alpha" {
 		t.Fatalf("UUID filter did not match: %+v", model.filtered)
+	}
+}
+
+func TestModel_DateTagsRenderAndFilterWithANDSemantics(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.width, model.height = 120, 24
+	model.items = documentItems([]membox.DocumentView{
+		{ID: "july-2025", Title: "July 2025", Path: "/tmp/a.md", CreatedAt: time.Date(2025, 2, 1, 0, 0, 0, 0, time.Local), UpdatedAt: time.Date(2026, 7, 10, 0, 0, 0, 0, time.Local)},
+		{ID: "july-2024", Title: "July 2024", Path: "/tmp/b.md", CreatedAt: time.Date(2024, 2, 1, 0, 0, 0, 0, time.Local), UpdatedAt: time.Date(2026, 7, 20, 0, 0, 0, 0, time.Local)},
+		{ID: "aug-2025", Title: "August 2025", Path: "/tmp/c.md", CreatedAt: time.Date(2025, 2, 1, 0, 0, 0, 0, time.Local), UpdatedAt: time.Date(2026, 8, 1, 0, 0, 0, 0, time.Local)},
+	})
+	model.inputVisible, model.inputActive = true, true
+	model.input.Focus()
+	model.input.SetValue("+2026-07")
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+	model = updated.(Model)
+	if len(model.dateFilters) != 1 || model.input.Value() != "" || len(model.filtered) != 2 {
+		t.Fatalf("month tag was not committed: tags=%+v input=%q filtered=%d", model.dateFilters, model.input.Value(), len(model.filtered))
+	}
+	if !strings.Contains(model.inputView(), "+2026-07") {
+		t.Fatalf("tag is not rendered above input: %q", model.inputView())
+	}
+
+	model.input.SetValue("+c:2025")
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if !model.inputVisible || len(model.dateFilters) != 2 || len(model.filtered) != 1 || model.filtered[0].document.ID != "july-2025" {
+		t.Fatalf("date tags do not use AND semantics: tags=%+v filtered=%+v", model.dateFilters, model.filtered)
+	}
+}
+
+func TestModel_FullSearchResultsRespectDateTags(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.items = documentItems([]membox.DocumentView{
+		{ID: "july", Path: "/tmp/july.md", UpdatedAt: time.Date(2026, 7, 1, 0, 0, 0, 0, time.Local)},
+		{ID: "august", Path: "/tmp/august.md", UpdatedAt: time.Date(2026, 8, 1, 0, 0, 0, 0, time.Local)},
+	})
+	filter, err := parseDateFilter("+2026-07", time.Date(2026, 8, 2, 0, 0, 0, 0, time.Local))
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.dateFilters = []dateFilter{filter}
+	model.searchMode = searchModeFull
+	model.inputVisible, model.inputActive = true, true
+	model.input.SetValue("query")
+	updated, _ := model.Update(searchMsg{query: "query", results: []membox.SearchResult{{DocumentID: "july"}, {DocumentID: "august"}}})
+	model = updated.(Model)
+	if len(model.filtered) != 1 || model.filtered[0].document.ID != "july" || len(model.dateFilters) != 1 {
+		t.Fatalf("full search did not preserve date filter: filtered=%+v tags=%+v", model.filtered, model.dateFilters)
+	}
+}
+
+func TestModel_ClearAndBackspaceRemoveDateTags(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.items = documentItems([]membox.DocumentView{{ID: "one", Path: "/tmp/one.md", UpdatedAt: time.Date(2026, 7, 1, 0, 0, 0, 0, time.Local)}})
+	model.inputVisible, model.inputActive = true, true
+	model.input.Focus()
+	model.input.SetValue("+2026")
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if len(model.dateFilters) != 1 {
+		t.Fatal("date tag was not added")
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	model = updated.(Model)
+	if len(model.dateFilters) != 0 {
+		t.Fatal("empty backspace did not remove last date tag")
+	}
+
+	model.input.SetValue("+2026")
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	model.input.SetValue("/clear")
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if len(model.dateFilters) != 0 || model.input.Value() != "" {
+		t.Fatalf("/clear did not clear tags: tags=%+v input=%q", model.dateFilters, model.input.Value())
+	}
+}
+
+func TestModel_InvalidDateTagShowsErrorAndEscPreservesValidTags(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.items = documentItems([]membox.DocumentView{{ID: "one", Path: "/tmp/one.md", UpdatedAt: time.Date(2026, 7, 1, 0, 0, 0, 0, time.Local)}})
+	model.inputVisible, model.inputActive = true, true
+	model.input.Focus()
+	model.input.SetValue("+2026-02-30")
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if model.filterErr == nil || len(model.dateFilters) != 0 || !model.inputVisible {
+		t.Fatalf("invalid tag was accepted: err=%v tags=%+v", model.filterErr, model.dateFilters)
+	}
+
+	model.input.SetValue("+2026-07")
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model = updated.(Model)
+	if model.inputVisible || len(model.dateFilters) != 1 || len(model.filtered) != 1 {
+		t.Fatalf("esc did not preserve active tags: visible=%v tags=%+v filtered=%d", model.inputVisible, model.dateFilters, len(model.filtered))
 	}
 }
 
@@ -393,6 +496,16 @@ func TestModel_ViewUsesTerminalHeightExactly(t *testing.T) {
 	}
 	if !strings.Contains(lines[len(lines)-1], "tab mode") {
 		t.Fatalf("status bar is not bottom: %q", lines[len(lines)-1])
+	}
+	filter, err := parseDateFilter("+2026-07", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.dateFilters = []dateFilter{filter}
+	view = model.View()
+	lines = strings.Split(strings.TrimRight(view, "\n"), "\n")
+	if len(lines) != model.height || !strings.Contains(view, "+2026-07") {
+		t.Fatalf("tag row broke terminal height: height=%d want=%d view=%q", len(lines), model.height, view)
 	}
 }
 

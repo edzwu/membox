@@ -71,17 +71,26 @@ type RemovePathResult struct {
 	Documents int   `json:"documents"`
 }
 
-type ScanPathsCommand struct{ Selector string }
+type ScanPathsCommand struct {
+	Selector        string
+	TimestampSource string
+}
 type ScanReport struct {
-	Paths           int `json:"paths"`
-	Files           int `json:"files"`
-	Added           int `json:"added"`
-	Updated         int `json:"updated"`
-	Renamed         int `json:"renamed"`
-	Unchanged       int `json:"unchanged"`
-	Missing         int `json:"missing"`
-	PossibleRenames int `json:"possible_renames"`
-	Errors          int `json:"errors"`
+	Paths               int    `json:"paths"`
+	Files               int    `json:"files"`
+	Added               int    `json:"added"`
+	Updated             int    `json:"updated"`
+	Renamed             int    `json:"renamed"`
+	Unchanged           int    `json:"unchanged"`
+	Missing             int    `json:"missing"`
+	PossibleRenames     int    `json:"possible_renames"`
+	Errors              int    `json:"errors"`
+	TimestampSource     string `json:"timestamp_source,omitempty"`
+	GitPaths            int    `json:"git_paths,omitempty"`
+	TimestampsUpdated   int    `json:"timestamps_updated,omitempty"`
+	TimestampsUnchanged int    `json:"timestamps_unchanged,omitempty"`
+	NoGitHistory        int    `json:"no_git_history,omitempty"`
+	NonGitPaths         int    `json:"non_git_paths,omitempty"`
 }
 
 func (b *Box) AddPath(ctx context.Context, command AddPathCommand) (AddPathResult, error) {
@@ -107,7 +116,7 @@ func (b *Box) RemovePath(ctx context.Context, command RemovePathCommand) (Remove
 }
 
 func (b *Box) ScanPaths(ctx context.Context, command ScanPathsCommand) (ScanReport, error) {
-	report, err := b.service.ScanPaths(ctx, application.ScanOptions{Selector: command.Selector})
+	report, err := b.service.ScanPaths(ctx, application.ScanOptions{Selector: command.Selector, TimestampSource: command.TimestampSource})
 	return scanReport(report), err
 }
 
@@ -179,7 +188,7 @@ func (b *Box) GetDocument(ctx context.Context, query GetDocumentQuery) (Document
 func documentView(document *catalog.Document, path string) DocumentView {
 	view := DocumentView{ID: string(document.ID), Path: path, PathID: int64(document.Location.PathID), RelativePath: document.Location.RelativePath,
 		Status: string(document.Status), Title: document.Index.Title, Summary: document.Index.Summary, MTime: document.Index.MTime, Size: document.Index.Size,
-		SHA256: document.Index.SHA256, CreatedAt: document.CreatedAt, UpdatedAt: document.UpdatedAt}
+		SHA256: document.Index.SHA256, CreatedAt: document.Index.SourceCreatedAt, UpdatedAt: document.Index.SourceUpdatedAt}
 	if !document.Index.IndexedAt.IsZero() {
 		value := document.Index.IndexedAt
 		view.IndexedAt = &value
@@ -233,5 +242,7 @@ func pathView(summary port.PathSummary) PathView {
 func scanReport(report application.ScanReport) ScanReport {
 	return ScanReport{Paths: report.Paths, Files: report.Files, Added: report.Added, Updated: report.Updated,
 		Renamed: report.Renamed, Unchanged: report.Unchanged, Missing: report.Missing,
-		PossibleRenames: report.PossibleRenames, Errors: report.Errors}
+		PossibleRenames: report.PossibleRenames, Errors: report.Errors, TimestampSource: report.TimestampSource,
+		GitPaths: report.GitPaths, TimestampsUpdated: report.TimestampsUpdated, TimestampsUnchanged: report.TimestampsUnchanged,
+		NoGitHistory: report.NoGitHistory, NonGitPaths: report.NonGitPaths}
 }

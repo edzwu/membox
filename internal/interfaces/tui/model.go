@@ -61,6 +61,7 @@ type Model struct {
 
 	items         []item
 	filtered      []item
+	dateFilters   []dateFilter
 	selected      int
 	scrollTop     int
 	boardScrollY  int
@@ -75,6 +76,7 @@ type Model struct {
 
 	loading       bool
 	err           error
+	filterErr     error
 	width, height int
 	listSequence  uint64
 	spaceSequence uint64
@@ -162,7 +164,7 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if strings.TrimSpace(m.input.Value()) == msg.query && m.searchMode == searchModeFull {
 			m.loading, m.err = false, msg.err
 			if msg.err == nil {
-				m.filtered = searchResultItems(m.items, msg.results)
+				m.filtered = searchResultItems(m.items, msg.results, m.dateFilters)
 				m.selected = 0
 				m.keepSelectionVisible()
 				m.applyPreviewContent()
@@ -274,6 +276,7 @@ func (m Model) updateFilterInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	switch msg.String() {
 	case "esc":
+		m.filterErr = nil
 		m.hideInput()
 		m.refreshFilter()
 		return m, m.loadPreview()
@@ -283,17 +286,20 @@ func (m Model) updateFilterInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else {
 			m.searchMode = searchModeName
 		}
-		if m.searchMode == searchModeFull && strings.TrimSpace(m.input.Value()) != "" {
-			m.loading = true
-			return m, tea.Batch(m.spinner.Tick, searchDocumentsCmd(m.ctx, m.app, m.input.Value()))
-		}
-		m.refreshFilter()
-		return m, m.loadPreview()
+		return m, m.filterChanged(nil)
 	case "ctrl+g":
 		m.detailsVisible = !m.detailsVisible
 		m.keepSelectionVisible()
 		return m, nil
 	case "enter":
+		handled, err := m.commitFilterToken()
+		if handled {
+			m.filterErr = err
+			if err != nil {
+				return m, nil
+			}
+			return m, m.filterChanged(nil)
+		}
 		m.hideInput()
 		if document, ok := m.selectedDocument(); ok {
 			m.loading = true
@@ -304,40 +310,29 @@ func (m Model) updateFilterInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.moveSelection(msg.String())
 	case "ctrl+u":
 		m.input.SetValue("")
-		m.refreshFilter()
-		return m, m.loadPreview()
+		return m, m.filterChanged(nil)
+	case "backspace":
+		if m.input.Value() == "" && len(m.dateFilters) > 0 {
+			m.dateFilters = m.dateFilters[:len(m.dateFilters)-1]
+			return m, m.filterChanged(nil)
+		}
 	case "space", " ":
-		if m.lastKeyAt.Add(doubleSpaceWindow).After(time.Now()) {
-			m.spaceSequence++
-			m.lastKeyAt = time.Time{}
-			m.input.SetValue(strings.TrimSuffix(m.input.Value(), " "))
-			m.hideInput()
-			m.refreshFilter()
-			return m, m.loadPreview()
-		}
-		m.lastKeyAt = time.Now()
-		m.spaceSequence++
-		sequence := m.spaceSequence
-		return m, tea.Tick(doubleSpaceWindow, func(time.Time) tea.Msg { return spaceTimeoutMsg{sequence: sequence} })
-	default:
-		m.spaceSequence = 0
-		m.lastKeyAt = time.Time{}
-		var command tea.Cmd
-		m.input, command = m.input.Update(msg)
-		m.applyPreviewContent()
-		if m.searchMode == searchModeFull {
-			query := strings.TrimSpace(m.input.Value())
-			m.loading = true
-			if query == "" {
-				m.loading = false
-				m.refreshFilter()
-				return m, tea.Batch(command, m.loadPreview())
+		handled, err := m.commitFilterToken()
+		if handled {
+			m.filterErr = err
+			if err != nil {
+				return m, nil
 			}
-			return m, tea.Batch(command, m.spinner.Tick, searchDocumentsCmd(m.ctx, m.app, m.input.Value()))
+			return m, m.filterChanged(nil)
 		}
-		m.refreshFilter()
-		return m, tea.Batch(command, m.loadPreview())
 	}
+
+	m.spaceSequence = 0
+	m.lastKeyAt = time.Time{}
+	m.filterErr = nil
+	var command tea.Cmd
+	m.input, command = m.input.Update(msg)
+	return m, m.filterChanged(command)
 }
 
 func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -547,10 +542,14 @@ func (m *Model) scrollBoardToSelection() {
 
 func (m Model) visibleRows() int {
 	if m.inputVisible {
-		if m.detailsVisible {
-			return max(3, m.height-5)
+		tagRows := 0
+		if len(m.dateFilters) > 0 {
+			tagRows = 1
 		}
-		return max(3, m.height-3)
+		if m.detailsVisible {
+			return max(3, m.height-5-tagRows)
+		}
+		return max(3, m.height-3-tagRows)
 	}
 	if m.detailsVisible {
 		return max(3, m.height-3)
@@ -590,16 +589,62 @@ func (m *Model) hideInput() {
 	m.input.SetValue("")
 }
 
+func (m *Model) commitFilterToken() (bool, error) {
+	value := strings.TrimRight(m.input.Value(), " \t")
+	separator := strings.LastIndexAny(value, " \t")
+	token := value
+	remaining := ""
+	if separator >= 0 {
+		token = value[separator+1:]
+		remaining = strings.TrimSpace(value[:separator])
+	}
+	remainingInput := remaining
+	if remainingInput != "" {
+		remainingInput += " "
+	}
+	if token == "/clear" {
+		m.dateFilters = nil
+		m.input.SetValue(remainingInput)
+		return true, nil
+	}
+	if !strings.HasPrefix(token, "+") {
+		return false, nil
+	}
+	filter, err := parseDateFilter(token, time.Now())
+	if err != nil {
+		return true, err
+	}
+	for _, existing := range m.dateFilters {
+		if existing.Label == filter.Label {
+			m.input.SetValue(remainingInput)
+			return true, nil
+		}
+	}
+	m.dateFilters = append(m.dateFilters, filter)
+	m.input.SetValue(remainingInput)
+	return true, nil
+}
+
+func (m *Model) filterChanged(inputCommand tea.Cmd) tea.Cmd {
+	m.filterErr = nil
+	m.applyPreviewContent()
+	query := strings.TrimSpace(m.input.Value())
+	if m.searchMode == searchModeFull && query != "" {
+		m.loading = true
+		return tea.Batch(inputCommand, m.spinner.Tick, searchDocumentsCmd(m.ctx, m.app, query))
+	}
+	m.loading = false
+	m.refreshFilter()
+	return tea.Batch(inputCommand, m.loadPreview())
+}
+
 func (m *Model) refreshFilter() {
 	query := strings.ToLower(strings.TrimSpace(m.input.Value()))
-	if !m.inputVisible || query == "" {
-		m.filtered = append([]item(nil), m.items...)
-	} else {
-		m.filtered = m.filtered[:0]
-		for _, candidate := range m.items {
-			if wordsMatch(candidate.match, query) {
-				m.filtered = append(m.filtered, candidate)
-			}
+	m.filtered = m.filtered[:0]
+	for _, candidate := range m.items {
+		textMatches := !m.inputVisible || query == "" || wordsMatch(candidate.match, query)
+		if textMatches && matchesDateFilters(candidate.document, m.dateFilters) {
+			m.filtered = append(m.filtered, candidate)
 		}
 	}
 	if len(m.filtered) == 0 {
@@ -755,7 +800,7 @@ func (m Model) detailsView() string {
 	path := fitWidth(document.Path, max(20, m.width-20))
 	left := dimStyle.Render("id      ") + id
 	right := dimStyle.Render("path    ") + path
-	timeLine := dimStyle.Render("modified ") + dateOnly(document.MTime)
+	timeLine := dimStyle.Render("modified ") + dateOnly(document.UpdatedAt)
 	first := lipgloss.JoinHorizontal(lipgloss.Top, left, strings.Repeat(" ", max(2, m.width-4-lipgloss.Width(left)-lipgloss.Width(right))), right)
 	content := fitWidth(first, max(10, m.width-4)) + "\n" + fitWidth(timeLine, max(10, m.width-4))
 	return border.Render(content)
@@ -789,10 +834,10 @@ func (m Model) treePreviewView() string {
 		filename := fitMiddle(candidate.filename, filenameWidth)
 		dates := ""
 		if listWidth >= 72 {
-			created, updated := dateOnly(candidate.document.MTime), dateOnly(candidate.document.MTime)
+			created, updated := dateOnly(candidate.document.CreatedAt), dateOnly(candidate.document.UpdatedAt)
 			dates = dimStyle.Render("  " + created + "  " + updated)
 		} else if listWidth >= 52 {
-			dates = dimStyle.Render("  " + dateOnly(candidate.document.MTime))
+			dates = dimStyle.Render("  " + dateOnly(candidate.document.UpdatedAt))
 		}
 		line := lipgloss.NewStyle().Width(listWidth - 2).MaxWidth(listWidth - 2).Inline(true).Render(uuid + "  " + filename + dates)
 		if i == m.selected {
@@ -979,6 +1024,23 @@ func wrapText(text string, width int) []string {
 	return strings.Split(wrapped, "\n")
 }
 
+func (m Model) tagsView() string {
+	if len(m.dateFilters) == 0 {
+		return ""
+	}
+	modifiedStyle := lipgloss.NewStyle().Background(lipgloss.AdaptiveColor{Dark: "#3159b8", Light: "#d9e8ff"}).Foreground(lipgloss.AdaptiveColor{Dark: "#ffffff", Light: "#1b3a5b"}).Bold(true)
+	createdStyle := lipgloss.NewStyle().Background(lipgloss.AdaptiveColor{Dark: "#8a5a00", Light: "#ffe2a8"}).Foreground(lipgloss.AdaptiveColor{Dark: "#fff7e6", Light: "#5b3900"}).Bold(true)
+	parts := make([]string, 0, len(m.dateFilters))
+	for _, filter := range m.dateFilters {
+		style := modifiedStyle
+		if filter.Field == dateFilterCreated {
+			style = createdStyle
+		}
+		parts = append(parts, style.Render(" "+filter.Label+" "))
+	}
+	return ansi.Truncate(strings.Join(parts, " "), max(10, m.width-2), "…")
+}
+
 func (m Model) inputView() string {
 	value := m.input.View()
 	innerWidth := max(10, m.width-2)
@@ -987,7 +1049,11 @@ func (m Model) inputView() string {
 	field := lipgloss.NewStyle().Width(fieldWidth).MaxWidth(fieldWidth).Inline(true).Render(value)
 	line := lipgloss.NewStyle().Width(innerWidth).MaxWidth(innerWidth).Inline(true).Render(badge + " " + field)
 	border := lipgloss.NewStyle().Width(innerWidth).MaxWidth(innerWidth).Border(lipgloss.NormalBorder(), true, false, false, false).BorderForeground(colors.BorderAccent)
-	return border.Render(line)
+	input := border.Render(line)
+	if tags := m.tagsView(); tags != "" {
+		return tags + "\n" + input
+	}
+	return input
 }
 
 func (m Model) statusBar() string {
@@ -997,12 +1063,17 @@ func (m Model) statusBar() string {
 	if m.loading {
 		right = m.spinner.View() + " " + right
 	}
-	if m.err != nil {
+	if m.filterErr != nil {
+		right += errorStyle.Render("Invalid filter: " + m.filterErr.Error())
+	} else if m.err != nil {
 		right += errorStyle.Render("Error: " + m.err.Error())
 	} else {
 		if m.inputVisible {
 			right += accentStyle.Render("filter") + dimStyle.Render(fmt.Sprintf(" %d/%d", len(m.filtered), len(m.items)))
 		} else {
+			if len(m.dateFilters) > 0 {
+				right += accentStyle.Render(fmt.Sprintf("%d tag(s) ", len(m.dateFilters)))
+			}
 			if document, ok := m.selectedDocument(); ok {
 				right += dimStyle.Render(shortID(document.ID) + " " + displayTitle(document.Title, document.Path))
 			} else {
@@ -1032,19 +1103,19 @@ func (m Model) modeBadge() string {
 
 func (m Model) hints() string {
 	if m.inputVisible {
-		return "tab mode • ctrl+g details • ctrl+c del-char • enter open • esc hide • ctrl+d quit"
+		return "space tag • backspace last • /clear • tab mode • esc hide"
 	}
 	return "space details • space×2 filter • tab board • enter open • ↑↓ select • q back • ctrl+d quit"
 }
 
-func searchResultItems(items []item, results []membox.SearchResult) []item {
+func searchResultItems(items []item, results []membox.SearchResult, filters []dateFilter) []item {
 	allowed := make(map[string]bool, len(results))
 	for _, result := range results {
 		allowed[result.DocumentID] = true
 	}
 	filtered := make([]item, 0, len(results))
 	for _, candidate := range items {
-		if allowed[candidate.document.ID] {
+		if allowed[candidate.document.ID] && matchesDateFilters(candidate.document, filters) {
 			filtered = append(filtered, candidate)
 		}
 	}
@@ -1116,11 +1187,11 @@ func fitMiddle(value string, width int) string {
 	return ansi.Cut(value, 0, left) + "…" + ansi.TruncateLeft(value, right, "")
 }
 
-func dateOnly(value int64) string {
-	if value <= 0 {
+func dateOnly(value time.Time) string {
+	if value.IsZero() {
 		return "----------"
 	}
-	return time.Unix(0, value).Local().Format("2006-01-02")
+	return value.Local().Format("2006-01-02")
 }
 
 func shortID(id string) string { return host.ShortDocumentID(id) }

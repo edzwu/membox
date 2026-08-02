@@ -161,7 +161,7 @@ Application 负责组织 use case 和事务边界；Domain 负责业务规则；
 | IndexedPath | 用户通过 `mm path add` 注册的扫描根目录 |
 | Location | Document 当前所在的 IndexedPath 和相对路径 |
 | Observation | 一次扫描观察到的文件状态 |
-| IndexState | 最近已提交的 mtime、size、hash 和索引时间 |
+| IndexState | 最近已提交的 mtime、size、hash、索引时间，以及面向用户的来源创建/修改时间 |
 | Missing | 已知 Document 的当前 Location 未被扫描到 |
 | Relocation | 保持 DocumentID 不变并更新 Location |
 | RenameCandidate | 尚不能自动确认的可能 rename |
@@ -875,7 +875,9 @@ CREATE TABLE document_index (
     mtime INTEGER,
     size INTEGER,
     sha256 TEXT,
-    indexed_at INTEGER
+    indexed_at INTEGER,
+    source_created_at INTEGER,
+    source_updated_at INTEGER
 );
 
 CREATE VIRTUAL TABLE document_fts USING fts5(

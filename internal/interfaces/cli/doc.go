@@ -104,6 +104,8 @@ func newDocShowCommand(runtime *runtime) *cobra.Command {
 		fmt.Fprintf(cmd.OutOrStdout(), "Path:        %s\n", document.Path)
 		fmt.Fprintf(cmd.OutOrStdout(), "Status:      %s\n", document.Status)
 		fmt.Fprintf(cmd.OutOrStdout(), "Title:       %s\n", document.Title)
+		fmt.Fprintf(cmd.OutOrStdout(), "Created at:  %s\n", document.CreatedAt.Format(time.RFC3339))
+		fmt.Fprintf(cmd.OutOrStdout(), "Modified at: %s\n", document.UpdatedAt.Format(time.RFC3339))
 		fmt.Fprintf(cmd.OutOrStdout(), "Size:        %d\n", document.Size)
 		fmt.Fprintf(cmd.OutOrStdout(), "SHA-256:     %s\n", document.SHA256)
 		if document.IndexedAt != nil {

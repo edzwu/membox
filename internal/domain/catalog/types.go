@@ -52,12 +52,14 @@ type ContentFingerprint struct {
 type FileKey string
 
 type IndexState struct {
-	Title     string
-	Summary   string
-	MTime     int64
-	Size      int64
-	SHA256    string
-	IndexedAt time.Time
+	Title           string
+	Summary         string
+	MTime           int64
+	Size            int64
+	SHA256          string
+	IndexedAt       time.Time
+	SourceCreatedAt time.Time
+	SourceUpdatedAt time.Time
 }
 
 type Observation struct {
@@ -87,6 +89,7 @@ func NewDocument(id DocumentID, observation Observation, now time.Time) (*Docume
 	if err := validateObservation(observation); err != nil {
 		return nil, err
 	}
+	fileTime := time.Unix(0, observation.MTime)
 	return &Document{
 		ID:       id,
 		Location: observation.Location,
@@ -94,7 +97,7 @@ func NewDocument(id DocumentID, observation Observation, now time.Time) (*Docume
 		Status:   DocumentActive,
 		Index: IndexState{
 			Title: observation.Title, MTime: observation.MTime, Size: observation.Size,
-			SHA256: observation.SHA256, IndexedAt: now,
+			SHA256: observation.SHA256, IndexedAt: now, SourceCreatedAt: fileTime, SourceUpdatedAt: fileTime,
 		},
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -152,12 +155,36 @@ func (d *Document) MarkUntracked(now time.Time) {
 	d.UpdatedAt = now
 }
 
+// SetSourceTimes replaces the document dates shown to users with dates from
+// the content's source history (for example, Git). Aggregate audit timestamps
+// remain separate from these source timestamps.
+func (d *Document) SetSourceTimes(createdAt, updatedAt time.Time) error {
+	if createdAt.IsZero() || updatedAt.IsZero() {
+		return errors.New("source timestamps are required")
+	}
+	d.Index.SourceCreatedAt = createdAt
+	d.Index.SourceUpdatedAt = updatedAt
+	return nil
+}
+
 func (d *Document) applyObservation(observation Observation, now time.Time) {
+	fileTime := time.Unix(0, observation.MTime)
+	sourceCreatedAt := d.Index.SourceCreatedAt
+	sourceUpdatedAt := d.Index.SourceUpdatedAt
+	if sourceCreatedAt.IsZero() {
+		sourceCreatedAt = fileTime
+	}
+	// Preserve historical dates across no-op scans and renames. If content
+	// changes before it is committed, filesystem mtime is the best fallback
+	// until the user syncs Git history again.
+	if sourceUpdatedAt.IsZero() || d.Index.SHA256 != observation.SHA256 {
+		sourceUpdatedAt = fileTime
+	}
 	d.FileKey = observation.FileKey
 	d.Status = DocumentActive
 	d.Index = IndexState{
 		Title: observation.Title, Summary: d.Index.Summary, MTime: observation.MTime, Size: observation.Size,
-		SHA256: observation.SHA256, IndexedAt: now,
+		SHA256: observation.SHA256, IndexedAt: now, SourceCreatedAt: sourceCreatedAt, SourceUpdatedAt: sourceUpdatedAt,
 	}
 	d.UpdatedAt = now
 }

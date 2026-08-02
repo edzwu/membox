@@ -83,7 +83,9 @@ CREATE TABLE IF NOT EXISTS document_index (
     mtime INTEGER NOT NULL DEFAULT 0,
     size INTEGER NOT NULL DEFAULT 0,
     sha256 TEXT NOT NULL DEFAULT '',
-    indexed_at INTEGER
+    indexed_at INTEGER,
+    source_created_at INTEGER,
+    source_updated_at INTEGER
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS document_fts USING fts5(
     document_id UNINDEXED,
@@ -97,8 +99,7 @@ CREATE INDEX IF NOT EXISTS locations_status ON document_locations(status);
 	if _, err := s.db.Exec(schema); err != nil {
 		return fmt.Errorf("migrating SQLite: %w", err)
 	}
-	// Migration: add summary column to document_index if missing (for databases created before summary was added)
-	var hasSummary bool
+	columns := make(map[string]bool)
 	rows, err := s.db.Query(`PRAGMA table_info(document_index)`)
 	if err != nil {
 		return fmt.Errorf("checking document_index columns: %w", err)
@@ -113,16 +114,33 @@ CREATE INDEX IF NOT EXISTS locations_status ON document_locations(status);
 			rows.Close()
 			return fmt.Errorf("scanning table_info: %w", err)
 		}
-		if name == "summary" {
-			hasSummary = true
-			break
+		columns[name] = true
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	migrations := []struct {
+		name string
+		sql  string
+	}{
+		{"summary", `ALTER TABLE document_index ADD COLUMN summary TEXT NOT NULL DEFAULT ''`},
+		{"source_created_at", `ALTER TABLE document_index ADD COLUMN source_created_at INTEGER`},
+		{"source_updated_at", `ALTER TABLE document_index ADD COLUMN source_updated_at INTEGER`},
+	}
+	for _, migration := range migrations {
+		if columns[migration.name] {
+			continue
+		}
+		if _, err := s.db.Exec(migration.sql); err != nil {
+			return fmt.Errorf("adding document_index.%s: %w", migration.name, err)
 		}
 	}
-	rows.Close()
-	if !hasSummary {
-		if _, err := s.db.Exec(`ALTER TABLE document_index ADD COLUMN summary TEXT NOT NULL DEFAULT ''`); err != nil {
-			return fmt.Errorf("adding summary column: %w", err)
-		}
+	// Existing databases only have filesystem mtime. Use it as both source
+	// dates until an explicit Git sync supplies historical values.
+	if _, err := s.db.Exec(`UPDATE document_index SET
+source_created_at=COALESCE(source_created_at,CASE WHEN mtime>0 THEN mtime/1000000 ELSE indexed_at END),
+source_updated_at=COALESCE(source_updated_at,CASE WHEN mtime>0 THEN mtime/1000000 ELSE indexed_at END)`); err != nil {
+		return fmt.Errorf("backfilling document source timestamps: %w", err)
 	}
 	return nil
 }
@@ -272,15 +290,17 @@ func (s *Store) DocumentsForPath(ctx context.Context, id catalog.IndexedPathID) 
 }
 
 const documentSelect = `SELECT d.id,d.created_at,d.updated_at,l.path_id,l.relative_path,l.file_key,l.status,
-COALESCE(i.title,''),COALESCE(i.summary,''),COALESCE(i.mtime,0),COALESCE(i.size,0),COALESCE(i.sha256,''),i.indexed_at,p.root_path
+COALESCE(i.title,''),COALESCE(i.summary,''),COALESCE(i.mtime,0),COALESCE(i.size,0),COALESCE(i.sha256,''),i.indexed_at,
+COALESCE(i.source_created_at,CASE WHEN i.mtime>0 THEN i.mtime/1000000 ELSE d.created_at END),
+COALESCE(i.source_updated_at,CASE WHEN i.mtime>0 THEN i.mtime/1000000 ELSE d.updated_at END),p.root_path
 FROM documents d JOIN document_locations l ON l.document_id=d.id
 JOIN paths p ON p.id=l.path_id LEFT JOIN document_index i ON i.document_id=d.id`
 
 func scanDocument(scanner interface{ Scan(...any) error }) (*catalog.Document, string, error) {
 	var id, relative, fileKey, status, title, summary, hash, root string
-	var created, updated, pathID, mtime, size int64
+	var created, updated, pathID, mtime, size, sourceCreated, sourceUpdated int64
 	var indexed sql.NullInt64
-	if err := scanner.Scan(&id, &created, &updated, &pathID, &relative, &fileKey, &status, &title, &summary, &mtime, &size, &hash, &indexed, &root); err != nil {
+	if err := scanner.Scan(&id, &created, &updated, &pathID, &relative, &fileKey, &status, &title, &summary, &mtime, &size, &hash, &indexed, &sourceCreated, &sourceUpdated, &root); err != nil {
 		return nil, "", err
 	}
 	location, err := catalog.NewLocation(catalog.IndexedPathID(pathID), relative)
@@ -291,7 +311,10 @@ func scanDocument(scanner interface{ Scan(...any) error }) (*catalog.Document, s
 	if indexed.Valid {
 		indexedAt = fromMillis(indexed.Int64)
 	}
-	doc, err := catalog.RehydrateDocument(catalog.DocumentID(id), location, catalog.FileKey(fileKey), catalog.DocumentStatus(status), catalog.IndexState{Title: title, Summary: summary, MTime: mtime, Size: size, SHA256: hash, IndexedAt: indexedAt}, fromMillis(created), fromMillis(updated))
+	doc, err := catalog.RehydrateDocument(catalog.DocumentID(id), location, catalog.FileKey(fileKey), catalog.DocumentStatus(status), catalog.IndexState{
+		Title: title, Summary: summary, MTime: mtime, Size: size, SHA256: hash, IndexedAt: indexedAt,
+		SourceCreatedAt: fromMillis(sourceCreated), SourceUpdatedAt: fromMillis(sourceUpdated),
+	}, fromMillis(created), fromMillis(updated))
 	if err != nil {
 		return nil, "", fmt.Errorf("rehydrating document %q: %w", id, err)
 	}
@@ -330,6 +353,32 @@ func (s *Store) SaveDocument(ctx context.Context, save port.ScanSave) error {
 	return tx.Commit()
 }
 
+func (s *Store) SaveSourceTimes(ctx context.Context, documents []*catalog.Document) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, document := range documents {
+		if document == nil {
+			return errors.New("cannot save source times for nil document")
+		}
+		result, err := tx.ExecContext(ctx, `UPDATE document_index SET source_created_at=?,source_updated_at=? WHERE document_id=?`,
+			millis(document.Index.SourceCreatedAt), millis(document.Index.SourceUpdatedAt), document.ID)
+		if err != nil {
+			return fmt.Errorf("saving source times for document %s: %w", document.ID, err)
+		}
+		rows, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if rows != 1 {
+			return fmt.Errorf("document %s has no index metadata", document.ID)
+		}
+	}
+	return tx.Commit()
+}
+
 func savePath(ctx context.Context, tx *sql.Tx, path *catalog.IndexedPath) error {
 	var last any
 	if path.LastScanAt != nil {
@@ -361,9 +410,10 @@ file_key=excluded.file_key,status=excluded.status,last_seen_at=excluded.last_see
 	if !save.Reindex {
 		return nil
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO document_index(document_id,title,summary,mtime,size,sha256,indexed_at)
-VALUES(?,?,?,?,?,?,?) ON CONFLICT(document_id) DO UPDATE SET title=excluded.title,summary=excluded.summary,mtime=excluded.mtime,size=excluded.size,
-sha256=excluded.sha256,indexed_at=excluded.indexed_at`, d.ID, d.Index.Title, d.Index.Summary, d.Index.MTime, d.Index.Size, d.Index.SHA256, millis(d.Index.IndexedAt)); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO document_index(document_id,title,summary,mtime,size,sha256,indexed_at,source_created_at,source_updated_at)
+VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(document_id) DO UPDATE SET title=excluded.title,summary=excluded.summary,mtime=excluded.mtime,size=excluded.size,
+sha256=excluded.sha256,indexed_at=excluded.indexed_at,source_created_at=excluded.source_created_at,source_updated_at=excluded.source_updated_at`,
+		d.ID, d.Index.Title, d.Index.Summary, d.Index.MTime, d.Index.Size, d.Index.SHA256, millis(d.Index.IndexedAt), millis(d.Index.SourceCreatedAt), millis(d.Index.SourceUpdatedAt)); err != nil {
 		return fmt.Errorf("saving document index: %w", err)
 	}
 	var root string

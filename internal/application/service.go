@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -17,10 +18,11 @@ type Service struct {
 	reader  port.ContentReader
 	ids     port.IDGenerator
 	clock   port.Clock
+	history port.GitHistory
 }
 
-func NewService(store port.CatalogStore, scanner port.MarkdownScanner, reader port.ContentReader, ids port.IDGenerator, clock port.Clock) *Service {
-	return &Service{store: store, scanner: scanner, reader: reader, ids: ids, clock: clock}
+func NewService(store port.CatalogStore, scanner port.MarkdownScanner, reader port.ContentReader, ids port.IDGenerator, clock port.Clock, history port.GitHistory) *Service {
+	return &Service{store: store, scanner: scanner, reader: reader, ids: ids, clock: clock, history: history}
 }
 
 func (s *Service) Close() error { return s.store.Close() }
@@ -31,18 +33,27 @@ type AddPathResult struct {
 	Scan          ScanReport
 }
 
-type ScanOptions struct{ Selector string }
+type ScanOptions struct {
+	Selector        string
+	TimestampSource string
+}
 
 type ScanReport struct {
-	Paths           int
-	Files           int
-	Added           int
-	Updated         int
-	Renamed         int
-	Unchanged       int
-	Missing         int
-	PossibleRenames int
-	Errors          int
+	Paths               int
+	Files               int
+	Added               int
+	Updated             int
+	Renamed             int
+	Unchanged           int
+	Missing             int
+	PossibleRenames     int
+	Errors              int
+	TimestampSource     string
+	GitPaths            int
+	TimestampsUpdated   int
+	TimestampsUnchanged int
+	NoGitHistory        int
+	NonGitPaths         int
 }
 
 func (r *ScanReport) Add(other ScanReport) {
@@ -113,6 +124,14 @@ func (s *Service) RemovePath(ctx context.Context, selector string) (RemovePathRe
 }
 
 func (s *Service) ScanPaths(ctx context.Context, opts ScanOptions) (ScanReport, error) {
+	timestampSource := strings.ToLower(strings.TrimSpace(opts.TimestampSource))
+	if timestampSource == "" {
+		timestampSource = "filesystem"
+	}
+	if timestampSource != "filesystem" && timestampSource != "git" {
+		return ScanReport{}, fmt.Errorf("unsupported timestamp source %q; use filesystem or git", opts.TimestampSource)
+	}
+
 	var paths []*catalog.IndexedPath
 	if strings.TrimSpace(opts.Selector) != "" {
 		p, err := s.resolvePath(ctx, opts.Selector)
@@ -131,7 +150,7 @@ func (s *Service) ScanPaths(ctx context.Context, opts ScanOptions) (ScanReport, 
 		}
 	}
 
-	var report ScanReport
+	report := ScanReport{TimestampSource: timestampSource}
 	var scanErrors []error
 	for _, p := range paths {
 		if err := ctx.Err(); err != nil {
@@ -143,10 +162,19 @@ func (s *Service) ScanPaths(ctx context.Context, opts ScanOptions) (ScanReport, 
 			scanErrors = append(scanErrors, err)
 		}
 	}
-	if len(scanErrors) > 0 {
-		return report, errors.Join(scanErrors...)
+	if timestampSource == "git" {
+		gitReport, err := s.syncGitTimes(ctx, syncGitTimesOptions{Selector: opts.Selector})
+		report.GitPaths = gitReport.GitPaths
+		report.TimestampsUpdated = gitReport.Updated
+		report.TimestampsUnchanged = gitReport.Unchanged
+		report.NoGitHistory = gitReport.NoHistory
+		report.NonGitPaths = gitReport.NonGitPaths
+		report.Errors += gitReport.Errors
+		if err != nil {
+			scanErrors = append(scanErrors, err)
+		}
 	}
-	return report, nil
+	return report, errors.Join(scanErrors...)
 }
 
 func (s *Service) scanOne(ctx context.Context, indexedPath *catalog.IndexedPath) (ScanReport, error) {
@@ -253,6 +281,101 @@ func (s *Service) scanOne(ctx context.Context, indexedPath *catalog.IndexedPath)
 		return report, issueErr
 	}
 	return report, nil
+}
+
+type syncGitTimesOptions struct{ Selector string }
+
+type syncGitTimesReport struct {
+	Paths       int
+	GitPaths    int
+	Documents   int
+	Updated     int
+	Unchanged   int
+	NoHistory   int
+	NonGitPaths int
+	Errors      int
+}
+
+// syncGitTimes replaces filesystem-derived source dates with the first and
+// latest author dates in Git. Files without history and non-Git paths are
+// intentionally left unchanged.
+func (s *Service) syncGitTimes(ctx context.Context, opts syncGitTimesOptions) (syncGitTimesReport, error) {
+	var paths []*catalog.IndexedPath
+	if strings.TrimSpace(opts.Selector) != "" {
+		path, err := s.resolvePath(ctx, opts.Selector)
+		if err != nil {
+			return syncGitTimesReport{}, err
+		}
+		paths = []*catalog.IndexedPath{path}
+	} else {
+		summaries, err := s.store.ListPaths(ctx, false)
+		if err != nil {
+			return syncGitTimesReport{}, err
+		}
+		for i := range summaries {
+			path := summaries[i].Path
+			paths = append(paths, &path)
+		}
+	}
+
+	report := syncGitTimesReport{Paths: len(paths)}
+	var syncErrors []error
+	for _, indexedPath := range paths {
+		if err := ctx.Err(); err != nil {
+			return report, err
+		}
+		repositoryRoot, applicable, err := s.history.RepositoryRoot(ctx, indexedPath.Root)
+		if err != nil {
+			report.Errors++
+			syncErrors = append(syncErrors, err)
+			continue
+		}
+		if !applicable {
+			report.NonGitPaths++
+			continue
+		}
+		report.GitPaths++
+		documents, err := s.store.DocumentsForPath(ctx, indexedPath.ID)
+		if err != nil {
+			report.Errors++
+			syncErrors = append(syncErrors, err)
+			continue
+		}
+		report.Documents += len(documents)
+		var changed []*catalog.Document
+		for _, document := range documents {
+			absolutePath := filepath.Join(indexedPath.Root, filepath.FromSlash(document.Location.RelativePath))
+			times, found, err := s.history.FileTimes(ctx, repositoryRoot, absolutePath)
+			if err != nil {
+				report.Errors++
+				syncErrors = append(syncErrors, err)
+				continue
+			}
+			if !found {
+				report.NoHistory++
+				continue
+			}
+			if document.Index.SourceCreatedAt.Equal(times.CreatedAt) && document.Index.SourceUpdatedAt.Equal(times.UpdatedAt) {
+				report.Unchanged++
+				continue
+			}
+			if err := document.SetSourceTimes(times.CreatedAt, times.UpdatedAt); err != nil {
+				report.Errors++
+				syncErrors = append(syncErrors, fmt.Errorf("updating source times for %q: %w", absolutePath, err))
+				continue
+			}
+			changed = append(changed, document)
+		}
+		if len(changed) > 0 {
+			if err := s.store.SaveSourceTimes(ctx, changed); err != nil {
+				report.Errors++
+				syncErrors = append(syncErrors, err)
+				continue
+			}
+			report.Updated += len(changed)
+		}
+	}
+	return report, errors.Join(syncErrors...)
 }
 
 func (s *Service) ListDocuments(ctx context.Context, limit int, includeUnavailable bool) ([]port.DocumentRecord, error) {
