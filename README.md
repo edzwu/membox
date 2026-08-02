@@ -78,7 +78,7 @@ Open ranges such as `+2026-07..` and `+..2026-07` are supported. Enter on ordina
 
 `/clear` removes all filter tags; Backspace on an empty input removes the most recently added tag. Esc hides the input without clearing active tags.
 
-Outside the filter input, press `s` to toggle between filename order and modified-time order. Time order shows the newest documents first and places documents without a timestamp last.
+Outside the filter input, press `s` to toggle between filename order and modified-time order. Time order shows the newest documents first and places documents without a timestamp last; changing the sort focuses the new first row. In the tree view, Home and End jump to the first and last rows.
 
 ## Development
 

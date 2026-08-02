@@ -331,6 +331,11 @@ func (m Model) updateFilterInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "up", "down", "pgup", "pgdown":
 		return m.moveSelection(msg.String())
+	case "home", "end":
+		if m.viewMode == viewTree {
+			return m.moveSelection(msg.String())
+		}
+		return m, nil
 	case "ctrl+u":
 		m.input.SetValue("")
 		return m, m.filterChanged(nil)
@@ -407,6 +412,11 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.moveSelection("down")
 		}
 		return m.moveSelection(msg.String())
+	case "home", "end":
+		if m.viewMode == viewTree {
+			return m.moveSelection(msg.String())
+		}
+		return m, nil
 	case "s":
 		m.toggleSort()
 		return m, m.loadPreview()
@@ -447,6 +457,10 @@ func (m Model) moveSelection(key string) (tea.Model, tea.Cmd) {
 			m.selected = max(0, m.selected-m.visibleRows())
 		case "pgdown":
 			m.selected = min(max(0, len(m.filtered)-1), m.selected+m.visibleRows())
+		case "home":
+			m.selected = 0
+		case "end":
+			m.selected = max(0, len(m.filtered)-1)
 		}
 	}
 	m.keepSelectionVisible()
@@ -757,23 +771,15 @@ func (m *Model) refreshFilter() {
 }
 
 func (m *Model) toggleSort() {
-	selectedID := ""
-	if document, ok := m.selectedDocument(); ok {
-		selectedID = document.ID
-	}
 	if m.sortMode == sortModeTime {
 		m.sortMode = sortModeName
 	} else {
 		m.sortMode = sortModeTime
 	}
 	m.sortFiltered()
-	for index, candidate := range m.filtered {
-		if candidate.document.ID == selectedID {
-			m.selected = index
-			break
-		}
-	}
-	m.keepSelectionVisible()
+	m.selected = 0
+	m.scrollTop = 0
+	m.boardScrollY = 0
 	if m.viewMode == viewBoard {
 		m.snapToBoardSelection()
 		m.scrollBoardToSelection()

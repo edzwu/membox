@@ -224,7 +224,7 @@ func TestModel_DoubleSpaceOpensInputAndSpacesRemainAvailableForText(t *testing.T
 	}
 }
 
-func TestModel_SortToggleOrdersNewestFirstAndRestoresNameOrder(t *testing.T) {
+func TestModel_SortToggleOrdersNewestFirstAndFocusesFirstRow(t *testing.T) {
 	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
 	model.items = documentItems([]membox.DocumentView{
 		{ID: "alpha", Path: "/tmp/alpha.md", UpdatedAt: time.Date(2024, 1, 1, 0, 0, 0, 0, time.Local)},
@@ -241,13 +241,51 @@ func TestModel_SortToggleOrdersNewestFirstAndRestoresNameOrder(t *testing.T) {
 	if got := []string{model.filtered[0].document.ID, model.filtered[1].document.ID, model.filtered[2].document.ID}; !reflect.DeepEqual(got, []string{"bravo", "alpha", "charlie"}) {
 		t.Fatalf("time order is not newest first: %v", got)
 	}
-	if model.filtered[model.selected].document.ID != "alpha" {
-		t.Fatalf("sort toggle did not preserve selection: selected=%s", model.filtered[model.selected].document.ID)
+	if model.selected != 0 || model.scrollTop != 0 || model.filtered[model.selected].document.ID != "bravo" {
+		t.Fatalf("sort toggle did not focus first row: selected=%d top=%d document=%s", model.selected, model.scrollTop, model.filtered[model.selected].document.ID)
 	}
 	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
 	model = updated.(Model)
 	if got := []string{model.filtered[0].document.ID, model.filtered[1].document.ID, model.filtered[2].document.ID}; !reflect.DeepEqual(got, []string{"alpha", "bravo", "charlie"}) {
 		t.Fatalf("second toggle did not restore name order: %v", got)
+	}
+	if model.selected != 0 || model.filtered[model.selected].document.ID != "alpha" {
+		t.Fatalf("second toggle did not focus restored first row: selected=%d document=%s", model.selected, model.filtered[model.selected].document.ID)
+	}
+}
+
+func TestModel_HomeAndEndMoveToTreeBoundaries(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.width, model.height = 100, 8
+	for index := 0; index < 20; index++ {
+		model.items = append(model.items, documentItems([]membox.DocumentView{{
+			ID: fmt.Sprintf("doc-%02d", index), Path: fmt.Sprintf("/tmp/doc-%02d.md", index),
+		}})...)
+	}
+	model.refreshFilter()
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	model = updated.(Model)
+	if model.selected != len(model.filtered)-1 || model.scrollTop == 0 {
+		t.Fatalf("End did not focus final tree row: selected=%d top=%d", model.selected, model.scrollTop)
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyHome})
+	model = updated.(Model)
+	if model.selected != 0 || model.scrollTop != 0 {
+		t.Fatalf("Home did not focus first tree row: selected=%d top=%d", model.selected, model.scrollTop)
+	}
+
+	model.inputVisible, model.inputActive = true, true
+	model.input.Focus()
+	model.input.SetValue("doc")
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	model = updated.(Model)
+	if model.selected != len(model.filtered)-1 || model.input.Value() != "doc" {
+		t.Fatalf("End with active input did not focus final row: selected=%d input=%q", model.selected, model.input.Value())
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyHome})
+	model = updated.(Model)
+	if model.selected != 0 || model.scrollTop != 0 || model.input.Value() != "doc" {
+		t.Fatalf("Home with active input did not focus first row: selected=%d top=%d input=%q", model.selected, model.scrollTop, model.input.Value())
 	}
 }
 
