@@ -168,7 +168,7 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m.updateNavigation(msg)
 	case searchMsg:
-		if strings.TrimSpace(m.input.Value()) == msg.query && m.searchMode == searchModeFull {
+		if textFilterQuery(m.input.Value()) == msg.query && m.searchMode == searchModeFull {
 			m.loading, m.err = false, msg.err
 			if msg.err == nil {
 				m.filtered = searchResultItems(m.items, msg.results, m.dateFilters)
@@ -639,7 +639,7 @@ func (m *Model) commitFilterToken() (bool, error) {
 func (m *Model) filterChanged(inputCommand tea.Cmd) tea.Cmd {
 	m.filterErr = nil
 	m.applyPreviewContent()
-	query := strings.TrimSpace(m.input.Value())
+	query := textFilterQuery(m.input.Value())
 	if m.searchMode == searchModeFull && query != "" {
 		m.loading = true
 		return tea.Batch(inputCommand, m.spinner.Tick, searchDocumentsCmd(m.ctx, m.app, query))
@@ -650,7 +650,7 @@ func (m *Model) filterChanged(inputCommand tea.Cmd) tea.Cmd {
 }
 
 func (m *Model) refreshFilter() {
-	query := strings.ToLower(strings.TrimSpace(m.input.Value()))
+	query := strings.ToLower(textFilterQuery(m.input.Value()))
 	m.filtered = m.filtered[:0]
 	for _, candidate := range m.items {
 		textMatches := !m.inputVisible || query == "" || wordsMatch(candidate.match, query)
@@ -713,6 +713,25 @@ func (m *Model) sortFiltered() {
 	})
 }
 
+// textFilterQuery removes an in-progress command token from the end of the
+// input. Date tags only affect results after Space or Enter commits them, so a
+// draft such as +m:7d must not temporarily empty the filename or FTS results.
+func textFilterQuery(value string) string {
+	value = strings.TrimSpace(value)
+	separator := strings.LastIndexAny(value, " \t")
+	token := value
+	if separator >= 0 {
+		token = value[separator+1:]
+	}
+	if strings.HasPrefix(token, "+") || strings.HasPrefix(token, "/") {
+		if separator < 0 {
+			return ""
+		}
+		return strings.TrimSpace(value[:separator])
+	}
+	return value
+}
+
 func wordsMatch(value, query string) bool {
 	value = strings.ToLower(value)
 	for _, word := range strings.Fields(query) {
@@ -747,7 +766,7 @@ func (m Model) loadPreview() tea.Cmd {
 func (m *Model) applyPreviewContent() {
 	query := ""
 	if m.inputVisible || m.searchMode == searchModeFull {
-		query = strings.TrimSpace(m.input.Value())
+		query = textFilterQuery(m.input.Value())
 	}
 	content := highlightQuery(m.rawContent, query)
 	m.preview.SetContent(content)

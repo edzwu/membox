@@ -271,6 +271,38 @@ func TestModel_FilterNarrowsResults(t *testing.T) {
 	}
 }
 
+func TestModel_DraftDateTagDoesNotParticipateInTextFilter(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.items = documentItems([]membox.DocumentView{
+		{ID: "alpha", Title: "Alpha", Path: "/tmp/alpha.md"},
+		{ID: "beta", Title: "Beta", Path: "/tmp/beta.md"},
+	})
+	model.inputVisible, model.inputActive = true, true
+	model.input.SetValue("+m:7")
+	model.refreshFilter()
+	if len(model.filtered) != 2 {
+		t.Fatalf("draft date tag hid filename results: %+v", model.filtered)
+	}
+	model.input.SetValue("alpha +m:7")
+	model.refreshFilter()
+	if len(model.filtered) != 1 || model.filtered[0].document.ID != "alpha" {
+		t.Fatalf("draft tag interfered with preceding text filter: %+v", model.filtered)
+	}
+	if got := textFilterQuery("alpha +m:7d"); got != "alpha" {
+		t.Fatalf("text query=%q, want alpha", got)
+	}
+	if got := textFilterQuery("+m:7d"); got != "" {
+		t.Fatalf("tag-only text query=%q, want empty", got)
+	}
+	model.searchMode = searchModeFull
+	model.input.SetValue("+m:7d")
+	model.loading = false
+	_ = model.filterChanged(nil)
+	if model.loading {
+		t.Fatal("draft date tag triggered a full-text search")
+	}
+}
+
 func TestModel_DateTagsRenderAndFilterWithANDSemantics(t *testing.T) {
 	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
 	model.width, model.height = 120, 24
