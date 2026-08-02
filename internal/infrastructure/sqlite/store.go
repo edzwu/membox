@@ -79,6 +79,7 @@ CREATE TABLE IF NOT EXISTS document_locations (
 CREATE TABLE IF NOT EXISTS document_index (
     document_id TEXT PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
     title TEXT NOT NULL DEFAULT '',
+    summary TEXT NOT NULL DEFAULT '',
     mtime INTEGER NOT NULL DEFAULT 0,
     size INTEGER NOT NULL DEFAULT 0,
     sha256 TEXT NOT NULL DEFAULT '',
@@ -95,6 +96,33 @@ CREATE INDEX IF NOT EXISTS locations_status ON document_locations(status);
 `
 	if _, err := s.db.Exec(schema); err != nil {
 		return fmt.Errorf("migrating SQLite: %w", err)
+	}
+	// Migration: add summary column to document_index if missing (for databases created before summary was added)
+	var hasSummary bool
+	rows, err := s.db.Query(`PRAGMA table_info(document_index)`)
+	if err != nil {
+		return fmt.Errorf("checking document_index columns: %w", err)
+	}
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull int
+		var dfltValue sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dfltValue, &pk); err != nil {
+			rows.Close()
+			return fmt.Errorf("scanning table_info: %w", err)
+		}
+		if name == "summary" {
+			hasSummary = true
+			break
+		}
+	}
+	rows.Close()
+	if !hasSummary {
+		if _, err := s.db.Exec(`ALTER TABLE document_index ADD COLUMN summary TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("adding summary column: %w", err)
+		}
 	}
 	return nil
 }
@@ -244,15 +272,15 @@ func (s *Store) DocumentsForPath(ctx context.Context, id catalog.IndexedPathID) 
 }
 
 const documentSelect = `SELECT d.id,d.created_at,d.updated_at,l.path_id,l.relative_path,l.file_key,l.status,
-COALESCE(i.title,''),COALESCE(i.mtime,0),COALESCE(i.size,0),COALESCE(i.sha256,''),i.indexed_at,p.root_path
+COALESCE(i.title,''),COALESCE(i.summary,''),COALESCE(i.mtime,0),COALESCE(i.size,0),COALESCE(i.sha256,''),i.indexed_at,p.root_path
 FROM documents d JOIN document_locations l ON l.document_id=d.id
 JOIN paths p ON p.id=l.path_id LEFT JOIN document_index i ON i.document_id=d.id`
 
 func scanDocument(scanner interface{ Scan(...any) error }) (*catalog.Document, string, error) {
-	var id, relative, fileKey, status, title, hash, root string
+	var id, relative, fileKey, status, title, summary, hash, root string
 	var created, updated, pathID, mtime, size int64
 	var indexed sql.NullInt64
-	if err := scanner.Scan(&id, &created, &updated, &pathID, &relative, &fileKey, &status, &title, &mtime, &size, &hash, &indexed, &root); err != nil {
+	if err := scanner.Scan(&id, &created, &updated, &pathID, &relative, &fileKey, &status, &title, &summary, &mtime, &size, &hash, &indexed, &root); err != nil {
 		return nil, "", err
 	}
 	location, err := catalog.NewLocation(catalog.IndexedPathID(pathID), relative)
@@ -263,7 +291,7 @@ func scanDocument(scanner interface{ Scan(...any) error }) (*catalog.Document, s
 	if indexed.Valid {
 		indexedAt = fromMillis(indexed.Int64)
 	}
-	doc, err := catalog.RehydrateDocument(catalog.DocumentID(id), location, catalog.FileKey(fileKey), catalog.DocumentStatus(status), catalog.IndexState{Title: title, MTime: mtime, Size: size, SHA256: hash, IndexedAt: indexedAt}, fromMillis(created), fromMillis(updated))
+	doc, err := catalog.RehydrateDocument(catalog.DocumentID(id), location, catalog.FileKey(fileKey), catalog.DocumentStatus(status), catalog.IndexState{Title: title, Summary: summary, MTime: mtime, Size: size, SHA256: hash, IndexedAt: indexedAt}, fromMillis(created), fromMillis(updated))
 	if err != nil {
 		return nil, "", fmt.Errorf("rehydrating document %q: %w", id, err)
 	}
@@ -333,9 +361,9 @@ file_key=excluded.file_key,status=excluded.status,last_seen_at=excluded.last_see
 	if !save.Reindex {
 		return nil
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO document_index(document_id,title,mtime,size,sha256,indexed_at)
-VALUES(?,?,?,?,?,?) ON CONFLICT(document_id) DO UPDATE SET title=excluded.title,mtime=excluded.mtime,size=excluded.size,
-sha256=excluded.sha256,indexed_at=excluded.indexed_at`, d.ID, d.Index.Title, d.Index.MTime, d.Index.Size, d.Index.SHA256, millis(d.Index.IndexedAt)); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO document_index(document_id,title,summary,mtime,size,sha256,indexed_at)
+VALUES(?,?,?,?,?,?,?) ON CONFLICT(document_id) DO UPDATE SET title=excluded.title,summary=excluded.summary,mtime=excluded.mtime,size=excluded.size,
+sha256=excluded.sha256,indexed_at=excluded.indexed_at`, d.ID, d.Index.Title, d.Index.Summary, d.Index.MTime, d.Index.Size, d.Index.SHA256, millis(d.Index.IndexedAt)); err != nil {
 		return fmt.Errorf("saving document index: %w", err)
 	}
 	var root string

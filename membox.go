@@ -147,6 +147,7 @@ type DocumentView struct {
 	RelativePath string     `json:"relative_path"`
 	Status       string     `json:"status"`
 	Title        string     `json:"title"`
+	Summary      string     `json:"summary"`
 	MTime        int64      `json:"mtime"`
 	Size         int64      `json:"size"`
 	SHA256       string     `json:"sha256"`
@@ -177,7 +178,7 @@ func (b *Box) GetDocument(ctx context.Context, query GetDocumentQuery) (Document
 
 func documentView(document *catalog.Document, path string) DocumentView {
 	view := DocumentView{ID: string(document.ID), Path: path, PathID: int64(document.Location.PathID), RelativePath: document.Location.RelativePath,
-		Status: string(document.Status), Title: document.Index.Title, MTime: document.Index.MTime, Size: document.Index.Size,
+		Status: string(document.Status), Title: document.Index.Title, Summary: document.Index.Summary, MTime: document.Index.MTime, Size: document.Index.Size,
 		SHA256: document.Index.SHA256, CreatedAt: document.CreatedAt, UpdatedAt: document.UpdatedAt}
 	if !document.Index.IndexedAt.IsZero() {
 		value := document.Index.IndexedAt

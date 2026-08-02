@@ -53,6 +53,7 @@ type FileKey string
 
 type IndexState struct {
 	Title     string
+	Summary   string
 	MTime     int64
 	Size      int64
 	SHA256    string
@@ -155,7 +156,7 @@ func (d *Document) applyObservation(observation Observation, now time.Time) {
 	d.FileKey = observation.FileKey
 	d.Status = DocumentActive
 	d.Index = IndexState{
-		Title: observation.Title, MTime: observation.MTime, Size: observation.Size,
+		Title: observation.Title, Summary: d.Index.Summary, MTime: observation.MTime, Size: observation.Size,
 		SHA256: observation.SHA256, IndexedAt: now,
 	}
 	d.UpdatedAt = now
