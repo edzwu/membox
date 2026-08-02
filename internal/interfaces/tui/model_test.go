@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -220,6 +221,33 @@ func TestModel_DoubleSpaceOpensInputAndSpacesRemainAvailableForText(t *testing.T
 	model = updated.(Model)
 	if !model.inputVisible || !model.inputActive || model.input.Value() != "  " {
 		t.Fatalf("spaces in active filter changed input state: visible=%v active=%v value=%q", model.inputVisible, model.inputActive, model.input.Value())
+	}
+}
+
+func TestModel_SortToggleOrdersNewestFirstAndRestoresNameOrder(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.items = documentItems([]membox.DocumentView{
+		{ID: "alpha", Path: "/tmp/alpha.md", UpdatedAt: time.Date(2024, 1, 1, 0, 0, 0, 0, time.Local)},
+		{ID: "charlie", Path: "/tmp/charlie.md", UpdatedAt: time.Time{}},
+		{ID: "bravo", Path: "/tmp/bravo.md", UpdatedAt: time.Date(2026, 7, 1, 0, 0, 0, 0, time.Local)},
+	})
+	model.refreshFilter()
+	if got := []string{model.filtered[0].document.ID, model.filtered[1].document.ID, model.filtered[2].document.ID}; !reflect.DeepEqual(got, []string{"alpha", "bravo", "charlie"}) {
+		t.Fatalf("default order is not by name: %v", got)
+	}
+	model.selected = 0
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	model = updated.(Model)
+	if got := []string{model.filtered[0].document.ID, model.filtered[1].document.ID, model.filtered[2].document.ID}; !reflect.DeepEqual(got, []string{"bravo", "alpha", "charlie"}) {
+		t.Fatalf("time order is not newest first: %v", got)
+	}
+	if model.filtered[model.selected].document.ID != "alpha" {
+		t.Fatalf("sort toggle did not preserve selection: selected=%s", model.filtered[model.selected].document.ID)
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	model = updated.(Model)
+	if got := []string{model.filtered[0].document.ID, model.filtered[1].document.ID, model.filtered[2].document.ID}; !reflect.DeepEqual(got, []string{"alpha", "bravo", "charlie"}) {
+		t.Fatalf("second toggle did not restore name order: %v", got)
 	}
 }
 
@@ -465,8 +493,8 @@ func TestModel_ResultsHaveUUIDInStatus(t *testing.T) {
 	if !strings.Contains(status, "dabf") {
 		t.Fatalf("status bar does not contain UUID: %q", status)
 	}
-	if !strings.HasPrefix(strings.TrimLeft(status, " "), "space details") {
-		t.Fatalf("shortcuts are not on the left: %q", status)
+	if !strings.HasPrefix(strings.TrimLeft(status, " "), "s sort:name") {
+		t.Fatalf("sort mode and shortcuts are not on the left: %q", status)
 	}
 }
 

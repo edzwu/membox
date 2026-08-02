@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -29,6 +30,11 @@ const (
 const (
 	viewTree  = "tree"
 	viewBoard = "board"
+)
+
+const (
+	sortModeName = "name"
+	sortModeTime = "time"
 )
 
 type App interface {
@@ -83,6 +89,7 @@ type Model struct {
 	lastKeyAt     time.Time
 	searchMode    string
 	viewMode      string
+	sortMode      string
 }
 
 type searchMsg struct {
@@ -127,7 +134,7 @@ func New(ctx context.Context, app App, launcher host.Launcher) Model {
 	spin := spinner.New()
 	spin.Spinner = spinner.Dot
 	vp := viewport.New(40, 10)
-	model := Model{ctx: ctx, app: app, launcher: launcher, input: input, spinner: spin, preview: vp, searchMode: searchModeName, viewMode: viewTree}
+	model := Model{ctx: ctx, app: app, launcher: launcher, input: input, spinner: spin, preview: vp, searchMode: searchModeName, viewMode: viewTree, sortMode: sortModeName}
 	model.preview.SetContent(previewPlaceholder("Loading documents…"))
 	return model
 }
@@ -165,6 +172,7 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.loading, m.err = false, msg.err
 			if msg.err == nil {
 				m.filtered = searchResultItems(m.items, msg.results, m.dateFilters)
+				m.sortFiltered()
 				m.selected = 0
 				m.keepSelectionVisible()
 				m.applyPreviewContent()
@@ -385,6 +393,9 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.moveSelection("down")
 		}
 		return m.moveSelection(msg.String())
+	case "s":
+		m.toggleSort()
+		return m, m.loadPreview()
 	case "r":
 		m.loading = true
 		commands = append(commands, m.spinner.Tick, scanCmd(m.ctx, m.app))
@@ -647,6 +658,7 @@ func (m *Model) refreshFilter() {
 			m.filtered = append(m.filtered, candidate)
 		}
 	}
+	m.sortFiltered()
 	if len(m.filtered) == 0 {
 		m.selected = 0
 		m.scrollTop = 0
@@ -654,6 +666,51 @@ func (m *Model) refreshFilter() {
 		m.selected = len(m.filtered) - 1
 	}
 	m.keepSelectionVisible()
+}
+
+func (m *Model) toggleSort() {
+	selectedID := ""
+	if document, ok := m.selectedDocument(); ok {
+		selectedID = document.ID
+	}
+	if m.sortMode == sortModeTime {
+		m.sortMode = sortModeName
+	} else {
+		m.sortMode = sortModeTime
+	}
+	m.sortFiltered()
+	for index, candidate := range m.filtered {
+		if candidate.document.ID == selectedID {
+			m.selected = index
+			break
+		}
+	}
+	m.keepSelectionVisible()
+	if m.viewMode == viewBoard {
+		m.snapToBoardSelection()
+		m.scrollBoardToSelection()
+	}
+}
+
+func (m *Model) sortFiltered() {
+	byName := func(left, right item) bool {
+		leftName, rightName := strings.ToLower(left.filename), strings.ToLower(right.filename)
+		if leftName != rightName {
+			return leftName < rightName
+		}
+		leftPath, rightPath := strings.ToLower(left.document.Path), strings.ToLower(right.document.Path)
+		if leftPath != rightPath {
+			return leftPath < rightPath
+		}
+		return left.document.ID < right.document.ID
+	}
+	sort.SliceStable(m.filtered, func(i, j int) bool {
+		left, right := m.filtered[i], m.filtered[j]
+		if m.sortMode == sortModeTime && !left.document.UpdatedAt.Equal(right.document.UpdatedAt) {
+			return left.document.UpdatedAt.After(right.document.UpdatedAt)
+		}
+		return byName(left, right)
+	})
 }
 
 func wordsMatch(value, query string) bool {
@@ -1105,7 +1162,11 @@ func (m Model) hints() string {
 	if m.inputVisible {
 		return "space tag • backspace last • /clear • tab mode • esc hide"
 	}
-	return "space details • space×2 filter • tab board • enter open • ↑↓ select • q back • ctrl+d quit"
+	sortLabel := "name"
+	if m.sortMode == sortModeTime {
+		sortLabel = "newest"
+	}
+	return "s sort:" + sortLabel + " • space details • space×2 filter • tab board • enter open • ↑↓ select • q back • ctrl+d quit"
 }
 
 func searchResultItems(items []item, results []membox.SearchResult, filters []dateFilter) []item {

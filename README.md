@@ -76,6 +76,8 @@ In the TUI filter input, type a date token and press Space or Enter to turn it i
 
 Open ranges such as `+2026-07..` and `+..2026-07` are supported. `/clear` removes all date tags; Backspace on an empty input removes the last tag. Esc hides the input without clearing active tags.
 
+Outside the filter input, press `s` to toggle between filename order and modified-time order. Time order shows the newest documents first and places documents without a timestamp last.
+
 ## Development
 
 ```bash
