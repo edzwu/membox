@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -134,10 +136,261 @@ func (s *Server) handleBridgeStatus(writer http.ResponseWriter, request *http.Re
 	})
 }
 
+type bridgeClip struct {
+	ID      string `json:"id"`
+	Title   string `json:"title"`
+	Excerpt string `json:"excerpt,omitempty"`
+	Note    string `json:"note,omitempty"`
+	Mode    string `json:"clip_mode,omitempty"`
+}
+
+// handleBridgeClips lists selection notes registered for a source_url in
+// document_sources (written at ingest time). Optional mode=all includes page clips.
+func (s *Server) handleBridgeClips(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireBridgeToken(writer, request) {
+		return
+	}
+	sourceURL := normalizeSourceURL(request.URL.Query().Get("source_url"))
+	if sourceURL == "" {
+		http.Error(writer, "source_url is required", http.StatusBadRequest)
+		return
+	}
+	selectionOnly := strings.TrimSpace(request.URL.Query().Get("mode")) != "all"
+	ctx := request.Context()
+	// Opportunistically wire page → selection edges for older clips that only
+	// had source_url text and never got a graph_edges row.
+	s.repairSourceLinks(ctx, sourceURL)
+	clips := s.listClipsBySourceURL(ctx, sourceURL, selectionOnly)
+	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+	writer.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(writer).Encode(map[string]any{
+		"source_url": sourceURL,
+		"count":      len(clips),
+		"clips":      clips,
+	})
+}
+
+// repairSourceLinks ensures every selection note for URL is linked from the
+// page clip (manual graph edge). Safe to call repeatedly.
+func (s *Server) repairSourceLinks(ctx context.Context, sourceURL string) {
+	pageID := s.findPageDocumentID(ctx, sourceURL)
+	if pageID == "" {
+		return
+	}
+	for _, sel := range s.listClipsBySourceURL(ctx, sourceURL, true) {
+		if sel.ID == pageID {
+			continue
+		}
+		_, _ = s.service.LinkDocuments(ctx, pageID, sel.ID)
+	}
+}
+
+func (s *Server) listClipsBySourceURL(ctx context.Context, sourceURL string, selectionNotesOnly bool) []bridgeClip {
+	norm := normalizeSourceURL(sourceURL)
+	if norm == "" {
+		return nil
+	}
+	records, err := s.service.ListClipsBySourceURL(ctx, norm, selectionNotesOnly)
+	if err != nil || len(records) == 0 {
+		return nil
+	}
+	out := make([]bridgeClip, 0, len(records))
+	for _, rec := range records {
+		excerpt, note := "", ""
+		if body, readErr := s.service.ReadDocument(ctx, string(rec.DocumentID)); readErr == nil {
+			excerpt, note, _ = parseClipBody(string(body))
+		}
+		title := strings.TrimSpace(rec.Title)
+		if title == "" {
+			title = string(rec.DocumentID)
+		}
+		out = append(out, bridgeClip{
+			ID:      string(rec.DocumentID),
+			Title:   title,
+			Excerpt: excerpt,
+			Note:    note,
+			Mode:    rec.ClipMode,
+		})
+	}
+	return out
+}
+
+// normalizeSourceURL strips fragments and noisy tracking query params so the
+// same article matches across share links (WeChat adds scene/token params).
+func normalizeSourceURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return strings.TrimRight(raw, "/")
+	}
+	u.Fragment = ""
+	u.Host = strings.ToLower(u.Host)
+	host := u.Host
+	// WeChat / many share pages: path id is stable; query is not.
+	if strings.Contains(host, "weixin.qq.com") ||
+		(strings.Contains(host, "qq.com") && strings.HasPrefix(u.Path, "/s")) {
+		u.RawQuery = ""
+	} else {
+		q := u.Query()
+		for _, key := range []string{
+			"from", "scene", "sessionid", "ascene", "devicetype", "version",
+			"nettype", "abtest_cookie", "wx_header", "poc_token", "srcid",
+			"sharer_shareinfo", "sharer_shareinfo_first", "mpshare", "clicktime",
+			"enterid", "exportkey", "pass_ticket", "uin", "key", "wxtoken",
+		} {
+			q.Del(key)
+		}
+		u.RawQuery = q.Encode()
+	}
+	u.Path = path.Clean("/" + strings.TrimPrefix(u.Path, "/"))
+	if u.Path != "/" {
+		u.Path = strings.TrimRight(u.Path, "/")
+	}
+	return u.String()
+}
+
+func sourceURLSearchKeys(raw string) []string {
+	norm := normalizeSourceURL(raw)
+	seen := map[string]bool{}
+	var keys []string
+	add := func(k string) {
+		k = strings.TrimSpace(k)
+		if k == "" || seen[k] {
+			return
+		}
+		// Skip tiny tokens and scheme-only noise.
+		if len(k) < 6 || k == "https" || k == "http" {
+			return
+		}
+		seen[k] = true
+		keys = append(keys, k)
+	}
+	// Prefer distinctive short keys first (better FTS hits).
+	if u, err := url.Parse(norm); err == nil {
+		parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+		// weixin: /s/<articleId>
+		for i := 0; i+1 < len(parts); i++ {
+			if parts[i] == "s" && len(parts[i+1]) >= 8 {
+				add(parts[i+1])
+			}
+		}
+		if len(parts) > 0 {
+			add(parts[len(parts)-1])
+		}
+		add(strings.Trim(u.Path, "/"))
+		add(u.Host)
+	}
+	add(norm)
+	add(raw)
+	return keys
+}
+
+func bodyCitesSourceURL(body, sourceURL string) bool {
+	for _, key := range sourceURLSearchKeys(sourceURL) {
+		if strings.Contains(body, key) {
+			return true
+		}
+	}
+	// Front-matter source_url may use the normalized form.
+	if fm, ok := frontMatterSourceURL(body); ok {
+		if normalizeSourceURL(fm) == normalizeSourceURL(sourceURL) {
+			return true
+		}
+		for _, key := range sourceURLSearchKeys(sourceURL) {
+			if strings.Contains(fm, key) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func frontMatterSourceURL(body string) (string, bool) {
+	if !strings.HasPrefix(strings.TrimSpace(body), "---") {
+		return "", false
+	}
+	rest := strings.TrimSpace(body)[3:]
+	end := strings.Index(rest, "\n---")
+	if end < 0 {
+		return "", false
+	}
+	for _, line := range strings.Split(rest[:end], "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "source_url:") {
+			continue
+		}
+		val := strings.TrimSpace(strings.TrimPrefix(line, "source_url:"))
+		val = strings.Trim(val, `"'`)
+		if val != "" {
+			return val, true
+		}
+	}
+	return "", false
+}
+
+func parseClipBody(body string) (excerpt, note, mode string) {
+	// Front matter clip_mode
+	if i := strings.Index(body, "clip_mode:"); i >= 0 {
+		line := body[i:]
+		if end := strings.IndexByte(line, '\n'); end > 0 {
+			mode = strings.Trim(strings.TrimSpace(strings.TrimPrefix(line[:end], "clip_mode:")), `"' `)
+		}
+	}
+	// Body after front matter
+	content := body
+	if strings.HasPrefix(content, "---") {
+		rest := content[3:]
+		if end := strings.Index(rest, "\n---"); end >= 0 {
+			content = strings.TrimSpace(rest[end+4:])
+		}
+	}
+	// Selection notes: blockquote excerpt then note paragraphs.
+	var excerptLines, noteLines []string
+	inExcerpt := true
+	for _, line := range strings.Split(content, "\n") {
+		trim := strings.TrimSpace(line)
+		if strings.HasPrefix(trim, ">") {
+			inExcerpt = true
+			excerptLines = append(excerptLines, strings.TrimSpace(strings.TrimPrefix(trim, ">")))
+			continue
+		}
+		if trim == "" {
+			if len(excerptLines) > 0 {
+				inExcerpt = false
+			}
+			continue
+		}
+		if strings.HasPrefix(trim, "Source:") {
+			break
+		}
+		if inExcerpt && len(excerptLines) == 0 {
+			// full-page clip: use first non-empty as excerpt preview
+			excerptLines = append(excerptLines, strings.TrimLeft(trim, "# "))
+			inExcerpt = false
+			continue
+		}
+		if trim == "_No note._" {
+			continue
+		}
+		noteLines = append(noteLines, trim)
+	}
+	excerpt = strings.TrimSpace(strings.Join(excerptLines, " "))
+	note = strings.TrimSpace(strings.Join(noteLines, "\n"))
+	return excerpt, note, mode
+}
+
 type ingestRequest struct {
 	Title     string `json:"title"`
 	Body      string `json:"body"`
 	SourceURL string `json:"source_url"`
+	ClipMode  string `json:"clip_mode"` // selection | page
 	// From is an optional existing document selector. When set (or when a page
 	// clip with the same source_url already exists), the new note is graph-linked
 	// from that document via CreateNote's FromSelector.
@@ -178,68 +431,110 @@ func (s *Server) handleIngest(writer http.ResponseWriter, request *http.Request)
 	if title == "" {
 		title = "Clipped page"
 	}
+	sourceURL := normalizeSourceURL(payload.SourceURL)
+	clipMode := detectClipMode(body, payload)
 	// If the client sent a bare body without front matter, attach source meta.
-	if payload.SourceURL != "" && !strings.HasPrefix(body, "---") {
-		body = assembleClipMarkdown(title, payload.SourceURL, body)
+	if sourceURL != "" && !strings.HasPrefix(body, "---") {
+		body = assembleClipMarkdown(title, sourceURL, body)
 	}
 
-	from := strings.TrimSpace(payload.From)
-	if from == "" && strings.TrimSpace(payload.SourceURL) != "" {
-		from = s.findDocumentIDBySourceURL(request.Context(), payload.SourceURL)
+	ctx := request.Context()
+	// Resolve graph parent up front for selection notes (page clip of same URL).
+	pageID := strings.TrimSpace(payload.From)
+	if pageID == "" && sourceURL != "" && clipMode == "selection" {
+		pageID = s.findPageDocumentID(ctx, sourceURL)
 	}
 
-	result, err := s.service.CreateNote(request.Context(), application.CreateNoteOptions{
+	result, err := s.service.CreateNote(ctx, application.CreateNoteOptions{
 		Title:        title,
 		Body:         body,
-		FromSelector: from,
+		FromSelector: pageID, // page → selection edge when parent exists
+		SourceURL:    sourceURL,
+		ClipMode:     clipMode,
 	})
-	// Linking is best-effort: a stale from selector must not block ingest.
-	if err != nil && from != "" {
-		result, err = s.service.CreateNote(request.Context(), application.CreateNoteOptions{
-			Title: title,
-			Body:  body,
+	// Never fail ingest because linking failed — retry without From, then link.
+	if err != nil && pageID != "" {
+		result, err = s.service.CreateNote(ctx, application.CreateNoteOptions{
+			Title:     title,
+			Body:      body,
+			SourceURL: sourceURL,
+			ClipMode:  clipMode,
 		})
-		from = ""
+		pageID = s.findPageDocumentID(ctx, sourceURL) // may still exist
 	}
 	if err != nil {
 		http.Error(writer, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	id := string(result.Document.ID)
+
+	linked := ""
+	if clipMode == "selection" && sourceURL != "" {
+		// Direct graph link: page document → this selection note.
+		if pageID == "" {
+			pageID = s.findPageDocumentID(ctx, sourceURL)
+		}
+		if pageID != "" && pageID != id {
+			if _, linkErr := s.service.LinkDocuments(ctx, pageID, id); linkErr == nil {
+				linked = pageID
+			} else if result.Link != nil {
+				linked = pageID
+			}
+		}
+		if linked == "" && result.Link != nil && pageID != "" {
+			linked = pageID
+		}
+	}
+	if clipMode == "page" && sourceURL != "" {
+		// Page save: attach every existing selection note for this URL.
+		for _, sel := range s.listClipsBySourceURL(ctx, sourceURL, true) {
+			if sel.ID == id {
+				continue
+			}
+			if _, linkErr := s.service.LinkDocuments(ctx, id, sel.ID); linkErr == nil {
+				linked = id // mark that linking ran from this page
+			}
+		}
+	}
+
 	resp := ingestResponse{
 		ID:      id,
 		Path:    result.Path,
 		Created: true,
 		ViewURL: s.ViewURL(id),
-	}
-	if result.Link != nil && from != "" {
-		resp.Linked = from
+		Linked:  linked,
 	}
 	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
 	_ = json.NewEncoder(writer).Encode(resp)
 }
 
-// findDocumentIDBySourceURL returns a document that already cites this URL
-// (typically a prior full-page clip), so selection notes can auto-link to it.
-func (s *Server) findDocumentIDBySourceURL(ctx context.Context, sourceURL string) string {
-	sourceURL = strings.TrimSpace(sourceURL)
-	if sourceURL == "" {
-		return ""
-	}
-	hits, err := s.service.Search(ctx, sourceURL, 12)
-	if err != nil {
-		return ""
-	}
-	needle := "source_url: " + strconvQuote(sourceURL)
-	for _, hit := range hits {
-		body, readErr := s.service.ReadDocument(ctx, string(hit.DocumentID))
-		if readErr != nil {
-			continue
+// findPageDocumentID returns the full-page clip registered for this URL in
+// document_sources (clip_mode=page). Selection notes are never used as parents.
+func (s *Server) findPageDocumentID(ctx context.Context, sourceURL string) string {
+	for _, clip := range s.listClipsBySourceURL(ctx, sourceURL, false) {
+		if clip.Mode == "page" {
+			return clip.ID
 		}
-		text := string(body)
-		if strings.Contains(text, needle) || strings.Contains(text, sourceURL) {
-			return string(hit.DocumentID)
-		}
+	}
+	return ""
+}
+
+func detectClipMode(body string, payload ingestRequest) string {
+	if mode := strings.TrimSpace(payload.ClipMode); mode == "selection" || mode == "page" {
+		return mode
+	}
+	if _, _, mode := parseClipBody(body); mode == "selection" || mode == "page" {
+		return mode
+	}
+	if strings.Contains(body, "clip_mode: \"selection\"") || strings.Contains(body, "clip_mode: selection") {
+		return "selection"
+	}
+	title := strings.TrimSpace(payload.Title)
+	if strings.HasSuffix(title, "— note") || strings.HasSuffix(title, "- note") {
+		return "selection"
+	}
+	if payload.SourceURL != "" {
+		return "page"
 	}
 	return ""
 }

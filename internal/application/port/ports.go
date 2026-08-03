@@ -102,10 +102,23 @@ type CatalogStore interface {
 	Search(ctx context.Context, query string, limit int) ([]SearchHit, error)
 	ListDocuments(ctx context.Context, limit int, includeUnavailable bool) ([]DocumentRecord, error)
 	ResolveDocument(ctx context.Context, selector string) (*catalog.Document, string, error)
+	// Document source URLs (browser clip provenance), stored at ingest time.
+	UpsertDocumentSource(ctx context.Context, documentID catalog.DocumentID, sourceURLNorm, clipMode string, now time.Time) error
+	ListDocumentsBySourceURL(ctx context.Context, sourceURLNorm string, selectionNotesOnly bool) ([]DocumentSourceRecord, error)
 	GraphStore
 	Status(ctx context.Context) (StatusSnapshot, error)
 	GetSetting(ctx context.Context, key string) (string, error)
 	SetSetting(ctx context.Context, key, value string) error
+}
+
+// DocumentSourceRecord is a document that was ingested from a web URL.
+type DocumentSourceRecord struct {
+	DocumentID   catalog.DocumentID
+	Title        string
+	AbsolutePath string
+	RelativePath string
+	ClipMode     string // "selection" | "page" | ""
+	SourceURL    string
 }
 
 type StatusSnapshot struct {

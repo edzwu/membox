@@ -1,6 +1,7 @@
 import { Readability } from '@mozilla/readability';
 import TurndownService from 'turndown';
 import type { ClipPayload } from './types';
+import { normalizeSourceURL } from './url';
 
 function yamlQuote(value: string): string {
   return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, ' ')}"`;
@@ -56,7 +57,7 @@ export function clipSelection(args: {
   excerptHTML: string;
   note: string;
 }): ClipPayload {
-  const sourceUrl = location.href;
+  const sourceUrl = normalizeSourceURL(location.href);
   const pageTitle = (document.title || 'Clipped page').trim();
   const excerptText = args.excerptText.trim();
   if (!excerptText) {
@@ -91,6 +92,7 @@ export function clipSelection(args: {
   return {
     title,
     sourceUrl,
+    clipMode: 'selection',
     body: buildMarkdown(title, sourceUrl, bodyParts.join('\n'), {
       clip_mode: 'selection',
       source_title: pageTitle,
@@ -120,7 +122,7 @@ export function readSelection(): {
 
 /** Runs inside the extension content script (isolated world + full DOM). */
 export function clipCurrentDocument(): ClipPayload {
-  const sourceUrl = location.href;
+  const sourceUrl = normalizeSourceURL(location.href);
   const titleHint = (document.title || 'Clipped page').trim();
 
   // Readability mutates its document; always clone first.
@@ -182,7 +184,8 @@ export function clipCurrentDocument(): ClipPayload {
   return {
     title,
     sourceUrl,
-    body: buildMarkdown(title, sourceUrl, markdownBody),
+    clipMode: 'page',
+    body: buildMarkdown(title, sourceUrl, markdownBody, { clip_mode: 'page' }),
   };
 }
 

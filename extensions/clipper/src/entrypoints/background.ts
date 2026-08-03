@@ -1,6 +1,6 @@
-import { ingestClip } from '../lib/membox-client';
+import { fetchClipsBySource, ingestClip } from '../lib/membox-client';
 import { loadSettings } from '../lib/settings';
-import type { ClipPayload, IngestResult } from '../lib/types';
+import type { ClipPayload, IngestResult, SourceClip } from '../lib/types';
 
 type IngestResponse = { ok: true; result: IngestResult } | { ok: false; error: string };
 
@@ -14,9 +14,25 @@ export default defineBackground(() => {
         open: message.open !== false,
       });
     }
+    if (message?.type === 'membox.clips-for-url') {
+      return clipsForUrl(String(message.url || ''));
+    }
     return undefined;
   });
 });
+
+async function clipsForUrl(
+  sourceUrl: string,
+): Promise<{ ok: true; clips: SourceClip[] } | { ok: false; error: string }> {
+  try {
+    if (!sourceUrl) return { ok: false, error: 'missing url' };
+    const settings = await loadSettings();
+    const clips = await fetchClipsBySource(settings, sourceUrl);
+    return { ok: true, clips };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
 
 async function ingestPayload(
   payload: ClipPayload,

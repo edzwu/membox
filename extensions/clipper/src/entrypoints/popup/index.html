@@ -32,7 +32,19 @@
 
       <div class="actions">
         <button id="saveSettings" type="button" class="secondary">Save settings</button>
-        <button id="clip" type="button" class="primary">Save to membox</button>
+        <button id="clip" type="button" class="primary">Save page</button>
+      </div>
+
+      <div class="float-row">
+        <div class="float-meta">
+          <span class="float-label">Pins on this page</span>
+          <span id="floatCount" class="float-count">—</span>
+          <span class="float-hint">Overlay only · membox notes stay saved</span>
+        </div>
+        <div class="float-actions">
+          <button id="floatRestore" type="button" class="secondary float-toggle" disabled hidden>Restore</button>
+          <button id="floatToggle" type="button" class="secondary float-toggle" disabled>Expand</button>
+        </div>
       </div>
 
       <pre id="message" class="message" hidden></pre>

@@ -9,6 +9,9 @@ const autoOpenEl = document.getElementById('autoOpen') as HTMLInputElement;
 const messageEl = document.getElementById('message') as HTMLPreElement;
 const saveSettingsBtn = document.getElementById('saveSettings') as HTMLButtonElement;
 const clipBtn = document.getElementById('clip') as HTMLButtonElement;
+const floatToggleBtn = document.getElementById('floatToggle') as HTMLButtonElement;
+const floatRestoreBtn = document.getElementById('floatRestore') as HTMLButtonElement;
+const floatCountEl = document.getElementById('floatCount') as HTMLSpanElement;
 
 function showMessage(text: string) {
   messageEl.hidden = !text;
@@ -73,7 +76,108 @@ clipBtn.addEventListener('click', async () => {
   }
 });
 
+type FloatStatusResponse = {
+  ok: boolean;
+  collapsed?: boolean;
+  count?: number;
+  hiddenCount?: number;
+  total?: number;
+  savedCount?: number;
+  restored?: number;
+  error?: string;
+};
+
+async function activeTabId(): Promise<number | null> {
+  const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+  return tab?.id ?? null;
+}
+
+async function refreshFloatStatus() {
+  floatToggleBtn.disabled = true;
+  floatRestoreBtn.disabled = true;
+  floatRestoreBtn.hidden = true;
+  floatCountEl.textContent = '—';
+  try {
+    const tabId = await activeTabId();
+    if (!tabId) {
+      floatCountEl.textContent = 'no tab';
+      return;
+    }
+    const response = (await browser.tabs.sendMessage(tabId, {
+      type: 'membox.floats.status',
+    })) as FloatStatusResponse | undefined;
+    if (!response?.ok) {
+      floatCountEl.textContent = '0 on page';
+      floatToggleBtn.textContent = 'Expand';
+      return;
+    }
+    const count = response.count ?? 0;
+    const hidden = response.hiddenCount ?? 0;
+    const saved = response.savedCount ?? 0;
+    const collapsed = response.collapsed !== false;
+    // saved = membox selection notes for this URL (source of truth).
+    // pinned/stacked = local overlay cache (reconciled to membox on status).
+    const parts: string[] = [`${saved} in membox`];
+    if (count > 0) parts.push(`${count} ${collapsed ? 'pinned' : 'open'}`);
+    if (hidden > 0) parts.push(`${hidden} hidden`);
+    if (count === 0 && hidden === 0) parts.push('none pinned');
+    floatCountEl.textContent = parts.join(' · ');
+    floatToggleBtn.textContent = collapsed ? 'Expand' : 'Collapse';
+    floatToggleBtn.disabled = count === 0;
+    // Restore when anything is hidden locally OR membox has notes not pinned.
+    const canRestore = hidden > 0 || saved > count + hidden;
+    floatRestoreBtn.hidden = !canRestore;
+    floatRestoreBtn.disabled = !canRestore;
+    floatRestoreBtn.textContent = 'Restore';
+  } catch {
+    floatCountEl.textContent = 'reload page';
+    floatToggleBtn.textContent = 'Expand';
+    floatToggleBtn.disabled = true;
+  }
+}
+
+floatToggleBtn.addEventListener('click', async () => {
+  floatToggleBtn.disabled = true;
+  try {
+    const tabId = await activeTabId();
+    if (!tabId) return;
+    const response = (await browser.tabs.sendMessage(tabId, {
+      type: 'membox.floats.toggle',
+    })) as FloatStatusResponse;
+    if (!response?.ok) {
+      showMessage(response?.error || 'Toggle failed — reload the page');
+      return;
+    }
+  } catch (err) {
+    showMessage(err instanceof Error ? err.message : String(err));
+  } finally {
+    await refreshFloatStatus();
+  }
+});
+
+floatRestoreBtn.addEventListener('click', async () => {
+  floatRestoreBtn.disabled = true;
+  try {
+    const tabId = await activeTabId();
+    if (!tabId) return;
+    const response = (await browser.tabs.sendMessage(tabId, {
+      type: 'membox.floats.restore',
+    })) as FloatStatusResponse;
+    if (!response?.ok) {
+      showMessage(response?.error || 'Restore failed — reload the page');
+      return;
+    }
+    const n = response.restored ?? 0;
+    showMessage(n ? `Restored ${n} pin${n === 1 ? '' : 's'} on this page` : 'Nothing to restore');
+  } catch (err) {
+    showMessage(err instanceof Error ? err.message : String(err));
+  } finally {
+    await refreshFloatStatus();
+  }
+});
+
 loadSettings().then(async (settings) => {
   fillForm(settings);
   await refreshStatus();
+  await refreshFloatStatus();
 });

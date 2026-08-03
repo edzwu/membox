@@ -65,7 +65,9 @@ export class SelectionCard {
     }
     if (this.statusEl) {
       this.statusEl.hidden = true;
+      this.statusEl.classList.remove('is-error');
       this.statusEl.textContent = '';
+      this.statusEl.title = '';
     }
     this.position(args.rect);
     this.noteEl?.focus();
@@ -91,7 +93,9 @@ export class SelectionCard {
     if (this.noteEl) this.noteEl.disabled = false;
     if (this.statusEl) {
       this.statusEl.hidden = false;
+      this.statusEl.classList.add('is-error');
       this.statusEl.textContent = message;
+      this.statusEl.title = message;
     }
   }
 
@@ -103,7 +107,9 @@ export class SelectionCard {
     }
     if (this.statusEl) {
       this.statusEl.hidden = false;
+      this.statusEl.classList.remove('is-error');
       this.statusEl.textContent = shortId;
+      this.statusEl.title = shortId;
     }
     window.setTimeout(() => this.hide(), 700);
   }
@@ -175,7 +181,9 @@ export class SelectionCard {
     if (this.noteEl) this.noteEl.disabled = true;
     if (this.statusEl) {
       this.statusEl.hidden = true;
+      this.statusEl.classList.remove('is-error');
       this.statusEl.textContent = '';
+      this.statusEl.title = '';
     }
     try {
       await this.handlers.onSave({
@@ -185,7 +193,7 @@ export class SelectionCard {
         rect: this.lastRect,
       });
     } catch (err) {
-      this.setError(err instanceof Error ? err.message : String(err));
+      this.setError(formatSaveError(err));
     }
   }
 
@@ -230,6 +238,24 @@ export class SelectionCard {
     this.host.style.top = `${Math.round(top)}px`;
     this.host.style.left = `${Math.round(left)}px`;
   }
+}
+
+function formatSaveError(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  if (/extension context invalidated/i.test(raw)) {
+    return 'Extension reloaded — refresh this page';
+  }
+  if (/receiving end does not exist|could not establish connection/i.test(raw)) {
+    return 'Extension asleep — refresh this page';
+  }
+  if (/failed to fetch|networkerror|load failed/i.test(raw)) {
+    return 'membox offline — open TUI / mm serve';
+  }
+  if (/unauthorized/i.test(raw)) {
+    return 'Token mismatch — check popup settings';
+  }
+  // Keep the card compact; full text is on title tooltip.
+  return raw.length > 64 ? raw.slice(0, 61) + '…' : raw;
 }
 
 /** Grow textarea with content, starting from a single compact row. */
@@ -322,13 +348,22 @@ function cardCss(): string {
     .composer-bar .save { pointer-events: auto; }
     .status {
       font-size: 10px;
-      line-height: 1.2;
+      line-height: 1.25;
       color: var(--muted);
-      max-width: 7em;
+      max-width: 11em;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
       pointer-events: none;
+    }
+    .status.is-error {
+      color: color-mix(in srgb, #b3402f 80%, var(--ink));
+      white-space: normal;
+      max-width: 14em;
+      text-align: right;
+    }
+    .card[data-theme="dark"] .status.is-error {
+      color: color-mix(in srgb, #e07a6a 85%, var(--ink));
     }
     .save {
       appearance: none;

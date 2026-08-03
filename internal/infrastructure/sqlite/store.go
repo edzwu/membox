@@ -201,7 +201,11 @@ source_updated_at=COALESCE(source_updated_at,CASE WHEN mtime>0 THEN mtime/100000
 			return fmt.Errorf("adding documents.pinned: %w", err)
 		}
 	}
-	return s.migrateGraphSchema()
+	if err := s.migrateGraphSchema(); err != nil {
+		return err
+	}
+	// Always ensure clip provenance table exists (graph migration may no-op).
+	return s.migrateDocumentSources()
 }
 
 func (s *Store) migrateGraphSchema() error {
@@ -228,9 +232,12 @@ func (s *Store) migrateGraphSchema() error {
 		}
 	}
 	if edgesTable && !usesNodeColumns {
-		_, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS graph_edges_from ON graph_edges(from_document_id);
-CREATE INDEX IF NOT EXISTS graph_edges_to ON graph_edges(to_document_id)`)
-		return err
+		if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS graph_edges_from ON graph_edges(from_document_id);
+CREATE INDEX IF NOT EXISTS graph_edges_to ON graph_edges(to_document_id)`); err != nil {
+			return err
+		}
+		// Graph already current — still ensure document_sources exists.
+		return s.migrateDocumentSources()
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -275,7 +282,92 @@ SELECT from_node_id,to_node_id,kind,created_at,updated_at FROM graph_edges_old`)
 	if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS graph_edges_to ON graph_edges(to_document_id)`); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	return s.migrateDocumentSources()
+}
+
+// EnsureDocumentSources is exported for tests / recovery; migrate always calls this.
+
+func (s *Store) migrateDocumentSources() error {
+	_, err := s.db.Exec(`
+CREATE TABLE IF NOT EXISTS document_sources (
+  document_id TEXT PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
+  source_url TEXT NOT NULL DEFAULT '',
+  source_url_norm TEXT NOT NULL,
+  clip_mode TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS document_sources_url_norm ON document_sources(source_url_norm);
+CREATE INDEX IF NOT EXISTS document_sources_mode ON document_sources(clip_mode);
+`)
+	if err != nil {
+		return fmt.Errorf("migrating document_sources: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) UpsertDocumentSource(ctx context.Context, documentID catalog.DocumentID, sourceURLNorm, clipMode string, now time.Time) error {
+	sourceURLNorm = strings.TrimSpace(sourceURLNorm)
+	if documentID == "" || sourceURLNorm == "" {
+		return fmt.Errorf("document id and source url are required")
+	}
+	clipMode = strings.TrimSpace(clipMode)
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO document_sources(document_id, source_url, source_url_norm, clip_mode, created_at)
+VALUES(?,?,?,?,?)
+ON CONFLICT(document_id) DO UPDATE SET
+  source_url=excluded.source_url,
+  source_url_norm=excluded.source_url_norm,
+  clip_mode=excluded.clip_mode
+`, string(documentID), sourceURLNorm, sourceURLNorm, clipMode, now.UTC().Unix())
+	if err != nil {
+		return fmt.Errorf("upserting document source: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ListDocumentsBySourceURL(ctx context.Context, sourceURLNorm string, selectionNotesOnly bool) ([]port.DocumentSourceRecord, error) {
+	sourceURLNorm = strings.TrimSpace(sourceURLNorm)
+	if sourceURLNorm == "" {
+		return nil, nil
+	}
+	query := documentSelect + `
+JOIN document_sources ds ON ds.document_id = d.id
+WHERE l.status='active' AND ds.source_url_norm=?
+`
+	args := []any{sourceURLNorm}
+	if selectionNotesOnly {
+		// Explicit selection clips, or legacy files named *-note.md.
+		query += ` AND (ds.clip_mode='selection' OR l.relative_path LIKE '%-note.md')`
+	}
+	query += ` ORDER BY ds.created_at DESC, d.id`
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("listing documents by source url: %w", err)
+	}
+	defer rows.Close()
+	var out []port.DocumentSourceRecord
+	for rows.Next() {
+		document, absolutePath, err := scanDocument(rows)
+		if err != nil {
+			return nil, err
+		}
+		// Re-read clip metadata (scanDocument does not include sources).
+		var clipMode, sourceURL string
+		_ = s.db.QueryRowContext(ctx, `SELECT clip_mode, source_url FROM document_sources WHERE document_id=?`, string(document.ID)).
+			Scan(&clipMode, &sourceURL)
+		out = append(out, port.DocumentSourceRecord{
+			DocumentID:   document.ID,
+			Title:        document.Index.Title,
+			AbsolutePath: absolutePath,
+			RelativePath: document.Location.RelativePath,
+			ClipMode:     clipMode,
+			SourceURL:    sourceURL,
+		})
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) AddOrReactivatePath(ctx context.Context, root string, now time.Time) (*catalog.IndexedPath, bool, error) {
@@ -740,7 +832,87 @@ sha256=excluded.sha256,indexed_at=excluded.indexed_at,source_created_at=excluded
 	if _, err := tx.ExecContext(ctx, `INSERT INTO document_fts(document_id,title,path,body) VALUES(?,?,?,?)`, d.ID, d.Index.Title, fullPath, string(save.Body)); err != nil {
 		return fmt.Errorf("updating search index: %w", err)
 	}
+	// Persist clip provenance when front matter carries source_url (ingest + scan backfill).
+	if sourceURL, clipMode := sourceMetaFromBody(string(save.Body), d.Location.RelativePath); sourceURL != "" {
+		norm := normalizeSourceURLLite(sourceURL)
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO document_sources(document_id, source_url, source_url_norm, clip_mode, created_at)
+VALUES(?,?,?,?,?)
+ON CONFLICT(document_id) DO UPDATE SET
+  source_url=excluded.source_url,
+  source_url_norm=excluded.source_url_norm,
+  clip_mode=excluded.clip_mode
+`, d.ID, norm, norm, clipMode, millis(d.UpdatedAt)); err != nil {
+			return fmt.Errorf("saving document source: %w", err)
+		}
+	}
 	return nil
+}
+
+func sourceMetaFromBody(body, relativePath string) (sourceURL, clipMode string) {
+	if fm, ok := frontMatterMap(body); ok {
+		sourceURL = strings.TrimSpace(fm["source_url"])
+		clipMode = strings.TrimSpace(fm["clip_mode"])
+	}
+	if clipMode == "" && strings.HasSuffix(strings.ToLower(relativePath), "-note.md") {
+		clipMode = "selection"
+	}
+	if clipMode == "" && sourceURL != "" {
+		clipMode = "page"
+	}
+	return sourceURL, clipMode
+}
+
+func frontMatterMap(body string) (map[string]string, bool) {
+	trim := strings.TrimSpace(body)
+	if !strings.HasPrefix(trim, "---") {
+		return nil, false
+	}
+	rest := trim[3:]
+	end := strings.Index(rest, "\n---")
+	if end < 0 {
+		return nil, false
+	}
+	out := map[string]string{}
+	for _, line := range strings.Split(rest[:end], "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || !strings.Contains(line, ":") {
+			continue
+		}
+		parts := strings.SplitN(line, ":", 2)
+		key := strings.TrimSpace(parts[0])
+		val := ""
+		if len(parts) == 2 {
+			val = strings.Trim(strings.TrimSpace(parts[1]), `"'`)
+		}
+		out[key] = val
+	}
+	return out, true
+}
+
+// normalizeSourceURLLite keeps store independent of the HTTP package while
+// matching browser/weixin share-link variants to the same key.
+func normalizeSourceURLLite(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	// Strip fragment.
+	if i := strings.IndexByte(raw, '#'); i >= 0 {
+		raw = raw[:i]
+	}
+	// WeChat article id is stable; drop query entirely for mp.weixin.qq.com/s/…
+	if strings.Contains(raw, "mp.weixin.qq.com/s/") || strings.Contains(raw, "weixin.qq.com/s/") {
+		if i := strings.IndexByte(raw, '?'); i >= 0 {
+			raw = raw[:i]
+		}
+		return strings.TrimRight(raw, "/")
+	}
+	if i := strings.IndexByte(raw, '?'); i >= 0 {
+		// Keep non-weixin queries only if essential; default strip for matching stability.
+		raw = raw[:i]
+	}
+	return strings.TrimRight(raw, "/")
 }
 
 func (s *Store) Search(ctx context.Context, query string, limit int) ([]port.SearchHit, error) {
@@ -805,9 +977,31 @@ func (s *Store) ResolveDocument(ctx context.Context, selector string) (*catalog.
 	if !selectorPattern.MatchString(selector) {
 		return nil, "", fmt.Errorf("invalid document selector %q", selector)
 	}
-	rows, err := s.db.QueryContext(ctx, documentSelect+` WHERE lower(d.id) LIKE ? ORDER BY d.id LIMIT 2`, selector+"%")
+	// UI short IDs are the *last* 4 hex chars (see host.ShortDocumentID).
+	// Prefer prefix match (full/partial UUID), then unique suffix match.
+	docs, paths, err := s.queryDocumentsByIDPattern(ctx, selector+"%")
 	if err != nil {
 		return nil, "", err
+	}
+	if len(docs) == 0 {
+		docs, paths, err = s.queryDocumentsByIDPattern(ctx, "%"+selector)
+		if err != nil {
+			return nil, "", err
+		}
+	}
+	if len(docs) == 0 {
+		return nil, "", fmt.Errorf("document %q not found", selector)
+	}
+	if len(docs) > 1 {
+		return nil, "", fmt.Errorf("document selector %q is ambiguous; use a longer id", selector)
+	}
+	return docs[0], paths[0], nil
+}
+
+func (s *Store) queryDocumentsByIDPattern(ctx context.Context, pattern string) ([]*catalog.Document, []string, error) {
+	rows, err := s.db.QueryContext(ctx, documentSelect+` WHERE lower(d.id) LIKE ? ORDER BY d.id LIMIT 2`, pattern)
+	if err != nil {
+		return nil, nil, err
 	}
 	defer rows.Close()
 	var docs []*catalog.Document
@@ -815,20 +1009,11 @@ func (s *Store) ResolveDocument(ctx context.Context, selector string) (*catalog.
 	for rows.Next() {
 		doc, path, err := scanDocument(rows)
 		if err != nil {
-			return nil, "", err
+			return nil, nil, err
 		}
 		docs, paths = append(docs, doc), append(paths, path)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, "", err
-	}
-	if len(docs) == 0 {
-		return nil, "", fmt.Errorf("document %q not found", selector)
-	}
-	if len(docs) > 1 {
-		return nil, "", fmt.Errorf("document selector %q is ambiguous; use a longer prefix", selector)
-	}
-	return docs[0], paths[0], nil
+	return docs, paths, rows.Err()
 }
 
 func (s *Store) Status(ctx context.Context) (port.StatusSnapshot, error) {

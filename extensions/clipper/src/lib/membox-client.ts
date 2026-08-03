@@ -1,4 +1,5 @@
-import type { BridgeSettings, BridgeStatus, ClipPayload, IngestResult } from './types';
+import type { BridgeSettings, BridgeStatus, ClipPayload, IngestResult, SourceClip } from './types';
+import { normalizeSourceURL } from './url';
 
 function headers(settings: BridgeSettings, json = false): HeadersInit {
   const h: Record<string, string> = {};
@@ -38,7 +39,8 @@ export async function ingestClip(
     body: JSON.stringify({
       title: clip.title,
       body: clip.body,
-      source_url: clip.sourceUrl,
+      source_url: normalizeSourceURL(clip.sourceUrl) || clip.sourceUrl,
+      clip_mode: clip.clipMode || undefined,
     }),
   });
   const text = await response.text();
@@ -55,4 +57,26 @@ export async function ingestClip(
     throw new Error(text || `ingest failed (${response.status})`);
   }
   return JSON.parse(text) as IngestResult;
+}
+
+export async function fetchClipsBySource(
+  settings: BridgeSettings,
+  sourceUrl: string,
+): Promise<SourceClip[]> {
+  const base = settings.baseUrl.replace(/\/$/, '');
+  const normalized = normalizeSourceURL(sourceUrl) || sourceUrl;
+  const url = `${base}/api/bridge/clips?source_url=${encodeURIComponent(normalized)}`;
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: headers(settings),
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new Error('unauthorized: bridge token mismatch');
+    }
+    throw new Error(text || `clips query failed (${response.status})`);
+  }
+  const data = JSON.parse(text) as { clips?: SourceClip[] };
+  return Array.isArray(data.clips) ? data.clips : [];
 }

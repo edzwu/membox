@@ -14,6 +14,8 @@ export type ClipPayload = {
   title: string;
   sourceUrl: string;
   body: string;
+  /** "selection" | "page" — stored in membox document_sources */
+  clipMode?: 'selection' | 'page';
 };
 
 export type IngestResult = {
@@ -21,6 +23,15 @@ export type IngestResult = {
   path: string;
   created: boolean;
   view_url: string;
+  linked?: string;
+};
+
+export type SourceClip = {
+  id: string;
+  title: string;
+  excerpt?: string;
+  note?: string;
+  clip_mode?: string;
 };
 
 export const DEFAULT_SETTINGS: BridgeSettings = {

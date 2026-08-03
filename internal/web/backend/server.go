@@ -56,6 +56,7 @@ func (s *Server) Start(ctx context.Context, port int) (string, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/bridge/status", s.handleBridgeStatus)
+	mux.HandleFunc("/api/bridge/clips", s.handleBridgeClips)
 	mux.HandleFunc("/api/ingest", s.handleIngest)
 	mux.HandleFunc("/api/doc/", s.handleDocument)
 	mux.HandleFunc("/api/save", s.handleSave)

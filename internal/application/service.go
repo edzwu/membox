@@ -552,6 +552,9 @@ type CreateNoteOptions struct {
 	Body         string
 	FromSelector string
 	Topic        bool
+	// Browser clip provenance (stored in document_sources, not inferred later).
+	SourceURL string
+	ClipMode  string // "selection" | "page" | ""
 }
 
 type CreateNoteResult struct {
@@ -587,6 +590,13 @@ func (s *Service) CreateNote(ctx context.Context, opts CreateNoteOptions) (Creat
 		if existing, absolute, err := s.store.ResolveTopic(ctx, title); err == nil {
 			return CreateNoteResult{Document: existing, Path: absolute}, nil
 		}
+	} else if strings.EqualFold(strings.TrimSpace(opts.ClipMode), "selection") {
+		// Selection excerpts always use the *-note.md convention.
+		slug = strings.TrimSuffix(slug, "-note")
+		if slug == "" {
+			slug = "selection"
+		}
+		filename = slug + "-note.md"
 	}
 	absolute, err := s.availableNotePath(indexedPath.Root, filename)
 	if err != nil {
@@ -635,7 +645,25 @@ func (s *Service) CreateNote(ctx context.Context, opts CreateNoteOptions) (Creat
 		}
 		result.Link = &edge
 	}
+	if source := strings.TrimSpace(opts.SourceURL); source != "" {
+		mode := strings.TrimSpace(opts.ClipMode)
+		if mode == "" && strings.HasSuffix(strings.ToLower(created.Location.RelativePath), "-note.md") {
+			mode = "selection"
+		}
+		if mode == "" {
+			mode = "page"
+		}
+		if err := s.store.UpsertDocumentSource(ctx, created.ID, source, mode, s.clock.Now()); err != nil {
+			return CreateNoteResult{}, err
+		}
+	}
 	return result, nil
+}
+
+// ListClipsBySourceURL returns documents registered for a normalized web URL.
+// When selectionNotesOnly is true, only selection excerpts (*-note.md / clip_mode=selection) are returned.
+func (s *Service) ListClipsBySourceURL(ctx context.Context, sourceURLNorm string, selectionNotesOnly bool) ([]port.DocumentSourceRecord, error) {
+	return s.store.ListDocumentsBySourceURL(ctx, strings.TrimSpace(sourceURLNorm), selectionNotesOnly)
 }
 
 func (s *Service) defaultCreatePath(ctx context.Context) (*catalog.IndexedPath, error) {
