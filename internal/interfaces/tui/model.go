@@ -104,6 +104,7 @@ type graphFocusMsg struct {
 	cards      []membox.DocumentView
 	incoming   int
 	err        error
+	previews   map[string]string
 }
 
 type Model struct {
@@ -159,6 +160,7 @@ type Model struct {
 	graphFocusID   string
 	graphCards     []membox.DocumentView
 	graphIncoming  int
+	graphPreviews  map[string]string
 }
 
 type searchMsg struct {
@@ -468,6 +470,7 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.graphFocusID = msg.documentID
 			m.graphCards = msg.cards
 			m.graphIncoming = msg.incoming
+			m.graphPreviews = msg.previews
 			m.viewMode = viewBoard
 			m.boardScrollY = 0
 			m.statusMessage = "graph focus " + shortID(msg.documentID)
@@ -1074,7 +1077,16 @@ func (m Model) commandAction(tokens []string) (func() tea.Msg, string, error) {
 				cards = append(cards, graph.Focus)
 				cards = append(cards, graph.Outgoing...)
 				cards = append(cards, graph.Incoming...)
-				return graphFocusMsg{documentID: graph.Focus.ID, cards: cards, incoming: len(graph.Incoming)}
+				// Load body previews so cards show content, not just filenames.
+				previews := make(map[string]string, len(cards))
+				for _, card := range cards {
+					if body, readErr := m.app.ReadDocument(m.ctx, membox.ReadDocumentQuery{Selector: card.ID}); readErr == nil {
+						if preview := host.DocumentPreview(body, 220); preview != "" {
+							previews[card.ID] = preview
+						}
+					}
+				}
+				return graphFocusMsg{documentID: graph.Focus.ID, cards: cards, incoming: len(graph.Incoming), previews: previews}
 			}, "link list <document-id>", nil
 		}
 	}
@@ -2241,12 +2253,20 @@ func (m Model) graphBoardView() string {
 	width := max(24, m.width-8)
 	var lines []string
 	lines = append(lines, accentStyle.Render("● focus")+dimStyle.Render("  ["+shortID(center.ID)+"] "+centerItem.filename))
-	for _, line := range wrapText(displayTitle(center.Title, center.Path), width-2) {
-		lines = append(lines, dimStyle.Render("  ")+line)
+	// Title line only when it differs from the filename already printed above.
+	if title := displayTitle(center.Title, center.Path); !titleRedundant(title, centerItem.filename) {
+		for _, line := range wrapText(title, width-2) {
+			lines = append(lines, dimStyle.Render("  ")+line)
+		}
 	}
 	if center.Summary != "" {
 		for _, line := range wrapText(center.Summary, width-2) {
 			lines = append(lines, dimStyle.Render("  ")+mutedStyle.Render(line))
+		}
+	}
+	if preview := m.graphPreviews[center.ID]; preview != "" {
+		for _, line := range wrapText(preview, width-6) {
+			lines = append(lines, dimStyle.Render("  ")+previewStyle.Render(line))
 		}
 	}
 	if len(m.graphCards) > 1 {
@@ -2264,13 +2284,24 @@ func (m Model) graphBoardView() string {
 				continuation = "  "
 			}
 			lines = append(lines, dimStyle.Render(branch)+" "+accentStyle.Render(direction)+" ["+shortID(candidate.document.ID)+"] "+candidate.filename)
-			title := displayTitle(candidate.document.Title, candidate.document.Path)
-			for _, line := range wrapText(title, width-2) {
-				lines = append(lines, dimStyle.Render(continuation)+" "+line)
+			// Skip the title row when it just repeats the filename.
+			if title := displayTitle(candidate.document.Title, candidate.document.Path); !titleRedundant(title, candidate.filename) {
+				for _, line := range wrapText(title, width-2) {
+					lines = append(lines, dimStyle.Render(continuation)+" "+line)
+				}
 			}
 			if candidate.document.Summary != "" {
 				for _, line := range wrapText(candidate.document.Summary, width-2) {
 					lines = append(lines, dimStyle.Render(continuation)+" "+mutedStyle.Render(line))
+				}
+			}
+			if preview := m.graphPreviews[candidate.document.ID]; preview != "" {
+				previewLines := wrapText(preview, width-6)
+				if len(previewLines) > 3 {
+					previewLines = previewLines[:3]
+				}
+				for _, line := range previewLines {
+					lines = append(lines, dimStyle.Render(continuation)+" "+previewStyle.Render(line))
 				}
 			}
 			if index+1 < len(related) {
@@ -2571,6 +2602,20 @@ func displayTitle(title, path string) string {
 	}
 	base := filepath.Base(path)
 	return strings.TrimSuffix(base, filepath.Ext(base))
+}
+
+// titleRedundant reports whether the displayed title adds nothing over the
+// filename already shown on the card (e.g. clip notes whose title IS the slug).
+func titleRedundant(title, filename string) bool {
+	t := strings.ToLower(strings.TrimSpace(title))
+	f := strings.ToLower(strings.TrimSpace(filename))
+	if ext := filepath.Ext(f); ext != "" {
+		f = strings.TrimSuffix(f, ext)
+	}
+	if t == "" || f == "" {
+		return false
+	}
+	return t == f
 }
 
 func previewPlaceholder(message string) string {

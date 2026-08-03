@@ -6,6 +6,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"membox"
+	"membox/internal/interfaces/host"
 )
 
 func newLinkCommand(runtime *runtime) *cobra.Command {
@@ -75,30 +76,49 @@ func newLinkListCommand(runtime *runtime) *cobra.Command {
 		if err != nil {
 			return err
 		}
-		graph, err := box.GetDocumentGraph(cmd.Context(), membox.GetDocumentGraphQuery{Selector: args[0]})
+		ctx := cmd.Context()
+		graph, err := box.GetDocumentGraph(ctx, membox.GetDocumentGraphQuery{Selector: args[0]})
 		if err != nil {
 			return err
 		}
 		if jsonOutput {
 			return writeJSON(cmd, graph)
 		}
-		printDocumentLinks(cmd, graph)
+		preview := func(selectorValue string) string {
+			body, readErr := box.ReadDocument(ctx, membox.ReadDocumentQuery{Selector: selectorValue})
+			if readErr != nil {
+				return ""
+			}
+			return host.DocumentPreview(body, 160)
+		}
+		printDocumentLinks(cmd, graph, preview)
 		return nil
 	}
 	return command
 }
 
-func printDocumentLinks(cmd *cobra.Command, graph membox.DocumentGraphView) {
-	fmt.Fprintf(cmd.OutOrStdout(), "Outgoing links: %d\n", len(graph.Outgoing))
+func printDocumentLinks(cmd *cobra.Command, graph membox.DocumentGraphView, preview func(selector string) string) {
+	out := cmd.OutOrStdout()
+	fmt.Fprintf(out, "Focus: %s  %s\n", shortID(graph.Focus.ID), displayName(graph.Focus.Title, graph.Focus.Path))
+	if text := preview(graph.Focus.ID); text != "" {
+		fmt.Fprintf(out, "  %s\n", text)
+	}
+	fmt.Fprintf(out, "Outgoing links: %d\n", len(graph.Outgoing))
 	for _, document := range graph.Outgoing {
-		fmt.Fprintf(cmd.OutOrStdout(), "  → %s  %s\n", shortID(document.ID), displayName(document.Title, document.Path))
+		fmt.Fprintf(out, "  → %s  %s\n", shortID(document.ID), displayName(document.Title, document.Path))
+		if text := preview(document.ID); text != "" {
+			fmt.Fprintf(out, "    %s\n", text)
+		}
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "Incoming links: %d\n", len(graph.Incoming))
+	fmt.Fprintf(out, "Incoming links: %d\n", len(graph.Incoming))
 	for _, document := range graph.Incoming {
-		fmt.Fprintf(cmd.OutOrStdout(), "  ← %s  %s\n", shortID(document.ID), displayName(document.Title, document.Path))
+		fmt.Fprintf(out, "  ← %s  %s\n", shortID(document.ID), displayName(document.Title, document.Path))
+		if text := preview(document.ID); text != "" {
+			fmt.Fprintf(out, "    %s\n", text)
+		}
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "Topics: %d\n", len(graph.Topics))
+	fmt.Fprintf(out, "Topics: %d\n", len(graph.Topics))
 	for _, topic := range graph.Topics {
-		fmt.Fprintf(cmd.OutOrStdout(), "  %s  %s\n", shortID(topic.ID), topic.Name)
+		fmt.Fprintf(out, "  %s  %s\n", shortID(topic.ID), topic.Name)
 	}
 }

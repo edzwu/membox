@@ -28,6 +28,7 @@ var (
 	accentStyle  = lipgloss.NewStyle().Foreground(colors.Accent)
 	mutedStyle   = lipgloss.NewStyle().Foreground(colors.Muted)
 	dimStyle     = lipgloss.NewStyle().Foreground(colors.Dim)
+	previewStyle = lipgloss.NewStyle().Foreground(colors.Text)
 	errorStyle   = lipgloss.NewStyle().Foreground(colors.Error)
 	headingStyle = lipgloss.NewStyle().Foreground(colors.Heading).Bold(true)
 )
