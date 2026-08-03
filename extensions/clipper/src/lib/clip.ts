@@ -77,8 +77,11 @@ export function clipSelection(args: {
   if (!excerptMd) excerptMd = excerptText;
 
   const note = args.note.trim();
-  const titleBase = excerptText.replace(/\s+/g, ' ').slice(0, 48).trim() || pageTitle;
-  const title = `${titleBase}${excerptText.length > 48 ? '…' : ''} — note`;
+  // Filenames must stay short and readable: take the first ~10 characters of
+  // the excerpt rather than the whole sentence.
+  const cleanExcerpt = excerptText.replace(/\s+/g, ' ').trim();
+  const titleBase = cleanExcerpt.slice(0, 10).trim() || pageTitle;
+  const title = `${titleBase}${cleanExcerpt.length > 10 ? '…' : ''} — note`;
 
   const bodyParts = [
     `> ${excerptMd.replace(/\n/g, '\n> ')}`,

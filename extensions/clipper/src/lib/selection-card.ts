@@ -325,8 +325,8 @@ function cardCss(): string {
       background: transparent;
       color: var(--ink);
       border-radius: 8px;
-      /* right/bottom padding keeps text clear of the inset Save */
-      padding: 6px 64px 28px 9px;
+      /* Bottom padding reserves the Save-button row; text keeps the full width. */
+      padding: 6px 9px 28px 9px;
       font: 12.5px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       resize: none;
       overflow-y: hidden;

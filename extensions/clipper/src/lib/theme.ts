@@ -1,6 +1,20 @@
 /** Mirror Miru tokens so the floating card matches the reader. */
 export type MiruTheme = 'light' | 'dark';
 
+export type MiruTokens = {
+  paper: string;
+  paperRaised: string;
+  ink: string;
+  inkSoft: string;
+  muted: string;
+  accent: string;
+  accentSoft: string;
+  line: string;
+  inputBg: string;
+  shadow: string;
+  hl: string;
+};
+
 export function detectMiruTheme(): MiruTheme {
   const attr = document.documentElement.getAttribute('data-theme');
   if (attr === 'dark' || attr === 'light') return attr;
@@ -8,7 +22,7 @@ export function detectMiruTheme(): MiruTheme {
   return 'light';
 }
 
-export const MIRU_TOKENS: Record<MiruTheme, Record<string, string>> = {
+export const MIRU_TOKENS: Record<MiruTheme, MiruTokens> = {
   light: {
     paper: '#f5f4ed',
     paperRaised: '#faf9f5',

@@ -113,6 +113,6 @@ async function requestClip(tabId: number): Promise<ClipResponse | null> {
 async function injectContentScript(tabId: number): Promise<void> {
   await browser.scripting.executeScript({
     target: { tabId },
-    files: ['content-scripts/content.js'],
+    files: ['/content-scripts/content.js'],
   });
 }
