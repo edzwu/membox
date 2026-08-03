@@ -128,7 +128,6 @@ func newRoot(ctx context.Context, runtime *runtime, in io.Reader, out, stderr io
 		newNoteCommand(runtime),
 		newTopicCommand(runtime),
 		newLinkCommand(runtime),
-		newConfigCommand(runtime),
 		newIndexCommand(runtime),
 		newServeCommand(runtime),
 		newClipCommand(runtime),

@@ -57,7 +57,6 @@ type App interface {
 	GetDocumentGraph(context.Context, membox.GetDocumentGraphQuery) (membox.DocumentGraphView, error)
 	ToggleDocumentPin(context.Context, membox.ToggleDocumentPinCommand) (membox.ToggleDocumentPinResult, error)
 	GetViewer(context.Context) (string, error)
-	SetViewer(context.Context, string) error
 	ListSettings(context.Context) ([]membox.SettingView, error)
 	SetSetting(context.Context, string, string) error
 	OpenDocumentWeb(context.Context, string) (string, error)
@@ -772,7 +771,6 @@ func (m Model) commandSuggestions() []commandSuggestion {
 			{Value: "note", Display: "note", Description: "Create and manage notes"},
 			{Value: "topic", Display: "topic", Description: "Manage topic documents"},
 			{Value: "link", Display: "link", Description: "Manage document links"},
-			{Value: "config", Display: "config", Description: "Show and change settings"},
 		}, partial)
 	}
 	if index == 1 {
@@ -782,8 +780,6 @@ func (m Model) commandSuggestions() []commandSuggestion {
 				{Value: "new", Display: "new", Description: "Create a note from the selected document"},
 				{Value: "view", Display: "view", Description: "Open a note with the configured viewer"},
 			}, partial)
-		case "config":
-			return filterCommandSuggestions([]commandSuggestion{{Value: "viewer", Display: "viewer", Description: "Show or set default viewer (leaf|web)"}}, partial)
 		case "topic":
 			return filterCommandSuggestions([]commandSuggestion{
 				{Value: "create", Display: "create", Description: "Create a topic document"},
@@ -854,13 +850,6 @@ func (m Model) commandArgumentSuggestions(tokens []string, index int, partial st
 		return filterCommandSuggestions(out, partial)
 	}
 	switch resource {
-	case "config":
-		if verb == "viewer" && index == 2 {
-			return filterCommandSuggestions([]commandSuggestion{
-				{Value: "leaf", Display: "leaf", Description: "Open with the leaf viewer"},
-				{Value: "web", Display: "web", Description: "Open in the browser (Miru)"},
-			}, partial)
-		}
 	case "note":
 		if verb == "view" && index == 2 {
 			return documentSuggestions()
@@ -959,28 +948,6 @@ func (m Model) commandAction(tokens []string) (func() tea.Msg, string, error) {
 			}, "note view <document-id> [--web]", nil
 		}
 		return nil, "note new <title> | note view <document-id> [--web]", fmt.Errorf("invalid note command")
-	case "config":
-		if tokens[1] == "viewer" {
-			if len(tokens) == 2 {
-				return func() tea.Msg {
-					mode, err := m.app.GetViewer(m.ctx)
-					if err != nil {
-						return commandResultMsg{err: err}
-					}
-					return viewerModeMsg{mode: mode}
-				}, "config viewer [leaf|web]", nil
-			}
-			if len(tokens) == 3 {
-				mode := tokens[2]
-				return func() tea.Msg {
-					if err := m.app.SetViewer(m.ctx, mode); err != nil {
-						return commandResultMsg{err: err}
-					}
-					return viewerModeMsg{mode: mode}
-				}, "config viewer [leaf|web]", nil
-			}
-		}
-		return nil, "config viewer [leaf|web]", fmt.Errorf("invalid config command")
 	case "topic":
 		switch tokens[1] {
 		case "create":

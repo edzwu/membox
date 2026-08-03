@@ -184,32 +184,6 @@ func TestCLI_PathScanGitTimestampForSpecificPathUsesHistoryAndFollowsRename(t *t
 	}
 }
 
-func TestCLI_ConfigViewerRoundTrip(t *testing.T) {
-	home := filepath.Join(t.TempDir(), "home")
-	code, stdout, stderr := runTestCLI(t, "--home", home, "config", "viewer")
-	if code != 0 {
-		t.Fatalf("config viewer failed: %d %s", code, stderr)
-	}
-	if !strings.Contains(stdout, "viewer: leaf") {
-		t.Fatalf("default viewer is not leaf: %q", stdout)
-	}
-	if code, _, stderr := runTestCLI(t, "--home", home, "config", "viewer", "web"); code != 0 {
-		t.Fatalf("config viewer web failed: %d %s", code, stderr)
-	}
-	code, stdout, stderr = runTestCLI(t, "--home", home, "config", "viewer", "--json")
-	if code != 0 {
-		t.Fatalf("config viewer --json failed: %d %s", code, stderr)
-	}
-	if !strings.Contains(stdout, `"viewer": "web"`) {
-		t.Fatalf("viewer was not persisted: %q", stdout)
-	}
-	if code, _, stderr := runTestCLI(t, "--home", home, "config", "viewer", "banana"); code == 0 {
-		t.Fatal("invalid viewer mode was accepted")
-	} else if !strings.Contains(stderr, "invalid value") {
-		t.Fatalf("wrong error for invalid viewer: %s", stderr)
-	}
-}
-
 func TestCLI_NoteNewCreatesDocumentAndManualLink(t *testing.T) {
 	home, notes := filepath.Join(t.TempDir(), "home"), t.TempDir()
 	sourcePath := filepath.Join(notes, "source.md")

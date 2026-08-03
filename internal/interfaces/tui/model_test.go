@@ -1282,49 +1282,6 @@ func TestModel_ConfigPanelSelectAndConfirm(t *testing.T) {
 	}
 }
 
-func TestModel_ConfigViewerCommandSwitchesMode(t *testing.T) {
-	app := &fakeApp{}
-	model := New(context.Background(), app, fakeLauncher{})
-	model.inputVisible, model.inputActive, model.inputMode = true, true, inputModeCmd
-	model.input.Focus()
-	model.input.SetValue("config viewer web")
-	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	model = updated.(Model)
-	if command == nil {
-		t.Fatal("config viewer did not schedule command")
-	}
-	message := command()
-	if batch, ok := message.(tea.BatchMsg); ok {
-		message = batch[1]()
-	}
-	modeMsg, ok := message.(viewerModeMsg)
-	if !ok {
-		t.Fatalf("expected viewerModeMsg, got %T", message)
-	}
-	updated, _ = model.Update(modeMsg)
-	model = updated.(Model)
-	if app.viewer != "web" || model.viewerMode != "web" {
-		t.Fatalf("viewer not switched: app=%q model=%q", app.viewer, model.viewerMode)
-	}
-	if model.input.Value() != "" {
-		t.Fatalf("input was not cleared after config command: %q", model.input.Value())
-	}
-
-	// invalid mode is rejected
-	model.input.SetValue("config viewer banana")
-	updated, command = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	model = updated.(Model)
-	message = command()
-	if batch, ok := message.(tea.BatchMsg); ok {
-		message = batch[1]()
-	}
-	updated, _ = model.Update(message)
-	model = updated.(Model)
-	if model.err == nil || app.viewer != "web" {
-		t.Fatalf("invalid viewer mode was accepted: err=%v app=%q", model.err, app.viewer)
-	}
-}
-
 func TestModel_ResultsHaveUUIDInStatus(t *testing.T) {
 	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
 	model.width, model.height = 120, 24

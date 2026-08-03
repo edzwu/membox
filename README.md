@@ -151,18 +151,9 @@ A document can belong to multiple topics, and a topic can contain multiple docum
 
 ## Web view
 
-Render any indexed Markdown in the browser with the embedded [Miru](https://github.com/fivetiaowuu/miru) reader. The default viewer is configurable and persists across sessions:
+Render any indexed Markdown in the browser with the embedded [Miru](https://github.com/fivetiaowuu/miru) reader. The default viewer is configurable and persists across sessions — set it with `ctrl+o` in the TUI (settings panel):
 
 ```bash
-# show the current default viewer (leaf by default)
-./mm config viewer
-
-# open documents in the browser by default
-./mm config viewer web
-
-# open documents with the leaf viewer by default
-./mm config viewer leaf
-
 # open a note with the configured viewer
 ./mm note view <document-id>
 
@@ -172,7 +163,7 @@ Render any indexed Markdown in the browser with the embedded [Miru](https://gith
 ./mm note view <document-id> --web --no-open --port 8080
 ```
 
-The same applies in the TUI: pressing `enter` on a document opens it with the configured viewer, and `config viewer web` / `config viewer leaf` in the command palette switches it. The current viewer is shown in the status bar.
+The same applies in the TUI: pressing `enter` on a document opens it with the configured viewer. The current viewer is shown in the status bar.
 
 The icon beside **New Paste** shows whether Miru is connected to membox; click it to toggle the connection. While connected, the lower-right Markdown arrow syncs both Markdown and annotations to membox (updating the current UUID, or creating a note when the paste is new). While disconnected, the same arrow keeps Miru's normal local download behavior. Synced annotations are restored by stable document UUID when the document is opened again. Reading progress is stored in the same annotation sidecar (it is a bookmark, kept together with the notes), so re-opening a document resumes where you stopped reading. Notes and progress auto-save in the background for any document bound to membox; taking the first note on pasted (not yet synced) content automatically creates the membox note while connected. The explicit arrow sync additionally writes the Markdown source.
 
@@ -183,7 +174,7 @@ Press `ctrl+o` in the TUI to open the settings panel. Use ↑/↓ to select a se
 - **viewer**: `leaf` or `web` — how `enter` opens documents
 - **model**: `k3` or `grok-4.5` — the model used by the agent (reserved for the upcoming AI agent mode)
 
-Settings persist in the membox database. `mm config viewer` shows or sets the viewer from the CLI as well.
+Settings persist in the membox database.
 
 The server listens on `127.0.0.1` only. New synced notes are created under the first configured path.
 
