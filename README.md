@@ -149,6 +149,42 @@ Topics are ordinary root-level `topic-*.md` documents, so they can be searched, 
 
 A document can belong to multiple topics, and a topic can contain multiple documents. `link list` shows outgoing links, incoming links, and assigned topics.
 
+## Web view
+
+Render any indexed Markdown in the browser with the embedded [Miru](https://github.com/fivetiaowuu/miru) reader. The default viewer is configurable and persists across sessions:
+
+```bash
+# show the current default viewer (leaf by default)
+./mm config viewer
+
+# open documents in the browser by default
+./mm config viewer web
+
+# open documents with the leaf viewer by default
+./mm config viewer leaf
+
+# open a note with the configured viewer
+./mm note view <document-id>
+
+# one-off overrides (do not change the configured viewer)
+./mm note view <document-id> --web
+./mm note view <document-id> --leaf
+./mm note view <document-id> --web --no-open --port 8080
+```
+
+The same applies in the TUI: pressing `enter` on a document opens it with the configured viewer, and `config viewer web` / `config viewer leaf` in the command palette switches it. The current viewer is shown in the status bar.
+
+### Settings panel
+
+Press `ctrl+o` in the TUI to open the settings panel. Use ↑/↓ to select a setting and ←/→ (or space) to change its value — changes are saved immediately. Current settings:
+
+- **viewer**: `leaf` or `web` — how `enter` opens documents
+- **model**: `k3` or `grok-4.5` — the model used by the agent (reserved for the upcoming AI agent mode)
+
+Settings persist in the membox database. `mm config viewer` shows or sets the viewer from the CLI as well.
+
+The server listens on `127.0.0.1` only. The top-left **Save** button in the reader saves the current Markdown back into membox as a new document (a fresh UUID is assigned) under the first configured path.
+
 ## Development
 
 ```bash

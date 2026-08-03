@@ -30,8 +30,11 @@ func (fakeLauncher) OpenCommand(context.Context, string) (*exec.Cmd, error) {
 }
 
 type fakeApp struct {
-	resolved int
-	pins     map[string]bool
+	resolved  int
+	pins      map[string]bool
+	viewer    string
+	model     string
+	webOpened []string
 }
 
 func (f *fakeApp) AddPath(context.Context, membox.AddPathCommand) (membox.AddPathResult, error) {
@@ -102,6 +105,51 @@ func (f *fakeApp) ScanPaths(context.Context, membox.ScanPathsCommand) (membox.Sc
 func (f *fakeApp) ListPaths(context.Context) ([]membox.PathView, error) { return nil, nil }
 func (f *fakeApp) GetIndexStatus(context.Context) (membox.IndexStatusView, error) {
 	return membox.IndexStatusView{}, nil
+}
+func (f *fakeApp) GetViewer(context.Context) (string, error) {
+	if f.viewer == "" {
+		return "leaf", nil
+	}
+	return f.viewer, nil
+}
+func (f *fakeApp) SetViewer(_ context.Context, mode string) error {
+	if mode != "leaf" && mode != "web" {
+		return fmt.Errorf("invalid viewer %q", mode)
+	}
+	f.viewer = mode
+	return nil
+}
+func (f *fakeApp) ListSettings(context.Context) ([]membox.SettingView, error) {
+	viewer := f.viewer
+	if viewer == "" {
+		viewer = "leaf"
+	}
+	model := f.model
+	if model == "" {
+		model = "k3"
+	}
+	return []membox.SettingView{
+		{Key: "viewer", Label: "viewer", Value: viewer, Options: []string{"leaf", "web"}},
+		{Key: "model", Label: "model", Value: model, Options: []string{"k3", "grok-4.5"}},
+	}, nil
+}
+func (f *fakeApp) SetSetting(_ context.Context, key, value string) error {
+	switch key {
+	case "viewer":
+		return f.SetViewer(context.Background(), value)
+	case "model":
+		if value != "k3" && value != "grok-4.5" {
+			return fmt.Errorf("invalid model %q", value)
+		}
+		f.model = value
+		return nil
+	default:
+		return fmt.Errorf("unknown setting %q", key)
+	}
+}
+func (f *fakeApp) OpenDocumentWeb(_ context.Context, selector string) (string, error) {
+	f.webOpened = append(f.webOpened, selector)
+	return "http://127.0.0.1:9999/?id=" + selector, nil
 }
 
 func TestModel_DefaultShowsTreeAndPreview(t *testing.T) {
@@ -1032,6 +1080,162 @@ func TestModel_EnterOpensViewerSubprocess(t *testing.T) {
 	}
 	if command == nil {
 		t.Fatal("enter did not schedule viewer command")
+	}
+}
+
+func TestModel_EnterWithWebViewerOpensBrowser(t *testing.T) {
+	app := &fakeApp{viewer: "web"}
+	model := New(context.Background(), app, fakeLauncher{})
+	model.width, model.height = 120, 24
+	model.items = documentItems([]membox.DocumentView{{ID: "019-alpha", Title: "Alpha", Path: "/tmp/alpha.md"}})
+	model.refreshFilter()
+	model.viewerMode = "web"
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if !model.loading || command == nil {
+		t.Fatal("enter with web viewer did not schedule open-web command")
+	}
+	message := command()
+	if batch, ok := message.(tea.BatchMsg); ok {
+		message = batch[1]()
+	}
+	webMsg, ok := message.(openWebMsg)
+	if !ok {
+		t.Fatalf("expected openWebMsg, got %T", message)
+	}
+	if webMsg.err != nil {
+		t.Fatalf("open web failed: %v", webMsg.err)
+	}
+	if len(app.webOpened) != 1 || app.webOpened[0] != "019-alpha" {
+		t.Fatalf("browser was not opened for the document: %v", app.webOpened)
+	}
+	updated, _ = model.Update(webMsg)
+	model = updated.(Model)
+	if !strings.Contains(model.statusMessage, "browser") {
+		t.Fatalf("status does not confirm browser open: %q", model.statusMessage)
+	}
+}
+
+func TestModel_ConfigPanelSelectAndConfirm(t *testing.T) {
+	app := &fakeApp{}
+	model := New(context.Background(), app, fakeLauncher{})
+	model.width, model.height = 100, 20
+	updated, _ := model.Update(settingsMsg{settings: []membox.SettingView{
+		{Key: "viewer", Label: "viewer", Value: "leaf", Options: []string{"leaf", "web"}},
+		{Key: "model", Label: "model", Value: "k3", Options: []string{"k3", "grok-4.5"}},
+	}})
+	model = updated.(Model)
+
+	// ctrl+o opens the panel
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlO})
+	model = updated.(Model)
+	if !model.configVisible {
+		t.Fatal("ctrl+o did not open the config panel")
+	}
+	view := model.View()
+	if !strings.Contains(view, "settings") || !strings.Contains(view, "[leaf]") || !strings.Contains(view, "[k3]") {
+		t.Fatalf("panel does not show current values: %q", view)
+	}
+
+	// → cycles viewer leaf -> web and persists immediately
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyRight})
+	model = updated.(Model)
+	if command == nil {
+		t.Fatal("right arrow did not schedule a setting save")
+	}
+	message := command()
+	if batch, ok := message.(tea.BatchMsg); ok {
+		message = batch[1]()
+	}
+	saved, ok := message.(settingSavedMsg)
+	if !ok {
+		t.Fatalf("expected settingSavedMsg, got %T", message)
+	}
+	updated, _ = model.Update(saved)
+	model = updated.(Model)
+	if app.viewer != "web" || model.viewerMode != "web" || model.settings[0].Value != "web" {
+		t.Fatalf("viewer not updated: app=%q mode=%q settings=%+v", app.viewer, model.viewerMode, model.settings)
+	}
+
+	// ↓ selects model row, → cycles k3 -> grok-4.5
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = updated.(Model)
+	if model.configSelected != 1 {
+		t.Fatalf("down did not move selection: %d", model.configSelected)
+	}
+	updated, command = model.Update(tea.KeyMsg{Type: tea.KeyRight})
+	model = updated.(Model)
+	message = command()
+	if batch, ok := message.(tea.BatchMsg); ok {
+		message = batch[1]()
+	}
+	updated, _ = model.Update(message)
+	model = updated.(Model)
+	if app.model != "grok-4.5" || model.settings[1].Value != "grok-4.5" {
+		t.Fatalf("model not updated: app=%q settings=%+v", app.model, model.settings)
+	}
+
+	// ← wraps grok-4.5 -> k3
+	updated, command = model.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	model = updated.(Model)
+	message = command()
+	if batch, ok := message.(tea.BatchMsg); ok {
+		message = batch[1]()
+	}
+	updated, _ = model.Update(message)
+	model = updated.(Model)
+	if app.model != "k3" {
+		t.Fatalf("left arrow did not wrap model value: %q", app.model)
+	}
+
+	// esc closes the panel
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model = updated.(Model)
+	if model.configVisible {
+		t.Fatal("esc did not close the config panel")
+	}
+}
+
+func TestModel_ConfigViewerCommandSwitchesMode(t *testing.T) {
+	app := &fakeApp{}
+	model := New(context.Background(), app, fakeLauncher{})
+	model.inputVisible, model.inputActive, model.inputMode = true, true, inputModeCmd
+	model.input.Focus()
+	model.input.SetValue("config viewer web")
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if command == nil {
+		t.Fatal("config viewer did not schedule command")
+	}
+	message := command()
+	if batch, ok := message.(tea.BatchMsg); ok {
+		message = batch[1]()
+	}
+	modeMsg, ok := message.(viewerModeMsg)
+	if !ok {
+		t.Fatalf("expected viewerModeMsg, got %T", message)
+	}
+	updated, _ = model.Update(modeMsg)
+	model = updated.(Model)
+	if app.viewer != "web" || model.viewerMode != "web" {
+		t.Fatalf("viewer not switched: app=%q model=%q", app.viewer, model.viewerMode)
+	}
+	if model.input.Value() != "" {
+		t.Fatalf("input was not cleared after config command: %q", model.input.Value())
+	}
+
+	// invalid mode is rejected
+	model.input.SetValue("config viewer banana")
+	updated, command = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	message = command()
+	if batch, ok := message.(tea.BatchMsg); ok {
+		message = batch[1]()
+	}
+	updated, _ = model.Update(message)
+	model = updated.(Model)
+	if model.err == nil || app.viewer != "web" {
+		t.Fatalf("invalid viewer mode was accepted: err=%v app=%q", model.err, app.viewer)
 	}
 }
 

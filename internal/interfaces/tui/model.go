@@ -55,6 +55,11 @@ type App interface {
 	UnlinkDocuments(context.Context, membox.UnlinkDocumentsCommand) (membox.UnlinkDocumentsResult, error)
 	GetDocumentGraph(context.Context, membox.GetDocumentGraphQuery) (membox.DocumentGraphView, error)
 	ToggleDocumentPin(context.Context, membox.ToggleDocumentPinCommand) (membox.ToggleDocumentPinResult, error)
+	GetViewer(context.Context) (string, error)
+	SetViewer(context.Context, string) error
+	ListSettings(context.Context) ([]membox.SettingView, error)
+	SetSetting(context.Context, string, string) error
+	OpenDocumentWeb(context.Context, string) (string, error)
 	ScanPaths(context.Context, membox.ScanPathsCommand) (membox.ScanReport, error)
 	ListPaths(context.Context) ([]membox.PathView, error)
 	GetIndexStatus(context.Context) (membox.IndexStatusView, error)
@@ -144,6 +149,10 @@ type Model struct {
 	cmdMenuVisible bool
 	viewMode       string
 	sortMode       string
+	viewerMode     string
+	configVisible  bool
+	configSelected int
+	settings       []membox.SettingView
 	graphFocusID   string
 	graphCards     []membox.DocumentView
 	graphIncoming  int
@@ -159,6 +168,19 @@ type documentsMsg struct {
 	sequence  uint64
 	documents []membox.DocumentView
 	err       error
+}
+type viewerModeMsg struct {
+	mode string
+	err  error
+}
+type settingsMsg struct {
+	settings []membox.SettingView
+	err      error
+}
+type settingSavedMsg struct {
+	key   string
+	value string
+	err   error
 }
 type previewMsg struct {
 	documentID string
@@ -187,6 +209,10 @@ type pinMsg struct {
 	err        error
 }
 type openMsg struct{ err error }
+type openWebMsg struct {
+	url string
+	err error
+}
 type noteCreatedMsg struct {
 	document membox.DocumentView
 	command  *exec.Cmd
@@ -207,7 +233,7 @@ func New(ctx context.Context, app App, launcher host.Launcher) Model {
 	spin := spinner.New()
 	spin.Spinner = spinner.Dot
 	vp := viewport.New(40, 10)
-	model := Model{ctx: ctx, app: app, launcher: launcher, input: input, spinner: spin, preview: vp, searchMode: searchModeName, inputMode: inputModeSearch, viewMode: viewTree, sortMode: sortModeName}
+	model := Model{ctx: ctx, app: app, launcher: launcher, input: input, spinner: spin, preview: vp, searchMode: searchModeName, inputMode: inputModeSearch, viewMode: viewTree, sortMode: sortModeName, viewerMode: "leaf"}
 	model.preview.SetContent(previewPlaceholder("Loading documents…"))
 	return model
 }
@@ -220,7 +246,7 @@ func Run(ctx context.Context, app App, launcher host.Launcher, programOptions ..
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(textinput.Blink, m.spinner.Tick, listDocumentsCmd(m.ctx, m.app, m.listSequence))
+	return tea.Batch(textinput.Blink, m.spinner.Tick, listDocumentsCmd(m.ctx, m.app, m.listSequence), viewerModeCmd(m.ctx, m.app), settingsCmd(m.ctx, m.app))
 }
 
 func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
@@ -233,6 +259,16 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.String() == "ctrl+d" {
 			return m, tea.Quit
 		}
+		if msg.String() == "ctrl+o" {
+			m.configVisible = !m.configVisible
+			if m.configVisible {
+				m.keepSelectionVisible()
+			}
+			return m, nil
+		}
+		if m.configVisible {
+			return m.updateConfigPanel(msg)
+		}
 		if m.fullscreen {
 			return m.updateFullscreen(msg)
 		}
@@ -240,6 +276,41 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateFilterInput(msg)
 		}
 		return m.updateNavigation(msg)
+	case settingsMsg:
+		if msg.err != nil {
+			m.err = msg.err
+		} else {
+			m.settings = msg.settings
+			for _, setting := range msg.settings {
+				if setting.Key == "viewer" {
+					m.viewerMode = setting.Value
+				}
+			}
+		}
+	case settingSavedMsg:
+		m.loading, m.err = false, msg.err
+		if msg.err == nil {
+			for index := range m.settings {
+				if m.settings[index].Key == msg.key {
+					m.settings[index].Value = msg.value
+				}
+			}
+			if msg.key == "viewer" {
+				m.viewerMode = msg.value
+			}
+			m.statusMessage = msg.key + ": " + msg.value
+		}
+	case viewerModeMsg:
+		if msg.err != nil {
+			m.loading, m.err = false, msg.err
+		} else if msg.mode != "" {
+			m.viewerMode = msg.mode
+			if m.loading {
+				m.loading = false
+				m.statusMessage = "viewer: " + msg.mode
+			}
+			m.clearExecutedCommand()
+		}
 	case searchMsg:
 		if m.fullTextFilterQuery() == msg.query {
 			m.loading, m.err = false, msg.err
@@ -318,6 +389,11 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case openMsg:
 		m.err = msg.err
+	case openWebMsg:
+		m.loading, m.err = false, msg.err
+		if msg.err == nil {
+			m.statusMessage = "Opened in browser: " + msg.url
+		}
 	case noteCreatedMsg:
 		m.loading, m.err = false, msg.err
 		if msg.err == nil {
@@ -455,6 +531,9 @@ func (m Model) updateFilterInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.hideInput()
 		if document, ok := m.selectedDocument(); ok {
 			m.loading = true
+			if m.viewerMode == "web" {
+				return m, tea.Batch(m.spinner.Tick, openDocumentWebCmd(m.ctx, m.app, m.launcher, document.ID))
+			}
 			return m, tea.Batch(m.spinner.Tick, resolveViewerCmd(m.ctx, m.app, document.ID))
 		}
 		return m, nil
@@ -655,12 +734,18 @@ func (m Model) commandSuggestions() []commandSuggestion {
 			{Value: "note", Display: "note", Description: "Create and manage notes"},
 			{Value: "topic", Display: "topic", Description: "Manage topic documents"},
 			{Value: "link", Display: "link", Description: "Manage document links"},
+			{Value: "config", Display: "config", Description: "Show and change settings"},
 		}, partial)
 	}
 	if index == 1 {
 		switch tokens[0] {
 		case "note":
-			return filterCommandSuggestions([]commandSuggestion{{Value: "new", Display: "new", Description: "Create a note from the selected document"}}, partial)
+			return filterCommandSuggestions([]commandSuggestion{
+				{Value: "new", Display: "new", Description: "Create a note from the selected document"},
+				{Value: "view", Display: "view", Description: "Open a note with the configured viewer"},
+			}, partial)
+		case "config":
+			return filterCommandSuggestions([]commandSuggestion{{Value: "viewer", Display: "viewer", Description: "Show or set default viewer (leaf|web)"}}, partial)
 		case "topic":
 			return filterCommandSuggestions([]commandSuggestion{
 				{Value: "create", Display: "create", Description: "Create a topic document"},
@@ -731,6 +816,17 @@ func (m Model) commandArgumentSuggestions(tokens []string, index int, partial st
 		return filterCommandSuggestions(out, partial)
 	}
 	switch resource {
+	case "config":
+		if verb == "viewer" && index == 2 {
+			return filterCommandSuggestions([]commandSuggestion{
+				{Value: "leaf", Display: "leaf", Description: "Open with the leaf viewer"},
+				{Value: "web", Display: "web", Description: "Open in the browser (Miru)"},
+			}, partial)
+		}
+	case "note":
+		if verb == "view" && index == 2 {
+			return documentSuggestions()
+		}
 	case "topic":
 		switch verb {
 		case "add", "remove":
@@ -786,7 +882,67 @@ func (m Model) commandAction(tokens []string) (func() tea.Msg, string, error) {
 				return noteCreatedMsg{document: result.Document, command: editor}
 			}, "note new <title>", nil
 		}
-		return nil, "note new <title>", fmt.Errorf("invalid note command")
+		if tokens[1] == "view" && len(tokens) >= 3 {
+			target := selector(tokens[2])
+			webFlag := len(tokens) == 4 && tokens[3] == "--web"
+			if len(tokens) > 3 && !webFlag {
+				return nil, "note view <document-id> [--web]", fmt.Errorf("invalid note view arguments")
+			}
+			if webFlag {
+				return func() tea.Msg {
+					url, err := m.app.OpenDocumentWeb(m.ctx, target)
+					if err != nil {
+						return commandResultMsg{err: err}
+					}
+					command, openErr := m.launcher.OpenCommand(m.ctx, url)
+					if openErr == nil {
+						openErr = command.Run()
+					}
+					return openWebMsg{url: url, err: openErr}
+				}, "note view <document-id> --web", nil
+			}
+			return func() tea.Msg {
+				mode, err := m.app.GetViewer(m.ctx)
+				if err != nil {
+					return commandResultMsg{err: err}
+				}
+				if mode == "web" {
+					url, err := m.app.OpenDocumentWeb(m.ctx, target)
+					if err != nil {
+						return commandResultMsg{err: err}
+					}
+					command, openErr := m.launcher.OpenCommand(m.ctx, url)
+					if openErr == nil {
+						openErr = command.Run()
+					}
+					return openWebMsg{url: url, err: openErr}
+				}
+				return commandResultMsg{text: "viewer is leaf; press enter on the document or run: note view " + target + " --web"}
+			}, "note view <document-id> [--web]", nil
+		}
+		return nil, "note new <title> | note view <document-id> [--web]", fmt.Errorf("invalid note command")
+	case "config":
+		if tokens[1] == "viewer" {
+			if len(tokens) == 2 {
+				return func() tea.Msg {
+					mode, err := m.app.GetViewer(m.ctx)
+					if err != nil {
+						return commandResultMsg{err: err}
+					}
+					return viewerModeMsg{mode: mode}
+				}, "config viewer [leaf|web]", nil
+			}
+			if len(tokens) == 3 {
+				mode := tokens[2]
+				return func() tea.Msg {
+					if err := m.app.SetViewer(m.ctx, mode); err != nil {
+						return commandResultMsg{err: err}
+					}
+					return viewerModeMsg{mode: mode}
+				}, "config viewer [leaf|web]", nil
+			}
+		}
+		return nil, "config viewer [leaf|web]", fmt.Errorf("invalid config command")
 	case "topic":
 		switch tokens[1] {
 		case "create":
@@ -931,8 +1087,13 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "enter":
 		if document, ok := m.selectedDocument(); ok {
-			m.loading = true
-			commands = append(commands, m.spinner.Tick, resolveViewerCmd(m.ctx, m.app, document.ID))
+			if m.viewerMode == "web" {
+				m.loading = true
+				commands = append(commands, m.spinner.Tick, openDocumentWebCmd(m.ctx, m.app, m.launcher, document.ID))
+			} else {
+				m.loading = true
+				commands = append(commands, m.spinner.Tick, resolveViewerCmd(m.ctx, m.app, document.ID))
+			}
 		}
 	case "space", " ":
 		if m.lastKeyAt.Add(doubleSpaceWindow).After(time.Now()) {
@@ -1178,7 +1339,18 @@ func (m Model) visibleRows() int {
 	if m.deleteConfirm {
 		reserved += 3
 	}
+	if m.configVisible {
+		reserved += m.configPanelRows()
+	}
 	return max(1, m.height-reserved)
+}
+
+func (m Model) configPanelRows() int {
+	if !m.configVisible {
+		return 0
+	}
+	// title + one row per setting + hint + top border
+	return len(m.settings) + 3
 }
 
 func (m Model) pinnedCount() int {
@@ -1661,6 +1833,9 @@ func (m Model) View() string {
 	if m.deleteConfirm {
 		parts = append(parts, m.deleteConfirmView())
 	}
+	if m.configVisible {
+		parts = append(parts, m.configPanelView())
+	}
 	if m.inputVisible {
 		parts = append(parts, m.inputView())
 	}
@@ -1692,6 +1867,81 @@ func (m Model) deleteConfirmView() string {
 	hint := "y confirm • n/esc cancel"
 	content := fitWidth(errorStyle.Render(question), width) + "\n" + fitWidth(dimStyle.Render(hint), width)
 	return border.Render(content)
+}
+
+// updateConfigPanel handles keys while the settings panel is open: ↑↓ selects
+// a row, ←→ cycles the value (saving immediately), esc/enter closes.
+func (m Model) updateConfigPanel(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "enter", "q":
+		m.configVisible = false
+		return m, nil
+	case "up", "k":
+		if m.configSelected > 0 {
+			m.configSelected--
+		}
+		return m, nil
+	case "down", "j":
+		if m.configSelected+1 < len(m.settings) {
+			m.configSelected++
+		}
+		return m, nil
+	case "left", "h":
+		return m, m.cycleSetting(-1)
+	case "right", "l", "space", " ":
+		return m, m.cycleSetting(1)
+	}
+	return m, nil
+}
+
+func (m Model) cycleSetting(direction int) tea.Cmd {
+	if len(m.settings) == 0 || m.configSelected >= len(m.settings) {
+		return nil
+	}
+	setting := m.settings[m.configSelected]
+	if len(setting.Options) == 0 {
+		return nil
+	}
+	index := 0
+	for i, option := range setting.Options {
+		if option == setting.Value {
+			index = i
+			break
+		}
+	}
+	next := (index + direction + len(setting.Options)) % len(setting.Options)
+	value := setting.Options[next]
+	if value == setting.Value {
+		return nil
+	}
+	m.loading = true
+	return tea.Batch(m.spinner.Tick, setSettingCmd(m.ctx, m.app, setting.Key, value))
+}
+
+func (m Model) configPanelView() string {
+	width := max(10, m.width-2)
+	border := lipgloss.NewStyle().Width(width).MaxWidth(width).Border(lipgloss.NormalBorder(), true, false, false, false).BorderForeground(colors.BorderAccent)
+	lines := []string{accentStyle.Render("settings")}
+	for index, setting := range m.settings {
+		label := fitWidth(setting.Label, 10)
+		var options []string
+		for _, option := range setting.Options {
+			if option == setting.Value {
+				options = append(options, accentStyle.Render("["+option+"]"))
+			} else {
+				options = append(options, dimStyle.Render(" "+option+" "))
+			}
+		}
+		row := label + " " + strings.Join(options, "")
+		if index == m.configSelected {
+			row = lipgloss.NewStyle().Foreground(colors.Accent).Background(colors.SelectedBG).Width(width).Inline(true).Render("> " + row)
+		} else {
+			row = lipgloss.NewStyle().Width(width).Inline(true).Render("  " + row)
+		}
+		lines = append(lines, row)
+	}
+	lines = append(lines, dimStyle.Render("↑↓ select • ←→ change • esc close"))
+	return border.Render(strings.Join(lines, "\n"))
 }
 
 func (m Model) fullscreenView() string {
@@ -2187,7 +2437,7 @@ func (m Model) hints() string {
 	if m.sortMode == sortModeTime {
 		sortLabel = "newest"
 	}
-	return "s sort:" + sortLabel + " • t pin • d delete • space details • space×2 input • enter open • ctrl+d quit"
+	return "s sort:" + sortLabel + " • v " + m.viewerMode + " • t pin • d del • space×2 input • ctrl+o cfg • enter open • ctrl+d quit"
 }
 
 func searchResultItems(items []item, results []membox.SearchResult, dateFilters []dateFilter, nameQueries []string) []item {
@@ -2335,6 +2585,37 @@ func deleteDocumentCmd(ctx context.Context, app App, selector string) tea.Cmd {
 	return func() tea.Msg {
 		result, err := app.DeleteDocument(ctx, membox.DeleteDocumentCommand{Selector: selector})
 		return deleteResultMsg{documentID: result.DocumentID, path: result.Path, err: err}
+	}
+}
+func viewerModeCmd(ctx context.Context, app App) tea.Cmd {
+	return func() tea.Msg {
+		mode, err := app.GetViewer(ctx)
+		return viewerModeMsg{mode: mode, err: err}
+	}
+}
+func settingsCmd(ctx context.Context, app App) tea.Cmd {
+	return func() tea.Msg {
+		settings, err := app.ListSettings(ctx)
+		return settingsMsg{settings: settings, err: err}
+	}
+}
+func setSettingCmd(ctx context.Context, app App, key, value string) tea.Cmd {
+	return func() tea.Msg {
+		err := app.SetSetting(ctx, key, value)
+		return settingSavedMsg{key: key, value: value, err: err}
+	}
+}
+func openDocumentWebCmd(ctx context.Context, app App, launcher host.Launcher, selector string) tea.Cmd {
+	return func() tea.Msg {
+		url, err := app.OpenDocumentWeb(ctx, selector)
+		if err != nil {
+			return openWebMsg{err: err}
+		}
+		command, err := launcher.OpenCommand(ctx, url)
+		if err == nil {
+			err = command.Run()
+		}
+		return openWebMsg{url: url, err: err}
 	}
 }
 func openCmd(ctx context.Context, app App, launcher host.Launcher, selector string) tea.Cmd {
