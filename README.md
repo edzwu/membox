@@ -83,9 +83,9 @@ Open ranges such as `+2026-07..` and `+..2026-07` are supported. Enter on ordina
 
 `/clear` removes all filter tags; Backspace on an empty input removes the most recently added tag. Esc hides the input without clearing active tags.
 
-Outside the filter input, press `s` to toggle between filename order and modified-time order. Time order shows the newest documents first and places documents without a timestamp last; changing the sort focuses the new first row. In the tree view, Home and End jump to the first and last rows.
+The TUI opens in modified-time order: the newest documents come first, and documents without a timestamp last. Outside the filter input, press `s` to toggle back to filename (dictionary) order; changing the sort focuses the new first row. In the tree view, Home and End jump to the first and last rows.
 
-Press `t` to toggle the selected document's pinned state. Pinned documents stay visible in a marked, sticky section at the top regardless of scrolling, details height, or the active sort mode, and pins persist across TUI restarts.
+Press `p` to toggle the selected document's pinned state. Pinned documents stay visible in a marked, sticky section at the top regardless of scrolling, details height, or the active sort mode, and pins persist across TUI restarts.
 
 Press `d` to delete the focused Markdown file after a `y/n` confirmation. This is a real filesystem delete; membox immediately rescans the containing path and preserves the document UUID in `missing` status so links, pins, and history remain recoverable if the file is restored.
 

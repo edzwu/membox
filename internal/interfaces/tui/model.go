@@ -233,7 +233,7 @@ func New(ctx context.Context, app App, launcher host.Launcher) Model {
 	spin := spinner.New()
 	spin.Spinner = spinner.Dot
 	vp := viewport.New(40, 10)
-	model := Model{ctx: ctx, app: app, launcher: launcher, input: input, spinner: spin, preview: vp, searchMode: searchModeName, inputMode: inputModeSearch, viewMode: viewTree, sortMode: sortModeName, viewerMode: "leaf"}
+	model := Model{ctx: ctx, app: app, launcher: launcher, input: input, spinner: spin, preview: vp, searchMode: searchModeName, inputMode: inputModeSearch, viewMode: viewTree, sortMode: sortModeTime, viewerMode: "leaf"}
 	model.preview.SetContent(previewPlaceholder("Loading documents…"))
 	return model
 }
@@ -1142,7 +1142,7 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "s":
 		m.toggleSort()
 		return m, m.loadPreview()
-	case "t":
+	case "p":
 		if document, ok := m.selectedDocument(); ok {
 			m.loading = true
 			commands = append(commands, m.spinner.Tick, togglePinCmd(m.ctx, m.app, document.ID))
@@ -2437,7 +2437,7 @@ func (m Model) hints() string {
 	if m.sortMode == sortModeTime {
 		sortLabel = "newest"
 	}
-	return "s sort:" + sortLabel + " • v " + m.viewerMode + " • t pin • d del • space×2 input • ctrl+o cfg • enter open • ctrl+d quit"
+	return "s sort:" + sortLabel + " • v " + m.viewerMode + " • p pin • d del • space×2 input • ctrl+o cfg • enter open • ctrl+d quit"
 }
 
 func searchResultItems(items []item, results []membox.SearchResult, dateFilters []dateFilter, nameQueries []string) []item {
