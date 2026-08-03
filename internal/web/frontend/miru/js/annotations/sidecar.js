@@ -78,7 +78,7 @@ function captureAnnotationAnchor(entry, canonicalText) {
   return anchor;
 }
 
-export async function buildAnnotationSidecar(markdownFile, markdown) {
+export async function buildAnnotationSidecar(markdownFile, markdown, progress = null) {
   const canonicalText = canonicalArticleText();
   const title = state.docTitle || 'Untitled';
   const savedAnnotations = state.annotations
@@ -99,6 +99,17 @@ export async function buildAnnotationSidecar(markdownFile, markdown) {
     title,
     exportedAt: new Date().toISOString(),
     annotations: savedAnnotations,
+    // Reading progress travels with the notes: it is a bookmark, and bookmarks
+    // belong in the same sidecar as annotations.
+    progress: normalizeProgress(progress),
+  };
+}
+
+export function normalizeProgress(progress) {
+  if (!progress || !Number.isFinite(progress.y) || progress.y < 0) return null;
+  return {
+    y: Math.round(progress.y),
+    at: typeof progress.at === 'string' && progress.at ? progress.at : new Date().toISOString(),
   };
 }
 
@@ -159,7 +170,16 @@ export function parseAnnotationSidecar(text) {
     sourceLength: Number.isInteger(data.sourceLength) ? data.sourceLength : null,
     title: typeof data.title === 'string' ? data.title.slice(0, 500) : '',
     annotations: normalized,
+    // Additive field: unknown/invalid progress never invalidates a sidecar.
+    progress: parseProgress(data.progress),
   };
+}
+
+function parseProgress(value) {
+  if (!value || typeof value !== 'object') return null;
+  const y = value.y;
+  if (!Number.isFinite(y) || y < 0 || y > 100000000) return null;
+  return { y: Math.round(y), at: typeof value.at === 'string' ? value.at : '' };
 }
 
 function parseFloatGeometry(value) {

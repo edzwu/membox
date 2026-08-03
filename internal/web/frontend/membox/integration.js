@@ -106,19 +106,114 @@ function replaceDocumentID(id) {
   window.history.replaceState(null, '', url);
 }
 
+// ---------------------------------------------------------------------------
+// Reading state: progress is a bookmark, and bookmarks belong with the notes.
+// Both live in the annotation sidecar stored under the document's stable UUID
+// in the membox database, so the reading position and the notes survive
+// re-openings (and browsers) together. The Markdown source itself is only
+// ever written by an explicit sync.
+// ---------------------------------------------------------------------------
+let restoring = false;
+let sidecarSaveTimer = null;
+
+function currentProgress() {
+  return { y: Math.round(window.scrollY), at: new Date().toISOString() };
+}
+
+function sidecarFilename() {
+  return state.droppedFilename || sanitizeFilename(state.docTitle || 'document') + '.md';
+}
+
+async function persistReadingState(keepalive) {
+  if (!documentID || !state.currentMarkdown) return;
+  try {
+    const sidecar = await buildAnnotationSidecar(sidecarFilename(), state.currentMarkdown, currentProgress());
+    const response = await fetch(`/api/doc/${encodeURIComponent(documentID)}/annotations`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(sidecar),
+      keepalive: !!keepalive,
+    });
+    if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
+  } catch (err) {
+    console.error('membox: failed to save reading state', err);
+  }
+}
+
+function scheduleReadingStateSave() {
+  if (!documentID || restoring) return;
+  if (sidecarSaveTimer) clearTimeout(sidecarSaveTimer);
+  sidecarSaveTimer = setTimeout(() => {
+    sidecarSaveTimer = null;
+    void persistReadingState(false);
+  }, 800);
+}
+
+function flushReadingStateSave() {
+  if (sidecarSaveTimer) {
+    clearTimeout(sidecarSaveTimer);
+    sidecarSaveTimer = null;
+  }
+  void persistReadingState(true);
+}
+
+let pendingProgressY = 0;
+
+function applyProgressScroll() {
+  if (!pendingProgressY) return;
+  const max = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+  // 'auto' overrides the page-wide smooth-scroll so the restore is instant.
+  window.scrollTo({ top: Math.min(pendingProgressY, max), behavior: 'auto' });
+}
+
+function restoreProgress(progress) {
+  pendingProgressY = progress && progress.y > 0 ? progress.y : 0;
+  if (!pendingProgressY) return;
+  applyProgressScroll();
+  // Note cards lay out asynchronously and images arrive later, so re-apply
+  // once on the next frame and again when the page finishes loading.
+  requestAnimationFrame(applyProgressScroll);
+}
+
+window.addEventListener('scroll', scheduleReadingStateSave, { passive: true });
+window.addEventListener('pagehide', flushReadingStateSave);
+window.addEventListener('load', applyProgressScroll);
+window.addEventListener('miru-annotations-changed', () => {
+  if (restoring) return;
+  if (!documentID) {
+    void autoCreateForAnnotations();
+    return;
+  }
+  scheduleReadingStateSave();
+});
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') flushReadingStateSave();
+});
+
 function unbindDocument() {
   replaceDocumentID('');
   loadedMarkdown = '';
 }
 
-async function restoreAnnotations(id, markdown) {
-  const response = await fetch(`/api/doc/${encodeURIComponent(id)}/annotations`, { cache: 'no-store' });
-  if (response.status === 204 || !response.ok) return;
-  const sidecarText = await response.text();
-  if (!sidecarText.trim()) return;
-  const data = parseAnnotationSidecar(sidecarText);
-  await verifyAnnotationSource(data, markdown);
-  restoreAnnotationSidecar(data);
+async function restoreReadingState(id, markdown) {
+  try {
+    const response = await fetch(`/api/doc/${encodeURIComponent(id)}/annotations`, { cache: 'no-store' });
+    if (response.status === 204 || !response.ok) return;
+    const sidecarText = await response.text();
+    if (!sidecarText.trim()) return;
+    const data = parseAnnotationSidecar(sidecarText);
+    await verifyAnnotationSource(data, markdown);
+    restoring = true;
+    try {
+      restoreAnnotationSidecar(data);
+    } finally {
+      restoring = false;
+    }
+    restoreProgress(data.progress);
+  } catch (err) {
+    restoring = false;
+    console.warn('membox: could not restore reading state', err);
+  }
 }
 
 async function loadFromMembox() {
@@ -134,10 +229,50 @@ async function loadFromMembox() {
     }
     loadedMarkdown = markdown;
     loadDocument(markdown);
-    await restoreAnnotations(documentID, markdown);
+    // Notes before progress: note cards change the layout, so the saved
+    // scroll position only means something once they are in place.
+    await restoreReadingState(documentID, markdown);
   } catch (err) {
     console.error('membox: failed to load document', err);
     showToast(`Could not load from membox: ${err.message}`);
+  }
+}
+
+// Notes need an identity to persist. When the user takes a note on pasted
+// content that has never been synced, silently create the membox note (only
+// while connected) so the notes and reading position can flow through the
+// normal auto-save path afterwards.
+let autoCreating = false;
+
+async function autoCreateForAnnotations() {
+  if (autoCreating || documentID || !connected) return;
+  const body = state.currentMarkdown || '';
+  if (!body.trim() || state.annotations.length === 0) return;
+  autoCreating = true;
+  try {
+    const title = (state.docTitle || '').trim() || 'Untitled';
+    let annotations = null;
+    try {
+      annotations = await buildAnnotationSidecar(sanitizeFilename(title) + '.md', body, currentProgress());
+    } catch (err) {
+      console.warn('membox: could not pack annotation sidecar', err);
+    }
+    const response = await fetch('/api/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: '', title, body, annotations }),
+    });
+    if (!response.ok) throw new Error((await response.text()).trim() || `HTTP ${response.status}`);
+    const result = await response.json();
+    replaceDocumentID(result.id);
+    loadedMarkdown = body;
+    if (result.path) state.droppedFilename = result.path.split(/[\\/]/).pop();
+    showToast(`Notes auto-saved to membox: ${String(result.id).slice(0, 8)}`);
+  } catch (err) {
+    console.error('membox: auto-save failed', err);
+    showToast(`Auto-save failed: ${err.message}`);
+  } finally {
+    autoCreating = false;
   }
 }
 
@@ -153,14 +288,18 @@ async function syncToMembox() {
   // overwrite. Explicitly loaded content keeps its UUID while unchanged.
   const id = documentID && body === loadedMarkdown ? documentID : '';
   const title = (state.docTitle || '').trim() || 'Untitled';
-  let annotations = null;
 
   syncing = true;
   setDownloadMeaning();
   try {
-    if (state.annotations.length) {
+    // The sidecar always rides along: it carries both the notes and the
+    // current reading progress, so an explicit sync refreshes both.
+    let annotations = null;
+    try {
       const markdownFile = sanitizeFilename(title) + '.md';
-      annotations = await buildAnnotationSidecar(markdownFile, body);
+      annotations = await buildAnnotationSidecar(markdownFile, body, currentProgress());
+    } catch (err) {
+      console.warn('membox: could not pack annotation sidecar', err);
     }
     const response = await fetch('/api/sync', {
       method: 'POST',

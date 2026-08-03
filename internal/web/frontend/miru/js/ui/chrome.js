@@ -16,6 +16,10 @@ export function updateMarkdownDownloadControl() {
     : 'Download Markdown';
   elements.downloadAll.setAttribute('aria-label', label);
   elements.downloadAll.title = label;
+  // Single choke point every annotation mutation funnels through; host
+  // adapters (e.g. the membox integration) listen to persist notes and
+  // reading progress.
+  window.dispatchEvent(new CustomEvent('miru-annotations-changed'));
 }
 
 export function applyTheme(theme) {

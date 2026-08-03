@@ -169,6 +169,8 @@ export function setNoteOnPassage(entry, annotEl, text) {
   }
   refreshNoteNumbers();
   scheduleNoteLayout();
+  // Note content changed: notify persistence listeners (miru-annotations-changed).
+  updateMarkdownDownloadControl();
 }
 
 export function deleteAnnotation(id) {
@@ -214,9 +216,11 @@ export function startEditNoteCard(card, entry) {
   const save = () => {
     const v = input.value.trim();
     if (v) {
+      const changed = v !== entry.note;
       entry.note = v;
       restore();
       scheduleNoteLayout();
+      if (changed) updateMarkdownDownloadControl();
     } else {
       deleteAnnotation(entry.id);
     }

@@ -174,7 +174,7 @@ Render any indexed Markdown in the browser with the embedded [Miru](https://gith
 
 The same applies in the TUI: pressing `enter` on a document opens it with the configured viewer, and `config viewer web` / `config viewer leaf` in the command palette switches it. The current viewer is shown in the status bar.
 
-The icon beside **New Paste** shows whether Miru is connected to membox; click it to toggle the connection. While connected, the lower-right Markdown arrow syncs both Markdown and annotations to membox (updating the current UUID, or creating a note when the paste is new). While disconnected, the same arrow keeps Miru's normal local download behavior. Synced annotations are restored by stable document UUID when the document is opened again.
+The icon beside **New Paste** shows whether Miru is connected to membox; click it to toggle the connection. While connected, the lower-right Markdown arrow syncs both Markdown and annotations to membox (updating the current UUID, or creating a note when the paste is new). While disconnected, the same arrow keeps Miru's normal local download behavior. Synced annotations are restored by stable document UUID when the document is opened again. Reading progress is stored in the same annotation sidecar (it is a bookmark, kept together with the notes), so re-opening a document resumes where you stopped reading. Notes and progress auto-save in the background for any document bound to membox; taking the first note on pasted (not yet synced) content automatically creates the membox note while connected. The explicit arrow sync additionally writes the Markdown source.
 
 ### Settings panel
 
