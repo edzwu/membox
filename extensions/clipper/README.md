@@ -43,7 +43,18 @@ extension. In the popup:
 1. Server URL: `http://127.0.0.1:8787`（与 TUI bridge 一致）
 2. Bridge token: `cat ~/.membox/bridge.json` 里的 `token`
 3. **Save settings** → status should show **connected**
-4. Open any http(s) page → **Save to membox**
+4. Open any http(s) page → **Save to membox** (full page)
+5. Or **select text** on a page → floating card (excerpt + note + Save)
+
+### Selection card
+
+- Appears near the selection after mouseup
+- Only three parts: excerpt, note field, Save
+- Theme follows `prefers-color-scheme` / Miru tokens
+- Saves a new membox note with `clip_mode: selection` and `source_url`
+- If a prior full-page clip of the same URL exists, membox graph-links the excerpt to it
+- Esc / click outside / scroll dismisses the card
+- ⌘/Ctrl+Enter saves
 
 ## Build
 

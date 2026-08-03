@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -137,6 +138,10 @@ type ingestRequest struct {
 	Title     string `json:"title"`
 	Body      string `json:"body"`
 	SourceURL string `json:"source_url"`
+	// From is an optional existing document selector. When set (or when a page
+	// clip with the same source_url already exists), the new note is graph-linked
+	// from that document via CreateNote's FromSelector.
+	From string `json:"from"`
 }
 
 type ingestResponse struct {
@@ -144,6 +149,7 @@ type ingestResponse struct {
 	Path    string `json:"path"`
 	Created bool   `json:"created"`
 	ViewURL string `json:"view_url"`
+	Linked  string `json:"linked,omitempty"`
 }
 
 // handleIngest creates a new indexed Markdown note from a browser clip and
@@ -177,22 +183,65 @@ func (s *Server) handleIngest(writer http.ResponseWriter, request *http.Request)
 		body = assembleClipMarkdown(title, payload.SourceURL, body)
 	}
 
+	from := strings.TrimSpace(payload.From)
+	if from == "" && strings.TrimSpace(payload.SourceURL) != "" {
+		from = s.findDocumentIDBySourceURL(request.Context(), payload.SourceURL)
+	}
+
 	result, err := s.service.CreateNote(request.Context(), application.CreateNoteOptions{
-		Title: title,
-		Body:  body,
+		Title:        title,
+		Body:         body,
+		FromSelector: from,
 	})
+	// Linking is best-effort: a stale from selector must not block ingest.
+	if err != nil && from != "" {
+		result, err = s.service.CreateNote(request.Context(), application.CreateNoteOptions{
+			Title: title,
+			Body:  body,
+		})
+		from = ""
+	}
 	if err != nil {
 		http.Error(writer, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	id := string(result.Document.ID)
-	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
-	_ = json.NewEncoder(writer).Encode(ingestResponse{
+	resp := ingestResponse{
 		ID:      id,
 		Path:    result.Path,
 		Created: true,
 		ViewURL: s.ViewURL(id),
-	})
+	}
+	if result.Link != nil && from != "" {
+		resp.Linked = from
+	}
+	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(writer).Encode(resp)
+}
+
+// findDocumentIDBySourceURL returns a document that already cites this URL
+// (typically a prior full-page clip), so selection notes can auto-link to it.
+func (s *Server) findDocumentIDBySourceURL(ctx context.Context, sourceURL string) string {
+	sourceURL = strings.TrimSpace(sourceURL)
+	if sourceURL == "" {
+		return ""
+	}
+	hits, err := s.service.Search(ctx, sourceURL, 12)
+	if err != nil {
+		return ""
+	}
+	needle := "source_url: " + strconvQuote(sourceURL)
+	for _, hit := range hits {
+		body, readErr := s.service.ReadDocument(ctx, string(hit.DocumentID))
+		if readErr != nil {
+			continue
+		}
+		text := string(body)
+		if strings.Contains(text, needle) || strings.Contains(text, sourceURL) {
+			return string(hit.DocumentID)
+		}
+	}
+	return ""
 }
 
 func titleFromBody(body string) string {

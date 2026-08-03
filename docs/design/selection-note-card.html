@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>membox selection card</title>
+  <style>
+    :root {
+      --font-serif: Charter, Georgia, "Songti SC", "Noto Serif CJK SC", serif;
+      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: var(--font-sans); }
+    .board { width: 1280px; height: 720px; display: grid; grid-template-columns: 1fr 1fr; }
+    .panel { position: relative; padding: 48px 40px; overflow: hidden; }
+    .panel.light {
+      --paper: #f5f4ed; --paper-raised: #faf9f5; --ink: #171714; --ink-soft: #55534d;
+      --muted: #77746d; --accent: #1b365d; --accent-soft: #e8edf3; --line: #dedbd0;
+      --hl: rgba(255, 214, 102, 0.42); --shadow: rgba(0, 0, 0, 0.08); --input-bg: #fff;
+      background: var(--paper); color: var(--ink);
+    }
+    .panel.dark {
+      --paper: #141413; --paper-raised: #1e1e1c; --ink: #e8e6dc; --ink-soft: #b8b6ac;
+      --muted: #8b897f; --accent: #84a4c4; --accent-soft: #283345; --line: #2f2e29;
+      --hl: rgba(255, 214, 102, 0.20); --shadow: rgba(0, 0, 0, 0.35); --input-bg: #181816;
+      background: var(--paper); color: var(--ink);
+    }
+    .label {
+      font-size: 11px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase;
+      color: var(--muted); margin-bottom: 28px;
+    }
+    .page h1 {
+      font-family: var(--font-serif); font-size: 26px; font-weight: 600; letter-spacing: -0.02em;
+      line-height: 1.25; margin: 0 0 16px; max-width: 14em; color: var(--ink);
+    }
+    .page p {
+      font-family: var(--font-serif); font-size: 15px; line-height: 1.65; color: var(--ink-soft);
+      margin: 0 0 0.9em; max-width: 28em;
+    }
+    .page .hl { background: var(--hl); color: var(--ink); border-radius: 2px; padding: 0 1px; }
+    .card {
+      position: absolute; top: 268px; left: 48px; width: 268px;
+      background: var(--paper-raised);
+      border: 1px solid color-mix(in srgb, var(--line) 88%, var(--ink) 12%);
+      border-radius: 10px;
+      box-shadow: 0 1px 0 color-mix(in srgb, var(--paper-raised) 80%, transparent) inset, 0 10px 28px var(--shadow);
+      padding: 10px; display: flex; flex-direction: column; gap: 8px;
+    }
+    .excerpt {
+      font-family: var(--font-serif); font-size: 12.5px; line-height: 1.5; color: var(--ink-soft);
+      border-left: 2px solid color-mix(in srgb, var(--accent) 55%, var(--line));
+      padding: 1px 0 1px 10px; max-height: 5.6em; overflow: hidden;
+    }
+    .composer {
+      position: relative; border: 1px solid var(--line); background: var(--input-bg); border-radius: 8px;
+    }
+    .note {
+      display: block; width: 100%; min-height: calc(1.2em + 10px + 26px); height: calc(1.2em + 10px + 26px);
+      border: 0; background: transparent; color: var(--ink); border-radius: 8px;
+      padding: 6px 64px 28px 9px; font-family: var(--font-sans); font-size: 12.5px; line-height: 1.45;
+      resize: none; outline: none;
+    }
+    .note::placeholder { color: var(--muted); opacity: 0.85; }
+    .composer-bar { position: absolute; right: 5px; bottom: 5px; }
+    .save {
+      appearance: none; border: 0; border-radius: 5px;
+      background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent);
+      font-family: var(--font-sans); font-size: 11px; font-weight: 600; padding: 4px 8px;
+    }
+  </style>
+</head>
+<body>
+  <div class="board">
+    <section class="panel light">
+      <div class="label">Light · Miru</div>
+      <div class="page">
+        <h1>EzRaft: Build a Distributed KV Store in 100 Lines</h1>
+        <p>OpenRaft is powerful, but the learning curve is steep.</p>
+        <p><span class="hl">EzRaft collapses that path into four things the user defines: state machine, log storage, RPC, and a thin runtime glue.</span> The rest is batteries-included Raft.</p>
+      </div>
+      <div class="card">
+        <div class="excerpt">EzRaft collapses that path into four things the user defines: state machine, log storage, RPC, and a thin runtime glue.</div>
+        <div class="composer">
+          <textarea class="note" readonly placeholder="Write a note…"></textarea>
+          <div class="composer-bar"><button class="save" type="button">Save</button></div>
+        </div>
+      </div>
+    </section>
+    <section class="panel dark">
+      <div class="label">Dark · Miru</div>
+      <div class="page">
+        <h1>EzRaft: Build a Distributed KV Store in 100 Lines</h1>
+        <p>OpenRaft is powerful, but the learning curve is steep.</p>
+        <p><span class="hl">EzRaft collapses that path into four things the user defines: state machine, log storage, RPC, and a thin runtime glue.</span> The rest is batteries-included Raft.</p>
+      </div>
+      <div class="card">
+        <div class="excerpt">EzRaft collapses that path into four things the user defines: state machine, log storage, RPC, and a thin runtime glue.</div>
+        <div class="composer">
+          <textarea class="note" readonly placeholder="Write a note…"></textarea>
+          <div class="composer-bar"><button class="save" type="button">Save</button></div>
+        </div>
+      </div>
+    </section>
+  </div>
+</body>
+</html>

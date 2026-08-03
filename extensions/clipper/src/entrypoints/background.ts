@@ -2,20 +2,44 @@ import { ingestClip } from '../lib/membox-client';
 import { loadSettings } from '../lib/settings';
 import type { ClipPayload, IngestResult } from '../lib/types';
 
+type IngestResponse = { ok: true; result: IngestResult } | { ok: false; error: string };
+
 export default defineBackground(() => {
   browser.runtime.onMessage.addListener((message) => {
     if (message?.type === 'membox.ingest-active-tab') {
       return ingestActiveTab();
     }
+    if (message?.type === 'membox.ingest-payload') {
+      return ingestPayload(message.payload as ClipPayload, {
+        open: message.open !== false,
+      });
+    }
     return undefined;
   });
 });
 
-async function ingestActiveTab(): Promise<
-  { ok: true; result: IngestResult } | { ok: false; error: string }
-> {
+async function ingestPayload(
+  payload: ClipPayload,
+  opts: { open: boolean },
+): Promise<IngestResponse> {
   try {
+    if (!payload?.body?.trim()) {
+      return { ok: false, error: 'Empty clip payload' };
+    }
     const settings = await loadSettings();
+    const result = await ingestClip(settings, payload);
+    const shouldOpen = opts.open && settings.autoOpen && result.view_url;
+    if (shouldOpen) {
+      await browser.tabs.create({ url: result.view_url });
+    }
+    return { ok: true, result };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+async function ingestActiveTab(): Promise<IngestResponse> {
+  try {
     const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
     if (!tab?.id) {
       return { ok: false, error: 'No active tab' };
@@ -34,11 +58,7 @@ async function ingestActiveTab(): Promise<
     }
 
     const clip = await clipTab(tab.id);
-    const result = await ingestClip(settings, clip);
-    if (settings.autoOpen && result.view_url) {
-      await browser.tabs.create({ url: result.view_url });
-    }
-    return { ok: true, result };
+    return ingestPayload(clip, { open: true });
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
@@ -49,9 +69,6 @@ type ClipResponse =
   | { ok: false; error: string };
 
 async function clipTab(tabId: number): Promise<ClipPayload> {
-  // Content script carries the bundled Readability+Turndown build. Chrome's
-  // executeScript({ func }) only stringifies the function body and drops
-  // imports — that was why extraction always failed.
   let response = await requestClip(tabId);
   if (!response) {
     await injectContentScript(tabId);
@@ -78,7 +95,6 @@ async function requestClip(tabId: number): Promise<ClipResponse | null> {
 }
 
 async function injectContentScript(tabId: number): Promise<void> {
-  // WXT emits the content entry as content-scripts/content.js
   await browser.scripting.executeScript({
     target: { tabId },
     files: ['content-scripts/content.js'],
