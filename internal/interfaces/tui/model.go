@@ -159,6 +159,8 @@ type Model struct {
 	graphFocusID   string
 	graphCards     []membox.DocumentView
 	graphIncoming  int
+	// Selection while walking the thread tree (index into graphCards).
+	graphSelected    int
 	graphPreviews  map[string]string
 }
 
@@ -413,6 +415,8 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.loading = true
 			commands = append(commands, m.spinner.Tick, reindexCmd(m.ctx, m.app, msg.selector))
 		}
+		// Returning from the viewer keeps the thread tree on its original
+		// focus — opening a linked document never re-roots the tree.
 	case reindexMsg:
 		m.loading, m.err = false, msg.err
 		if msg.err == nil {
@@ -470,6 +474,7 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.graphCards = msg.cards
 			m.graphIncoming = msg.incoming
 			m.graphPreviews = msg.previews
+			m.graphSelected = 0
 			m.viewMode = viewBoard
 			m.boardScrollY = 0
 			m.statusMessage = "graph focus " + shortID(msg.documentID)
@@ -1037,27 +1042,7 @@ func (m Model) commandAction(tokens []string) (func() tea.Msg, string, error) {
 			if len(tokens) != 3 {
 				return nil, "link list <document-id>", fmt.Errorf("document is required")
 			}
-			return func() tea.Msg {
-				selectorValue := selector(tokens[2])
-				graph, err := m.app.GetDocumentGraph(m.ctx, membox.GetDocumentGraphQuery{Selector: selectorValue})
-				if err != nil {
-					return commandResultMsg{err: err}
-				}
-				cards := make([]membox.DocumentView, 0, 1+len(graph.Outgoing)+len(graph.Incoming))
-				cards = append(cards, graph.Focus)
-				cards = append(cards, graph.Outgoing...)
-				cards = append(cards, graph.Incoming...)
-				// Load body previews so cards show content, not just filenames.
-				previews := make(map[string]string, len(cards))
-				for _, card := range cards {
-					if body, readErr := m.app.ReadDocument(m.ctx, membox.ReadDocumentQuery{Selector: card.ID}); readErr == nil {
-						if preview := host.DocumentPreview(body, 220); preview != "" {
-							previews[card.ID] = preview
-						}
-					}
-				}
-				return graphFocusMsg{documentID: graph.Focus.ID, cards: cards, incoming: len(graph.Incoming), previews: previews}
-			}, "link list <document-id>", nil
+			return graphFocusCmd(m.ctx, m.app, selector(tokens[2])), "link list <document-id>", nil
 		}
 	}
 	return nil, strings.Join(tokens, " "), fmt.Errorf("unknown command %q", tokens[0])
@@ -1085,6 +1070,17 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(commands...)
 	}
+	// Walking the thread tree: arrows move between linked documents, enter
+	// opens the focused one (and re-focuses the graph on it afterwards).
+	if m.graphFocusID != "" {
+		switch msg.String() {
+		case "up", "down", "left", "right", "k", "j", "h", "l", "pgup", "pgdown", "home", "end":
+			m.moveGraphSelection(msg.String())
+			return m, nil
+		case "enter":
+			return m.openGraphSelection()
+		}
+	}
 	switch msg.String() {
 	case "q":
 		// Contextual "back" within the TUI; Ctrl+D quits the program.
@@ -1092,6 +1088,7 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.graphFocusID = ""
 			m.graphCards = nil
 			m.graphIncoming = 0
+			m.graphSelected = 0
 			m.viewMode = viewTree
 			m.keepSelectionVisible()
 		} else if m.viewMode == viewBoard {
@@ -1129,6 +1126,7 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Toggle between tree and board view when input is not active
 		m.graphFocusID = ""
 		m.graphCards = nil
+		m.graphSelected = 0
 		m.graphIncoming = 0
 		if m.viewMode == viewTree {
 			m.viewMode = viewBoard
@@ -2215,15 +2213,45 @@ func (m Model) boardView() string {
 }
 
 func (m Model) graphBoardView() string {
-	if len(m.graphCards) == 0 {
+	rows, _ := m.graphRows()
+	if len(rows) == 0 {
 		return dimStyle.Render("No linked documents.")
 	}
-	center := m.graphCards[0]
-	centerItem := documentItems([]membox.DocumentView{center})[0]
+	if m.boardScrollY > 0 {
+		if m.boardScrollY < len(rows) {
+			rows = rows[m.boardScrollY:]
+		} else {
+			rows = nil
+		}
+	}
+	return strings.Join(rows, "\n")
+}
+
+// graphRows flattens the thread tree into display lines and records, for each
+// card in m.graphCards, the line index where that card's block starts (used
+// for selection highlighting and scroll-into-view).
+func (m Model) graphRows() ([]string, []int) {
+	if len(m.graphCards) == 0 {
+		return nil, nil
+	}
 	width := max(24, m.width-8)
 	var lines []string
-	lines = append(lines, accentStyle.Render("● focus")+dimStyle.Render("  ["+shortID(center.ID)+"] "+centerItem.filename))
-	// Title line only when it differs from the filename already printed above.
+	starts := make([]int, 0, len(m.graphCards))
+
+	selectedLine := func(line string) string {
+		return lipgloss.NewStyle().Foreground(colors.Accent).Background(colors.SelectedBG).Width(width).Inline(true).Render(line)
+	}
+
+	// Focus card (index 0).
+	center := m.graphCards[0]
+	centerItem := documentItems([]membox.DocumentView{center})[0]
+	starts = append(starts, len(lines))
+	header := "● focus  [" + shortID(center.ID) + "] " + centerItem.filename
+	if m.graphSelected == 0 {
+		lines = append(lines, selectedLine("> "+header))
+	} else {
+		lines = append(lines, accentStyle.Render("● focus")+dimStyle.Render("  ["+shortID(center.ID)+"] "+centerItem.filename))
+	}
 	if title := displayTitle(center.Title, center.Path); !titleRedundant(title, centerItem.filename) {
 		for _, line := range wrapText(title, width-2) {
 			lines = append(lines, dimStyle.Render("  ")+line)
@@ -2239,10 +2267,12 @@ func (m Model) graphBoardView() string {
 			lines = append(lines, dimStyle.Render("  ")+previewStyle.Render(line))
 		}
 	}
+
 	if len(m.graphCards) > 1 {
-		lines = append(lines, dimStyle.Render("│"))
 		related := documentItems(m.graphCards[1:])
 		for index, candidate := range related {
+			lines = append(lines, dimStyle.Render("│"))
+			starts = append(starts, len(lines))
 			direction := "→"
 			if index >= len(m.graphCards)-1-m.graphIncoming {
 				direction = "←"
@@ -2253,8 +2283,12 @@ func (m Model) graphBoardView() string {
 				branch = "└─"
 				continuation = "  "
 			}
-			lines = append(lines, dimStyle.Render(branch)+" "+accentStyle.Render(direction)+" ["+shortID(candidate.document.ID)+"] "+candidate.filename)
-			// Skip the title row when it just repeats the filename.
+			header := branch + " " + direction + " [" + shortID(candidate.document.ID) + "] " + candidate.filename
+			if index+1 == m.graphSelected {
+				lines = append(lines, selectedLine("> "+header))
+			} else {
+				lines = append(lines, dimStyle.Render(branch)+" "+accentStyle.Render(direction)+" ["+shortID(candidate.document.ID)+"] "+candidate.filename)
+			}
 			if title := displayTitle(candidate.document.Title, candidate.document.Path); !titleRedundant(title, candidate.filename) {
 				for _, line := range wrapText(title, width-2) {
 					lines = append(lines, dimStyle.Render(continuation)+" "+line)
@@ -2274,12 +2308,116 @@ func (m Model) graphBoardView() string {
 					lines = append(lines, dimStyle.Render(continuation)+" "+previewStyle.Render(line))
 				}
 			}
-			if index+1 < len(related) {
-				lines = append(lines, dimStyle.Render("│"))
-			}
 		}
 	}
-	return strings.Join(lines, "\n")
+	return lines, starts
+}
+
+// openGraphSelection opens the focused thread-tree card with the configured
+// viewer. The tree keeps its original root — opening a linked document never
+// re-roots the graph.
+func (m Model) openGraphSelection() (tea.Model, tea.Cmd) {
+	if m.graphSelected < 0 || m.graphSelected >= len(m.graphCards) {
+		return m, nil
+	}
+	target := m.graphCards[m.graphSelected]
+	m.loading = true
+	if m.viewerMode == "web" {
+		return m, tea.Batch(m.spinner.Tick, openDocumentWebCmd(m.ctx, m.app, m.launcher, target.ID))
+	}
+	return m, tea.Batch(m.spinner.Tick, resolveViewerCmd(m.ctx, m.app, target.ID))
+}
+
+// moveGraphSelection walks the thread-tree selection and keeps it in view.
+func (m *Model) moveGraphSelection(key string) {
+	n := len(m.graphCards)
+	if n == 0 {
+		return
+	}
+	if m.graphSelected < 0 {
+		m.graphSelected = 0
+	}
+	if m.graphSelected > n-1 {
+		m.graphSelected = n - 1
+	}
+	switch key {
+	case "up", "left", "k", "h":
+		if m.graphSelected > 0 {
+			m.graphSelected--
+		}
+	case "down", "right", "j", "l":
+		if m.graphSelected < n-1 {
+			m.graphSelected++
+		}
+	case "pgup":
+		m.graphSelected = max(0, m.graphSelected-5)
+	case "pgdown":
+		m.graphSelected = min(n-1, m.graphSelected+5)
+	case "home":
+		m.graphSelected = 0
+	case "end":
+		m.graphSelected = n - 1
+	}
+	m.scrollGraphToSelection()
+}
+
+// scrollGraphToSelection adjusts boardScrollY so the selected thread card is
+// visible.
+func (m *Model) scrollGraphToSelection() {
+	rows, starts := m.graphRows()
+	if len(starts) == 0 {
+		m.boardScrollY = 0
+		return
+	}
+	if m.graphSelected < 0 || m.graphSelected >= len(starts) {
+		return
+	}
+	cardTop := starts[m.graphSelected]
+	cardHeight := len(rows) - cardTop
+	if m.graphSelected+1 < len(starts) {
+		cardHeight = starts[m.graphSelected+1] - cardTop
+	}
+	visible := m.visibleRows()
+	if cardTop < m.boardScrollY {
+		m.boardScrollY = cardTop
+	}
+	if cardTop+cardHeight > m.boardScrollY+visible {
+		m.boardScrollY = cardTop + cardHeight - visible
+	}
+	if m.boardScrollY < 0 {
+		m.boardScrollY = 0
+	}
+	if maxScroll := len(rows) - visible; maxScroll >= 0 && m.boardScrollY > maxScroll {
+		m.boardScrollY = maxScroll
+	}
+	if m.boardScrollY < 0 {
+		m.boardScrollY = 0
+	}
+}
+
+// graphFocusCmd loads a document's link graph (with body previews) so it can
+// be walked as a thread tree.
+func graphFocusCmd(ctx context.Context, app App, selectorValue string) tea.Cmd {
+	return func() tea.Msg {
+		graph, err := app.GetDocumentGraph(ctx, membox.GetDocumentGraphQuery{Selector: selectorValue})
+		if err != nil {
+			return graphFocusMsg{err: err}
+		}
+		cards := make([]membox.DocumentView, 0, 1+len(graph.Outgoing)+len(graph.Incoming))
+		cards = append(cards, graph.Focus)
+		cards = append(cards, graph.Outgoing...)
+		cards = append(cards, graph.Incoming...)
+		// Load body previews so cards show content, not just filenames.
+		previews := make(map[string]string, len(cards))
+		for _, card := range cards {
+			if body, readErr := app.ReadDocument(ctx, membox.ReadDocumentQuery{Selector: card.ID}); readErr == nil {
+				if preview := host.DocumentPreview(body, 220); preview != "" {
+					previews[card.ID] = preview
+				}
+			}
+		}
+		return graphFocusMsg{documentID: graph.Focus.ID, cards: cards, incoming: len(graph.Incoming), previews: previews}
+	}
 }
 
 // renderCard renders a single document as a Unicode box card
@@ -2524,6 +2662,9 @@ func (m Model) hints() string {
 	}
 	if m.deleteConfirm {
 		return "delete file? • y confirm • n/esc cancel"
+	}
+	if m.graphFocusID != "" {
+		return "thread • ↑↓ walk • enter open • q back • ctrl+d quit"
 	}
 	sortLabel := "name"
 	if m.sortMode == sortModeTime {

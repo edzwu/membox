@@ -37,6 +37,7 @@ type fakeApp struct {
 	mainPath  string
 	webOpened []string
 	scanCount int
+	graph     membox.DocumentGraphView
 }
 
 func (f *fakeApp) AddPath(context.Context, membox.AddPathCommand) (membox.AddPathResult, error) {
@@ -91,8 +92,10 @@ func (f *fakeApp) LinkDocuments(context.Context, membox.LinkDocumentsCommand) (m
 func (f *fakeApp) UnlinkDocuments(context.Context, membox.UnlinkDocumentsCommand) (membox.UnlinkDocumentsResult, error) {
 	return membox.UnlinkDocumentsResult{Removed: true}, nil
 }
-func (f *fakeApp) GetDocumentGraph(context.Context, membox.GetDocumentGraphQuery) (membox.DocumentGraphView, error) {
-	return membox.DocumentGraphView{}, nil
+func (f *fakeApp) GetDocumentGraph(_ context.Context, query membox.GetDocumentGraphQuery) (membox.DocumentGraphView, error) {
+	graph := f.graph
+	graph.Focus = membox.DocumentView{ID: query.Selector, Title: "Focus", Path: "/tmp/focus.md"}
+	return graph, nil
 }
 func (f *fakeApp) ToggleDocumentPin(_ context.Context, command membox.ToggleDocumentPinCommand) (membox.ToggleDocumentPinResult, error) {
 	if f.pins == nil {
@@ -1768,5 +1771,82 @@ func TestModel_NoteViewCommandUsesExecProcessPath(t *testing.T) {
 	updated, command = model.Update(ready)
 	if command == nil {
 		t.Fatal("editReadyMsg did not schedule the viewer subprocess")
+	}
+}
+
+// Walking the thread tree: arrows move between linked documents, enter opens
+// the focused one, and when the viewer exits the graph re-focuses on the
+// opened document so the user can keep walking the thread.
+func TestModel_ThreadTreeWalkKeepsRootAfterOpen(t *testing.T) {
+	app := &fakeApp{graph: membox.DocumentGraphView{
+		Outgoing: []membox.DocumentView{{ID: "019-out", Title: "Out", Path: "/tmp/out.md"}},
+		Incoming: []membox.DocumentView{{ID: "019-in", Title: "In", Path: "/tmp/in.md"}},
+	}}
+	model := New(context.Background(), app, fakeLauncher{})
+	model.width, model.height = 120, 30
+
+	cards := []membox.DocumentView{
+		{ID: "019-focus", Title: "Focus", Path: "/tmp/focus.md"},
+		{ID: "019-out", Title: "Out", Path: "/tmp/out.md"},
+		{ID: "019-in", Title: "In", Path: "/tmp/in.md"},
+	}
+	updated, _ := model.Update(graphFocusMsg{documentID: "019-focus", cards: cards, incoming: 1})
+	model = updated.(Model)
+	if model.graphSelected != 0 || model.viewMode != viewBoard {
+		t.Fatalf("graph focus not initialized: sel=%d mode=%s", model.graphSelected, model.viewMode)
+	}
+
+	// Arrow keys walk the tree and highlight the selection.
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = updated.(Model)
+	if model.graphSelected != 1 {
+		t.Fatalf("down did not move selection: %d", model.graphSelected)
+	}
+	if !strings.Contains(model.View(), "> ") {
+		t.Fatal("selected thread card is not highlighted")
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyUp})
+	model = updated.(Model)
+	if model.graphSelected != 0 {
+		t.Fatalf("up did not move selection back: %d", model.graphSelected)
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	model = updated.(Model)
+	if model.graphSelected != len(cards)-1 {
+		t.Fatalf("end did not jump to last card: %d", model.graphSelected)
+	}
+
+	// Enter opens the focused card through the viewer path.
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyHome})
+	model = updated.(Model)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown}) // select 019-out
+	model = updated.(Model)
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if command == nil {
+		t.Fatal("enter did not schedule viewer command")
+	}
+	message := command()
+	if batch, ok := message.(tea.BatchMsg); ok {
+		message = batch[1]()
+	}
+	ready, ok := message.(editReadyMsg)
+	if !ok {
+		t.Fatalf("expected editReadyMsg (ExecProcess path), got %T", message)
+	}
+	updated, _ = model.Update(ready) // schedules tea.ExecProcess
+
+	// Viewer exits -> the tree keeps its original root; opening a linked
+	// document never re-roots the graph, and the selection is preserved.
+	updated, command = model.Update(editorDoneMsg{selector: "019-out", viewer: true})
+	model = updated.(Model)
+	if model.graphFocusID != "019-focus" {
+		t.Fatalf("thread tree root changed after opening a linked doc: %q", model.graphFocusID)
+	}
+	if model.graphSelected != 1 {
+		t.Fatalf("selection was lost after viewer exit: %d", model.graphSelected)
+	}
+	if command != nil {
+		t.Fatal("viewer exit should not schedule a graph re-focus")
 	}
 }
