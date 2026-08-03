@@ -19,19 +19,35 @@ export function wrapTables() {
   });
 }
 
-// Links whose entire label is a heading-anchor glyph are "headerlinks" from
-// generated docs (Sphinx, go.dev, MDN, ...): navigation artifacts, not
-// content. Dropping them from headings keeps TOC labels, anchor ids, and the
-// reading view clean without rewriting the Markdown source.
+// Links whose entire label is a heading-anchor glyph (or the word "Permalink")
+// are "headerlinks" from generated docs (Sphinx, Hugo, go.dev, MDN, ...):
+// navigation artifacts, not content. Dropping them from headings keeps TOC
+// labels, anchor ids, and the reading view clean without rewriting source.
 const HEADERLINK_GLYPHS = new Set(['¶', '§', '#', '＃', '🔗', '∞']);
+const HEADERLINK_LABELS = /^(permalink|anchor|link)$/i;
+const HEADERLINK_CLASSES = ['headerlink', 'anchor', 'anchorjs-link', 'permalink', 'direct-link'];
+
+function isHeadingHeaderLink(link) {
+  const text = (link.textContent || '').replace(/\u00a0/g, ' ').trim();
+  if (HEADERLINK_GLYPHS.has(text) || HEADERLINK_LABELS.test(text)) return true;
+  const title = (link.getAttribute('title') || '').trim();
+  if (HEADERLINK_LABELS.test(title)) return true;
+  const aria = (link.getAttribute('aria-label') || '').trim();
+  if (HEADERLINK_LABELS.test(aria)) return true;
+  for (const name of HEADERLINK_CLASSES) {
+    if (link.classList.contains(name)) return true;
+  }
+  // Bare "#section-id" self-link with no/empty visible label.
+  const href = link.getAttribute('href') || '';
+  if (href.startsWith('#') && text === '') return true;
+  return false;
+}
 
 export function stripHeadingHeaderLinks() {
   const headings = elements.article.querySelectorAll('h1, h2, h3, h4, h5, h6');
   headings.forEach((heading) => {
     heading.querySelectorAll('a').forEach((link) => {
-      if (HEADERLINK_GLYPHS.has((link.textContent || '').trim())) {
-        link.remove();
-      }
+      if (isHeadingHeaderLink(link)) link.remove();
     });
     heading.normalize();
   });
