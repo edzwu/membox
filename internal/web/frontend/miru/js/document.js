@@ -12,7 +12,7 @@ import { parseFrontmatter, renderFrontmatter } from './markdown/frontmatter.js';
 import { parseMarkdownStructure } from './markdown/structure.js';
 import { preprocessMath } from './markdown/math-preprocess.js';
 import { preprocessHtml } from './markdown/html-preprocess.js';
-import { wrapTables, markExternalLinks, wrapLeadingContent, addSectionActionButtons, stripHeadingHeaderLinks } from './render/decorations.js';
+import { wrapTables, markExternalLinks, wrapLeadingContent, addSectionActionButtons, stripHeadingHeaderLinks, attributeSectionSources } from './render/decorations.js';
 import { highlightCode, renderMath, addCopyButtons } from './render/code-math.js';
 import { renderAnnotationSyntax } from './render/annotations-syntax.js';
 import { foldSections, addFoldListeners, updateFoldToggleIcon } from './render/folding.js';
@@ -63,6 +63,7 @@ function processArticle() {
   wrapLeadingContent();
   stripHeadingHeaderLinks();
   const headings = assignHeadingIds();
+  attributeSectionSources();
   addCopyButtons();
   markExternalLinks();
   buildToc(headings);

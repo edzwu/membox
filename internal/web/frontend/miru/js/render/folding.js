@@ -2,7 +2,6 @@
    <section>, and toggle collapse state on click or via the fold-all button. */
 
 import { elements } from '../dom.js';
-import { state } from '../state.js';
 import { prefersReducedMotion } from '../utils.js';
 import { scheduleNoteLayout } from '../annotations/layout.js';
 
@@ -31,8 +30,9 @@ export function foldSections() {
     heading.classList.add('fold-heading');
     section.appendChild(body);
 
-    // Attach the original Markdown source for this heading by source order.
-    section.dataset.source = state.sectionSources[i] ? state.sectionSources[i].source : '';
+    // Source attribution happens later, by heading-text match rather than by
+    // index, because rendered headings and parsed source sections are not
+    // guaranteed to line up one-to-one (see attributeSectionSources).
 
     // Move following siblings into the body until a section boundary of the same or higher level.
     let current = section.nextSibling;

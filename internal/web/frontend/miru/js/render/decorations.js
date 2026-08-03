@@ -37,6 +37,47 @@ export function stripHeadingHeaderLinks() {
   });
 }
 
+// Rendered headings and parsed source sections are not guaranteed to line up
+// one-to-one by position: a heading can exist only in the DOM (`> ## Excerpt`
+// inside a blockquote is rendered but the structure parser never sees it) or
+// only in the source (a heading line swallowed by preprocessing). Index-based
+// attribution then shifts every later section's copy button. Instead, match
+// each fold-section's heading label against the raw section headings,
+// consuming source sections in order so duplicates still resolve correctly.
+function normalizeSourceHeading(text) {
+  return text
+    .replace(/!?\[([^\[\]]*)\]\([^)]*\)/g, (_, label) =>
+      HEADERLINK_GLYPHS.has(label.trim()) ? ' ' : ` ${label} `)
+    .replace(/[*_`]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function attributeSectionSources() {
+  if (!state.sectionSources.length) return;
+  const sections = elements.article.querySelectorAll('.fold-section');
+  let cursor = 0;
+  sections.forEach((section) => {
+    const heading = section.querySelector(':scope > .fold-heading');
+    const label = normalizeSourceHeading((heading && heading.dataset.headingLabel) || '');
+    let matched = -1;
+    for (let i = cursor; i < state.sectionSources.length; i++) {
+      if (normalizeSourceHeading(state.sectionSources[i].heading) === label) {
+        matched = i;
+        break;
+      }
+    }
+    if (matched === -1) {
+      // No matching source section (e.g. a blockquote heading): leave the
+      // section without a source so no misleading copy button is offered.
+      delete section.dataset.source;
+      return;
+    }
+    section.dataset.source = state.sectionSources[matched].source;
+    cursor = matched + 1;
+  });
+}
+
 export function markExternalLinks() {
   const links = elements.article.querySelectorAll('a[href]');
   links.forEach((link) => {
@@ -97,7 +138,9 @@ export function addSectionActionButtons() {
     const section = heading.closest('.fold-section');
     if (!section) return;
 
-    if (!heading.querySelector('.section-copy')) {
+    // Sections without an attributed source (see attributeSectionSources)
+    // get no copy button rather than one that copies the wrong content.
+    if (!heading.querySelector('.section-copy') && section.dataset.source) {
       const copyBtn = document.createElement('button');
       copyBtn.type = 'button';
       copyBtn.className = 'section-copy';
