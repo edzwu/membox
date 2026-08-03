@@ -122,6 +122,11 @@ CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS document_annotations (
+    document_id TEXT PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
+    sidecar TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
 `
 	if _, err := s.db.Exec(schema); err != nil {
 		return fmt.Errorf("migrating SQLite: %w", err)
@@ -520,6 +525,37 @@ func (s *Store) SavePinned(ctx context.Context, documentID catalog.DocumentID, p
 		return fmt.Errorf("document %s not found while saving pin", documentID)
 	}
 	return nil
+}
+
+// SaveAnnotations upserts the Miru annotation sidecar for a document. An
+// empty sidecar clears any stored annotations.
+func (s *Store) SaveAnnotations(ctx context.Context, documentID catalog.DocumentID, sidecar string) error {
+	if strings.TrimSpace(sidecar) == "" {
+		if _, err := s.db.ExecContext(ctx, `DELETE FROM document_annotations WHERE document_id=?`, documentID); err != nil {
+			return fmt.Errorf("clearing annotations for document %s: %w", documentID, err)
+		}
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO document_annotations(document_id,sidecar,updated_at) VALUES(?,?,?)
+ON CONFLICT(document_id) DO UPDATE SET sidecar=excluded.sidecar,updated_at=excluded.updated_at`,
+		documentID, sidecar, time.Now().UTC().UnixMilli())
+	if err != nil {
+		return fmt.Errorf("saving annotations for document %s: %w", documentID, err)
+	}
+	return nil
+}
+
+// GetAnnotations returns the stored annotation sidecar, or "" if none.
+func (s *Store) GetAnnotations(ctx context.Context, documentID catalog.DocumentID) (string, error) {
+	var sidecar string
+	err := s.db.QueryRowContext(ctx, `SELECT sidecar FROM document_annotations WHERE document_id=?`, documentID).Scan(&sidecar)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("reading annotations for document %s: %w", documentID, err)
+	}
+	return sidecar, nil
 }
 
 func (s *Store) ResolveTopic(ctx context.Context, selector string) (*catalog.Document, string, error) {

@@ -440,6 +440,66 @@ func (s *Service) ToggleDocumentPin(ctx context.Context, selector string) (Toggl
 	return ToggleDocumentPinResult{DocumentID: document.ID, Pinned: document.Pinned}, nil
 }
 
+// SaveAnnotations persists the Miru annotation sidecar for the document
+// resolved by selector. An empty sidecar clears stored annotations.
+func (s *Service) SaveAnnotations(ctx context.Context, selector string, sidecar string) (catalog.DocumentID, error) {
+	document, _, err := s.ResolveDocument(ctx, selector)
+	if err != nil {
+		return "", err
+	}
+	if err := s.store.SaveAnnotations(ctx, document.ID, sidecar); err != nil {
+		return "", err
+	}
+	return document.ID, nil
+}
+
+// GetAnnotations returns the stored annotation sidecar for the document
+// resolved by selector, or "" when none are stored.
+func (s *Service) GetAnnotations(ctx context.Context, selector string) (string, error) {
+	document, _, err := s.ResolveDocument(ctx, selector)
+	if err != nil {
+		return "", err
+	}
+	return s.store.GetAnnotations(ctx, document.ID)
+}
+
+type SyncDocumentResult struct {
+	DocumentID catalog.DocumentID
+	Path       string
+}
+
+// SyncDocument writes Markdown back to an existing active source file,
+// refreshes its catalog/FTS observation, and stores the matching Miru notes.
+func (s *Service) SyncDocument(ctx context.Context, selector, body, annotations string) (SyncDocumentResult, error) {
+	document, absolute, err := s.ResolveDocument(ctx, selector)
+	if err != nil {
+		return SyncDocumentResult{}, err
+	}
+	if document.Status != catalog.DocumentActive {
+		return SyncDocumentResult{}, fmt.Errorf("document %s is %s at %s", document.ID, document.Status, absolute)
+	}
+	if strings.TrimSpace(body) == "" {
+		return SyncDocumentResult{}, errors.New("Markdown body is required")
+	}
+	if err := s.writer.Write(ctx, absolute, []byte(body)); err != nil {
+		return SyncDocumentResult{}, err
+	}
+	observation, err := s.scanner.ObserveFile(ctx, document.Location, absolute)
+	if err != nil {
+		return SyncDocumentResult{}, err
+	}
+	if err := document.Observe(observation, s.clock.Now()); err != nil {
+		return SyncDocumentResult{}, err
+	}
+	if err := s.store.SaveDocument(ctx, port.ScanSave{Document: document, Body: observation.Body, Reindex: true}); err != nil {
+		return SyncDocumentResult{}, err
+	}
+	if err := s.store.SaveAnnotations(ctx, document.ID, annotations); err != nil {
+		return SyncDocumentResult{}, err
+	}
+	return SyncDocumentResult{DocumentID: document.ID, Path: absolute}, nil
+}
+
 func (s *Service) ReindexDocument(ctx context.Context, selector string) error {
 	document, absolute, err := s.ResolveDocument(ctx, selector)
 	if err != nil {

@@ -164,6 +164,24 @@ func (Writer) WriteNew(ctx context.Context, absolutePath string, body []byte) er
 	return nil
 }
 
+func (Writer) Write(ctx context.Context, absolutePath string, body []byte) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	file, err := os.OpenFile(absolutePath, os.O_WRONLY|os.O_TRUNC, 0)
+	if err != nil {
+		return fmt.Errorf("opening document %q for writing: %w", absolutePath, err)
+	}
+	if _, err := file.Write(body); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("writing document %q: %w", absolutePath, err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("closing document %q: %w", absolutePath, err)
+	}
+	return ctx.Err()
+}
+
 func (Writer) Remove(ctx context.Context, absolutePath string) error {
 	if err := ctx.Err(); err != nil {
 		return err

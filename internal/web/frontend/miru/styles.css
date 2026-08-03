@@ -261,26 +261,6 @@ button {
   background: var(--accent-soft);
 }
 
-.save-note {
-  border: 1px solid var(--accent);
-  background: var(--accent);
-  color: var(--paper);
-  padding: 7px 16px;
-  font-weight: 600;
-}
-
-.save-note:hover {
-  color: var(--paper);
-  background: var(--accent);
-  filter: brightness(1.12);
-}
-
-.save-note:disabled {
-  opacity: 0.6;
-  cursor: default;
-  filter: none;
-}
-
 .theme-toggle {
   width: 36px;
   height: 36px;

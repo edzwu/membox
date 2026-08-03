@@ -26,6 +26,7 @@ type MarkdownScanner interface {
 
 type ContentWriter interface {
 	WriteNew(ctx context.Context, absolutePath string, body []byte) error
+	Write(ctx context.Context, absolutePath string, body []byte) error
 	Remove(ctx context.Context, absolutePath string) error
 }
 
@@ -96,6 +97,8 @@ type CatalogStore interface {
 	SaveDocument(ctx context.Context, save ScanSave) error
 	SaveSourceTimes(ctx context.Context, documents []*catalog.Document) error
 	SavePinned(ctx context.Context, documentID catalog.DocumentID, pinned bool) error
+	SaveAnnotations(ctx context.Context, documentID catalog.DocumentID, sidecar string) error
+	GetAnnotations(ctx context.Context, documentID catalog.DocumentID) (string, error)
 	Search(ctx context.Context, query string, limit int) ([]SearchHit, error)
 	ListDocuments(ctx context.Context, limit int, includeUnavailable bool) ([]DocumentRecord, error)
 	ResolveDocument(ctx context.Context, selector string) (*catalog.Document, string, error)

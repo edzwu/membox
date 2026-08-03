@@ -55,7 +55,7 @@ function init() {
 
 init();
 
-// membox integration: signal that the reader is initialized so an external
-// loader (see membox-loader.js) can inject a document fetched from the server.
+// Stable integration hook: host adapters may load a document or add their own
+// persistence controls after Miru has finished wiring its UI.
 window.__miruReady = true;
 window.dispatchEvent(new CustomEvent('miru-ready'));

@@ -60,8 +60,20 @@ func TestServerServesReaderAndMarkdown(t *testing.T) {
 	}
 	indexBody, _ := io.ReadAll(indexResp.Body)
 	indexResp.Body.Close()
-	if !strings.Contains(string(indexBody), `id="save-note"`) || !strings.Contains(string(indexBody), "membox-loader.js") {
-		t.Fatalf("index.html missing membox integration: %s", indexBody[:200])
+	if strings.Contains(string(indexBody), `id="save-note"`) {
+		t.Fatal("served reader still contains the old Save button")
+	}
+	if !strings.Contains(string(indexBody), `src="/membox/integration.js"`) {
+		t.Fatalf("index.html missing isolated membox adapter: %s", indexBody[:200])
+	}
+	adapterResp, err := http.Get(baseURL + "/membox/integration.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapterBody, _ := io.ReadAll(adapterResp.Body)
+	adapterResp.Body.Close()
+	if adapterResp.StatusCode != http.StatusOK || !strings.Contains(string(adapterBody), "membox-connection") {
+		t.Fatalf("membox adapter unavailable: status=%d", adapterResp.StatusCode)
 	}
 
 	docResp, err := http.Get(baseURL + "/api/doc/" + docID)
@@ -84,6 +96,141 @@ func TestServerServesReaderAndMarkdown(t *testing.T) {
 	missingResp.Body.Close()
 	if missingResp.StatusCode != http.StatusNotFound {
 		t.Fatalf("expected 404 for missing doc, got %d", missingResp.StatusCode)
+	}
+}
+
+func TestServerAnnotationSidecarPersistsByDocumentUUID(t *testing.T) {
+	baseURL, docID, _ := startServer(t)
+
+	// No annotations yet: GET returns 204 No Content.
+	emptyResp, err := http.Get(baseURL + "/api/doc/" + docID + "/annotations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	emptyResp.Body.Close()
+	if emptyResp.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected 204 when no annotations, got %d", emptyResp.StatusCode)
+	}
+
+	// Persist a sidecar keyed by the document UUID.
+	sidecar := `{"format":"miru-annotations","version":2,"annotations":[]}`
+	postResp, err := http.Post(baseURL+"/api/doc/"+docID+"/annotations", "application/json", strings.NewReader(sidecar))
+	if err != nil {
+		t.Fatal(err)
+	}
+	postBody, _ := io.ReadAll(postResp.Body)
+	postResp.Body.Close()
+	if postResp.StatusCode != http.StatusOK {
+		t.Fatalf("save annotations failed: status=%d body=%q", postResp.StatusCode, postBody)
+	}
+
+	// The sidecar round-trips so the reader can restore notes on re-open.
+	getResp, err := http.Get(baseURL + "/api/doc/" + docID + "/annotations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	getBody, _ := io.ReadAll(getResp.Body)
+	getResp.Body.Close()
+	if getResp.StatusCode != http.StatusOK || string(getBody) != sidecar {
+		t.Fatalf("unexpected sidecar: status=%d body=%q", getResp.StatusCode, getBody)
+	}
+
+	// Posting an empty body clears stored annotations.
+	clearResp, err := http.Post(baseURL+"/api/doc/"+docID+"/annotations", "application/json", strings.NewReader(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	clearResp.Body.Close()
+	againResp, err := http.Get(baseURL + "/api/doc/" + docID + "/annotations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	againResp.Body.Close()
+	if againResp.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected 204 after clearing, got %d", againResp.StatusCode)
+	}
+}
+
+func TestServerSyncUpdatesMarkdownAndAnnotationsTogether(t *testing.T) {
+	baseURL, docID, notesDir := startServer(t)
+
+	payload := strings.NewReader(`{"id":"` + docID + `","title":"Flash Attention","body":"# Flash Attention\n\nsynced body\n","annotations":{"format":"miru-annotations","version":2,"annotations":[]}}`)
+	resp, err := http.Post(baseURL+"/api/sync", "application/json", payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	responseBody, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("sync failed: status=%d body=%q", resp.StatusCode, responseBody)
+	}
+	var result struct {
+		ID      string `json:"id"`
+		Created bool   `json:"created"`
+	}
+	if err := json.Unmarshal(responseBody, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.ID != docID || result.Created {
+		t.Fatalf("sync changed identity: %+v", result)
+	}
+	saved, err := os.ReadFile(filepath.Join(notesDir, "flash.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(saved), "synced body") {
+		t.Fatalf("Markdown was not updated: %q", saved)
+	}
+	annotationsResp, err := http.Get(baseURL + "/api/doc/" + docID + "/annotations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	annotations, _ := io.ReadAll(annotationsResp.Body)
+	annotationsResp.Body.Close()
+	if annotationsResp.StatusCode != http.StatusOK || !strings.Contains(string(annotations), "miru-annotations") {
+		t.Fatalf("annotations were not synced: status=%d body=%q", annotationsResp.StatusCode, annotations)
+	}
+}
+
+func TestServerSyncCreatesNewDocumentWithAnnotations(t *testing.T) {
+	baseURL, _, notesDir := startServer(t)
+
+	payload := strings.NewReader(`{"title":"Synced Paste","body":"# Synced Paste\n\nnew from Miru\n","annotations":{"format":"miru-annotations","version":2,"annotations":[]}}`)
+	resp, err := http.Post(baseURL+"/api/sync", "application/json", payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("sync create failed: status=%d body=%q", resp.StatusCode, body)
+	}
+	var result struct {
+		ID      string `json:"id"`
+		Path    string `json:"path"`
+		Created bool   `json:"created"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.ID == "" || !result.Created {
+		t.Fatalf("new sync did not create a document: %+v", result)
+	}
+	canonicalNotes, err := filepath.EvalSymlinks(notesDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(canonicalNotes, "synced-paste.md"); result.Path != want {
+		t.Fatalf("sync path = %q, want %q", result.Path, want)
+	}
+	annotationResp, err := http.Get(baseURL + "/api/doc/" + result.ID + "/annotations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	annotationBody, _ := io.ReadAll(annotationResp.Body)
+	annotationResp.Body.Close()
+	if annotationResp.StatusCode != http.StatusOK || !strings.Contains(string(annotationBody), "miru-annotations") {
+		t.Fatalf("new note annotations missing: status=%d body=%q", annotationResp.StatusCode, annotationBody)
 	}
 }
 

@@ -1,0 +1,80 @@
+/* membox-only chrome. Miru's own stylesheet remains product-neutral. */
+.membox-connection {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  background: var(--paper-raised);
+  color: var(--muted);
+}
+
+.membox-connection svg {
+  width: 19px;
+  height: 19px;
+}
+
+.membox-connection .connection-bridge {
+  opacity: 0;
+}
+
+.membox-connection .connection-slash {
+  opacity: 0.72;
+}
+
+.membox-connection[data-connected="true"] {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
+  background: color-mix(in srgb, var(--accent-soft) 62%, var(--paper-raised));
+}
+
+.membox-connection[data-connected="true"] .connection-bridge {
+  opacity: 1;
+}
+
+.membox-connection[data-connected="true"] .connection-slash {
+  opacity: 0;
+}
+
+.membox-connection::after {
+  content: '';
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--muted);
+  box-shadow: 0 0 0 2px var(--paper-raised);
+}
+
+.membox-connection[data-connected="true"]::after {
+  background: #3f8b61;
+}
+
+.membox-connection.is-connecting::after {
+  background: var(--muted);
+  animation: membox-pulse 0.9s ease-in-out infinite alternate;
+}
+
+.download-all.is-syncing svg {
+  animation: membox-sync 0.85s ease-in-out infinite alternate;
+}
+
+@keyframes membox-pulse {
+  to { opacity: 0.25; }
+}
+
+@keyframes membox-sync {
+  to { transform: translateY(3px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .membox-connection.is-connecting::after,
+  .download-all.is-syncing svg {
+    animation: none;
+  }
+}

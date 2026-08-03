@@ -4,7 +4,6 @@
 
 export const elements = {
   brand: document.querySelector('.brand'),
-  saveNote: document.getElementById('save-note'),
   html: document.documentElement,
   body: document.body,
   article: document.getElementById('article'),
@@ -30,7 +29,6 @@ export const elements = {
 
 // Topbar and floating controls that only make sense while reading.
 export const READING_CONTROLS = [
-  elements.saveNote,
   elements.newPaste,
   elements.tocToggle,
   elements.foldToggle,

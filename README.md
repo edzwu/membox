@@ -174,6 +174,8 @@ Render any indexed Markdown in the browser with the embedded [Miru](https://gith
 
 The same applies in the TUI: pressing `enter` on a document opens it with the configured viewer, and `config viewer web` / `config viewer leaf` in the command palette switches it. The current viewer is shown in the status bar.
 
+The icon beside **New Paste** shows whether Miru is connected to membox; click it to toggle the connection. While connected, the lower-right Markdown arrow syncs both Markdown and annotations to membox (updating the current UUID, or creating a note when the paste is new). While disconnected, the same arrow keeps Miru's normal local download behavior. Synced annotations are restored by stable document UUID when the document is opened again.
+
 ### Settings panel
 
 Press `ctrl+o` in the TUI to open the settings panel. Use ↑/↓ to select a setting and ←/→ (or space) to change its value — changes are saved immediately. Current settings:
@@ -183,9 +185,16 @@ Press `ctrl+o` in the TUI to open the settings panel. Use ↑/↓ to select a se
 
 Settings persist in the membox database. `mm config viewer` shows or sets the viewer from the CLI as well.
 
-The server listens on `127.0.0.1` only. The top-left **Save** button in the reader saves the current Markdown back into membox as a new document (a fresh UUID is assigned) under the first configured path.
+The server listens on `127.0.0.1` only. New synced notes are created under the first configured path.
 
 ## Development
+
+Web code is split so Miru can be updated independently:
+
+- `internal/web/frontend/miru/` — product-neutral Miru frontend
+- `internal/web/frontend/membox/` — small membox browser adapter
+- `internal/web/backend/` — Go HTTP/API implementation
+- `internal/web/assets.go` — composition and embedding boundary
 
 ```bash
 make check      # gofmt check, go vet, tests
