@@ -1736,3 +1736,37 @@ func TestModel_CtrlCDeletesInputChar(t *testing.T) {
 		t.Fatalf("ctrl+c should delete one char from input: got %q, want %q", got, "ab")
 	}
 }
+
+// The command palette's "note view" must open the leaf viewer through the
+// same editReadyMsg -> tea.ExecProcess path as pressing enter, so the TUI
+// suspends and leaf gets the real terminal (running it inline fails with
+// "Device not configured" because bubbletea owns the terminal).
+func TestModel_NoteViewCommandUsesExecProcessPath(t *testing.T) {
+	app := &fakeApp{} // default viewer: leaf
+	model := New(context.Background(), app, fakeLauncher{})
+	model.width, model.height = 120, 24
+	model.inputVisible, model.inputActive, model.inputMode = true, true, inputModeCmd
+	model.input.Focus()
+	model.input.SetValue("note view 019-alpha")
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if command == nil {
+		t.Fatal("note view did not schedule a command")
+	}
+	message := command()
+	if batch, ok := message.(tea.BatchMsg); ok {
+		message = batch[1]()
+	}
+	ready, ok := message.(editReadyMsg)
+	if !ok {
+		t.Fatalf("expected editReadyMsg (ExecProcess path), got %T: %+v", message, message)
+	}
+	if !ready.viewer || ready.err != nil || ready.path != "/tmp/alpha.md" {
+		t.Fatalf("unexpected editReadyMsg: %+v", ready)
+	}
+	// The handler must schedule tea.ExecProcess (non-nil Cmd).
+	updated, command = model.Update(ready)
+	if command == nil {
+		t.Fatal("editReadyMsg did not schedule the viewer subprocess")
+	}
+}

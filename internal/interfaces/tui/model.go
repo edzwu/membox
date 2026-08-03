@@ -944,7 +944,10 @@ func (m Model) commandAction(tokens []string) (func() tea.Msg, string, error) {
 					}
 					return openWebMsg{url: url, err: openErr}
 				}
-				return commandResultMsg{text: "viewer is leaf; press enter on the document or run: note view " + target + " --web"}
+				// Leaf viewer: same path as pressing Enter — editReadyMsg runs the
+				// viewer through tea.ExecProcess (TUI suspends, leaf gets the real
+				// terminal, TUI resumes after exit).
+				return resolveViewerCmd(m.ctx, m.app, target)()
 			}, "note view <document-id> [--web]", nil
 		}
 		return nil, "note new <title> | note view <document-id> [--web]", fmt.Errorf("invalid note command")
