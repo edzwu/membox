@@ -1,5 +1,6 @@
 import { fetchBridgeStatus } from '../../lib/membox-client';
 import { loadSettings, saveSettings } from '../../lib/settings';
+import { getNotesEnabled, setNotesEnabled } from '../../lib/float-notes';
 import type { BridgeSettings } from '../../lib/types';
 
 const statusEl = document.getElementById('status') as HTMLDivElement;
@@ -12,6 +13,32 @@ const clipBtn = document.getElementById('clip') as HTMLButtonElement;
 const floatToggleBtn = document.getElementById('floatToggle') as HTMLButtonElement;
 const floatRestoreBtn = document.getElementById('floatRestore') as HTMLButtonElement;
 const floatCountEl = document.getElementById('floatCount') as HTMLSpanElement;
+const notesToggleBtn = document.getElementById('notesToggle') as HTMLButtonElement;
+const enableHintEl = document.getElementById('enableHint') as HTMLSpanElement;
+
+async function renderEnableState(enabled: boolean) {
+  notesToggleBtn.textContent = enabled ? 'Disable' : 'Enable';
+  notesToggleBtn.classList.toggle('is-on', enabled);
+  enableHintEl.textContent = enabled
+    ? 'On — select text to take notes on this kind of page'
+    : 'Off — selection composer and note cards are disabled';
+}
+
+notesToggleBtn.addEventListener('click', async () => {
+  const next = !(await getNotesEnabled());
+  await setNotesEnabled(next);
+  renderEnableState(next);
+  // Apply live to the current tab (no reload needed).
+  const tabId = await activeTabId();
+  if (tabId) {
+    try {
+      await browser.tabs.sendMessage(tabId, { type: 'membox.set-enabled', enabled: next });
+    } catch {
+      showMessage(next ? 'Enabled — reload the page to take effect' : 'Disabled');
+    }
+  }
+  await refreshFloatStatus();
+});
 
 function showMessage(text: string) {
   messageEl.hidden = !text;
@@ -97,6 +124,13 @@ async function refreshFloatStatus() {
   floatRestoreBtn.disabled = true;
   floatRestoreBtn.hidden = true;
   floatCountEl.textContent = '—';
+  const enabled = await getNotesEnabled();
+  await renderEnableState(enabled);
+  if (!enabled) {
+    floatCountEl.textContent = 'notes disabled — click Enable';
+    floatToggleBtn.hidden = true;
+    return;
+  }
   try {
     const tabId = await activeTabId();
     if (!tabId) {
@@ -107,10 +141,24 @@ async function refreshFloatStatus() {
       type: 'membox.floats.status',
     })) as FloatStatusResponse | undefined;
     if (!response?.ok) {
+      if (response?.error === 'native-annotations') {
+        // Miru reader page: notes are rendered by Miru itself.
+        floatCountEl.textContent = 'rendered as Miru annotations';
+        floatToggleBtn.hidden = true;
+        return;
+      }
+      if (response?.error === 'notes-disabled') {
+        // Tab was loaded before enabling; needs a refresh to pick up.
+        floatCountEl.textContent = 'reload this tab to activate';
+        floatToggleBtn.hidden = true;
+        return;
+      }
       floatCountEl.textContent = '0 on page';
       floatToggleBtn.textContent = 'Expand';
+      floatToggleBtn.hidden = false;
       return;
     }
+    floatToggleBtn.hidden = false;
     const count = response.count ?? 0;
     const hidden = response.hiddenCount ?? 0;
     const saved = response.savedCount ?? 0;
@@ -181,3 +229,4 @@ loadSettings().then(async (settings) => {
   await refreshStatus();
   await refreshFloatStatus();
 });
+

@@ -41,6 +41,7 @@ export async function ingestClip(
       body: clip.body,
       source_url: normalizeSourceURL(clip.sourceUrl) || clip.sourceUrl,
       clip_mode: clip.clipMode || undefined,
+      excerpt_raw: clip.excerptRaw || undefined,
     }),
   });
   const text = await response.text();

@@ -391,6 +391,8 @@ type ingestRequest struct {
 	Body      string `json:"body"`
 	SourceURL string `json:"source_url"`
 	ClipMode  string `json:"clip_mode"` // selection | page
+	// Raw selection text (pre-Markdown), preferred for annotation anchoring.
+	ExcerptRaw string `json:"excerpt_raw"`
 	// From is an optional existing document selector. When set (or when a page
 	// clip with the same source_url already exists), the new note is graph-linked
 	// from that document via CreateNote's FromSelector.
@@ -484,6 +486,15 @@ func (s *Server) handleIngest(writer http.ResponseWriter, request *http.Request)
 		if linked == "" && result.Link != nil && pageID != "" {
 			linked = pageID
 		}
+		// Annotation projection: mirror this note onto the page clip so Miru
+		// renders it natively (highlight + margin note). Best-effort.
+		if pageID != "" && pageID != id {
+			excerpt, note, _ := parseClipBody(body)
+			if strings.TrimSpace(payload.ExcerptRaw) != "" {
+				excerpt = payload.ExcerptRaw
+			}
+			_, _ = s.upsertClipAnnotation(ctx, pageID, id, excerpt, note)
+		}
 	}
 	if clipMode == "page" && sourceURL != "" {
 		// Page save: attach every existing selection note for this URL.
@@ -495,6 +506,9 @@ func (s *Server) handleIngest(writer http.ResponseWriter, request *http.Request)
 				linked = id // mark that linking ran from this page
 			}
 		}
+		// Annotation projection backfill: notes saved before this page clip
+		// arrived get mirrored onto the fresh page document.
+		s.backfillPageAnnotations(ctx, id, sourceURL)
 	}
 
 	resp := ingestResponse{

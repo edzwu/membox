@@ -16,6 +16,8 @@ export type ClipPayload = {
   body: string;
   /** "selection" | "page" — stored in membox document_sources */
   clipMode?: 'selection' | 'page';
+  /** Raw selection text (pre-Markdown) used for annotation anchoring. */
+  excerptRaw?: string;
 };
 
 export type IngestResult = {

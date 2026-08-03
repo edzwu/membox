@@ -66,6 +66,8 @@ function captureAnnotationAnchor(entry, canonicalText) {
     underline: !!entry.ul,
     strikethrough: !!entry.sl,
     note: entry.note || null,
+    // Stable join key to the membox note document (server-written projections).
+    ref: entry.ref || null,
   };
   return anchor;
 }
@@ -150,6 +152,7 @@ export function parseAnnotationSidecar(text) {
       underline,
       strikethrough,
       note,
+      ref: typeof item.ref === 'string' ? item.ref.slice(0, 64) : '',
     };
   });
 
@@ -278,24 +281,33 @@ export function restoreAnnotationSidecar(data) {
 
   const canonicalText = canonicalArticleText();
   let restored = 0;
+  const unrestored = [];
   data.annotations
     .slice()
     .sort((a, b) => a.start - b.start)
     .forEach((anchor) => {
       const range = resolveAnnotationRange(anchor, canonicalText);
-      if (!range) return;
+      if (!range) {
+        // Keep the anchor around so hosts can merge it back on save instead
+        // of silently dropping a note that merely failed to re-anchor.
+        unrestored.push(anchor);
+        return;
+      }
       try {
         applyAnnotationRange(range, {
           hl: anchor.highlight,
           ul: anchor.underline,
           sl: anchor.strikethrough,
           note: anchor.note,
+          ref: anchor.ref || null,
         });
         restored++;
       } catch (err) {
         console.warn('Could not restore annotation:', err);
+        unrestored.push(anchor);
       }
     });
   updateMarkdownDownloadControl();
+  data.unrestored = unrestored;
   return restored;
 }

@@ -105,6 +105,9 @@ type CatalogStore interface {
 	// Document source URLs (browser clip provenance), stored at ingest time.
 	UpsertDocumentSource(ctx context.Context, documentID catalog.DocumentID, sourceURLNorm, clipMode string, now time.Time) error
 	ListDocumentsBySourceURL(ctx context.Context, sourceURLNorm string, selectionNotesOnly bool) ([]DocumentSourceRecord, error)
+	// ListDocumentSources enumerates documents with clip provenance, optionally
+	// filtered by clip mode ("page" | "selection" | "" for all).
+	ListDocumentSources(ctx context.Context, clipMode string) ([]DocumentSourceRecord, error)
 	GraphStore
 	Status(ctx context.Context) (StatusSnapshot, error)
 	GetSetting(ctx context.Context, key string) (string, error)

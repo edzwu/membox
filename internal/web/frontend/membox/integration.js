@@ -26,6 +26,9 @@ let connecting = true;
 let syncing = false;
 let documentID = new URLSearchParams(window.location.search).get('id') || '';
 let loadedMarkdown = '';
+// Anchors that failed to re-anchor on load. Kept so the next save merges
+// them back into the sidecar instead of silently dropping them.
+let pendingAnchors = [];
 
 function createConnectionButton() {
   const button = document.createElement('button');
@@ -128,6 +131,15 @@ async function persistReadingState(keepalive) {
   if (!documentID || !state.currentMarkdown) return;
   try {
     const sidecar = await buildAnnotationSidecar(sidecarFilename(), state.currentMarkdown, currentProgress());
+    if (pendingAnchors.length) {
+      // Merge back annotations that could not be re-anchored this load so a
+      // save never destroys notes it merely failed to display.
+      const have = new Set(sidecar.annotations.map((a) => a.exact));
+      const kept = pendingAnchors.filter((a) => !have.has(a.exact));
+      if (kept.length) {
+        sidecar.annotations = [...sidecar.annotations, ...kept].sort((a, b) => a.start - b.start);
+      }
+    }
     const response = await fetch(`/api/doc/${encodeURIComponent(documentID)}/annotations`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -193,21 +205,33 @@ document.addEventListener('visibilitychange', () => {
 function unbindDocument() {
   replaceDocumentID('');
   loadedMarkdown = '';
+  pendingAnchors = [];
 }
 
 async function restoreReadingState(id, markdown) {
+  pendingAnchors = [];
   try {
     const response = await fetch(`/api/doc/${encodeURIComponent(id)}/annotations`, { cache: 'no-store' });
     if (response.status === 204 || !response.ok) return;
     const sidecarText = await response.text();
     if (!sidecarText.trim()) return;
     const data = parseAnnotationSidecar(sidecarText);
-    await verifyAnnotationSource(data, markdown);
+    try {
+      await verifyAnnotationSource(data, markdown);
+    } catch (verifyErr) {
+      // The Markdown changed since the sidecar was written (e.g. a synced
+      // edit). Re-anchor by text anyway; whatever still fails is kept as a
+      // pending anchor so the next save does not discard it.
+      console.warn('membox: sidecar source mismatch — re-anchoring by text', verifyErr);
+    }
     restoring = true;
     try {
       restoreAnnotationSidecar(data);
     } finally {
       restoring = false;
+    }
+    if (Array.isArray(data.unrestored) && data.unrestored.length) {
+      pendingAnchors = data.unrestored;
     }
     restoreProgress(data.progress);
   } catch (err) {

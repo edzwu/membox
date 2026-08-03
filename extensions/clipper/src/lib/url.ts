@@ -1,3 +1,15 @@
+/** True when the page is a local membox Miru reader view (?id=<doc>). */
+export function isMemboxReaderUrl(href = location.href): boolean {
+  try {
+    const u = new URL(href);
+    const host = u.hostname;
+    const local = host === '127.0.0.1' || host === 'localhost';
+    return local && Boolean(new URLSearchParams(u.search).get('id'));
+  } catch {
+    return false;
+  }
+}
+
 /** Normalize page URLs so WeChat share variants match the same article. */
 export function normalizeSourceURL(raw: string): string {
   const trimmed = (raw || '').trim();

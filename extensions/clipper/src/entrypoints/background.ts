@@ -1,10 +1,31 @@
 import { fetchClipsBySource, ingestClip } from '../lib/membox-client';
 import { loadSettings } from '../lib/settings';
+import { getNotesEnabled } from '../lib/float-notes';
 import type { ClipPayload, IngestResult, SourceClip } from '../lib/types';
 
 type IngestResponse = { ok: true; result: IngestResult } | { ok: false; error: string };
 
+async function syncBadge() {
+  try {
+    const enabled = await getNotesEnabled();
+    if (enabled) {
+      await browser.action.setBadgeText({ text: 'on' });
+      await browser.action.setBadgeBackgroundColor({ color: '#1b365d' });
+      await browser.action.setBadgeTextColor?.({ color: '#ffffff' });
+    } else {
+      await browser.action.setBadgeText({ text: '' });
+    }
+  } catch {
+    /* badge APIs unavailable */
+  }
+}
+
 export default defineBackground(() => {
+  void syncBadge();
+  browser.storage.onChanged.addListener((_changes, area) => {
+    if (area === 'local') void syncBadge();
+  });
+
   browser.runtime.onMessage.addListener((message) => {
     if (message?.type === 'membox.ingest-active-tab') {
       return ingestActiveTab();

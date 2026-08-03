@@ -56,8 +56,10 @@ export function clipSelection(args: {
   excerptText: string;
   excerptHTML: string;
   note: string;
+  /** Override (e.g. original article URL when clipping inside Miru). */
+  sourceUrl?: string;
 }): ClipPayload {
-  const sourceUrl = normalizeSourceURL(location.href);
+  const sourceUrl = normalizeSourceURL(args.sourceUrl || location.href);
   const pageTitle = (document.title || 'Clipped page').trim();
   const excerptText = args.excerptText.trim();
   if (!excerptText) {
@@ -96,6 +98,7 @@ export function clipSelection(args: {
     title,
     sourceUrl,
     clipMode: 'selection',
+    excerptRaw: excerptText.replace(/\u00a0/g, ' ').trim(),
     body: buildMarkdown(title, sourceUrl, bodyParts.join('\n'), {
       clip_mode: 'selection',
       source_title: pageTitle,
@@ -124,8 +127,8 @@ export function readSelection(): {
 }
 
 /** Runs inside the extension content script (isolated world + full DOM). */
-export function clipCurrentDocument(): ClipPayload {
-  const sourceUrl = normalizeSourceURL(location.href);
+export function clipCurrentDocument(overrideSourceUrl?: string): ClipPayload {
+  const sourceUrl = normalizeSourceURL(overrideSourceUrl || location.href);
   const titleHint = (document.title || 'Clipped page').trim();
 
   // Readability mutates its document; always clone first.

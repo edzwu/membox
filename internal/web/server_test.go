@@ -385,3 +385,195 @@ func TestServerIngestRequiresTokenWhenConfigured(t *testing.T) {
 		t.Fatalf("status = %#v", status)
 	}
 }
+
+func TestIngestSelectionProjectsAnnotationToPage(t *testing.T) {
+	baseURL, _, _ := startServer(t)
+
+	pageBody := `---
+title: "Deep Article"
+source_url: "https://example.com/deep"
+clipper: membox-clipper
+clip_mode: "page"
+---
+
+# Deep Article
+
+Some unique paragraph about distributed consensus and raft leaders.
+
+Another paragraph with more detail about failover behavior.
+`
+	resp := postJSON(t, baseURL+"/api/ingest", map[string]any{
+		"title": "Deep Article", "body": pageBody,
+		"source_url": "https://example.com/deep", "clip_mode": "page",
+	})
+	var page testIngestResp
+	mustUnmarshal(t, resp, &page)
+	if page.ID == "" {
+		t.Fatal("page clip not created")
+	}
+
+	selBody := `---
+title: "Some unique paragraph… — note"
+source_url: "https://example.com/deep"
+clipper: membox-clipper
+clip_mode: "selection"
+---
+
+> Some unique paragraph about distributed consensus and raft leaders.
+
+My margin note.
+
+Source: [Deep Article](https://example.com/deep)
+`
+	resp = postJSON(t, baseURL+"/api/ingest", map[string]any{
+		"title": "Some unique paragraph… — note", "body": selBody,
+		"source_url": "https://example.com/deep", "clip_mode": "selection",
+		"excerpt_raw": "Some unique paragraph about distributed consensus and raft leaders.",
+	})
+	var note testIngestResp
+	mustUnmarshal(t, resp, &note)
+	if note.Linked != page.ID {
+		t.Fatalf("selection not linked to page: linked=%q page=%q", note.Linked, page.ID)
+	}
+
+	annResp, err := http.Get(baseURL + "/api/doc/" + page.ID + "/annotations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer annResp.Body.Close()
+	if annResp.StatusCode != http.StatusOK {
+		t.Fatalf("annotations status = %d", annResp.StatusCode)
+	}
+	body, _ := io.ReadAll(annResp.Body)
+	assertAnnotationSidecar(t, body, note.ID, "My margin note.", "distributed consensus")
+}
+
+func TestIngestPageBackfillsAnnotationsFromEarlierSelections(t *testing.T) {
+	baseURL, _, _ := startServer(t)
+
+	selBody := `---
+title: "Backfill excerpt… — note"
+source_url: "https://example.com/late-page"
+clipper: membox-clipper
+clip_mode: "selection"
+---
+
+> The late page contains this very distinctive sentence.
+
+Early bird note.
+
+Source: [Late](https://example.com/late-page)
+`
+	resp := postJSON(t, baseURL+"/api/ingest", map[string]any{
+		"title": "Backfill excerpt… — note", "body": selBody,
+		"source_url": "https://example.com/late-page", "clip_mode": "selection",
+		"excerpt_raw": "The late page contains this very distinctive sentence.",
+	})
+	var note testIngestResp
+	mustUnmarshal(t, resp, &note)
+
+	pageBody := `---
+title: "Late Page"
+source_url: "https://example.com/late-page"
+clipper: membox-clipper
+clip_mode: "page"
+---
+
+# Late Page
+
+The late page contains this very distinctive sentence.
+`
+	resp = postJSON(t, baseURL+"/api/ingest", map[string]any{
+		"title": "Late Page", "body": pageBody,
+		"source_url": "https://example.com/late-page", "clip_mode": "page",
+	})
+	var page testIngestResp
+	mustUnmarshal(t, resp, &page)
+
+	annResp, err := http.Get(baseURL + "/api/doc/" + page.ID + "/annotations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer annResp.Body.Close()
+	if annResp.StatusCode != http.StatusOK {
+		t.Fatalf("annotations status = %d", annResp.StatusCode)
+	}
+	body, _ := io.ReadAll(annResp.Body)
+	assertAnnotationSidecar(t, body, note.ID, "Early bird note.", "very distinctive")
+}
+
+func postJSON(t *testing.T, url string, payload any) []byte {
+	t.Helper()
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.Post(url, "application/json", strings.NewReader(string(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST %s failed: %d %s", url, resp.StatusCode, body)
+	}
+	return body
+}
+
+func mustUnmarshal(t *testing.T, body []byte, out any) {
+	t.Helper()
+	if err := json.Unmarshal(body, out); err != nil {
+		t.Fatalf("invalid response %q: %v", body, err)
+	}
+}
+
+func assertAnnotationSidecar(t *testing.T, body []byte, noteID, wantNote, wantExcerptPart string) {
+	t.Helper()
+	var sidecar struct {
+		Format       string `json:"format"`
+		Version      int    `json:"version"`
+		SourceHash   string `json:"sourceHash"`
+		SourceLength int    `json:"sourceLength"`
+		Annotations  []struct {
+			Start   int    `json:"start"`
+			End     int    `json:"end"`
+			Exact   string `json:"exact"`
+			Note    string `json:"note"`
+			Ref     string `json:"ref"`
+			Highlight bool `json:"highlight"`
+		} `json:"annotations"`
+	}
+	if err := json.Unmarshal(body, &sidecar); err != nil {
+		t.Fatalf("invalid sidecar: %v", err)
+	}
+	if sidecar.Format != "miru-annotations" || sidecar.Version != 2 {
+		t.Fatalf("sidecar header = %q v%d", sidecar.Format, sidecar.Version)
+	}
+	if !strings.HasPrefix(sidecar.SourceHash, "sha256:") || sidecar.SourceLength <= 0 {
+		t.Fatalf("missing source verification fields: %q %d", sidecar.SourceHash, sidecar.SourceLength)
+	}
+	if len(sidecar.Annotations) != 1 {
+		t.Fatalf("expected 1 annotation, got %d", len(sidecar.Annotations))
+	}
+	ann := sidecar.Annotations[0]
+	if !strings.Contains(ann.Exact, wantExcerptPart) {
+		t.Fatalf("excerpt = %q", ann.Exact)
+	}
+	if ann.Note != wantNote {
+		t.Fatalf("note = %q, want %q", ann.Note, wantNote)
+	}
+	if ann.Ref != noteID {
+		t.Fatalf("ref = %q, want note id %q", ann.Ref, noteID)
+	}
+	if !ann.Highlight {
+		t.Fatal("annotation should be highlighted")
+	}
+}
+
+type testIngestResp struct {
+	ID      string `json:"id"`
+	Path    string `json:"path"`
+	Created bool   `json:"created"`
+	ViewURL string `json:"view_url"`
+	Linked  string `json:"linked"`
+}

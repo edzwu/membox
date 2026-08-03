@@ -2,6 +2,8 @@ package membox_test
 
 import (
 	"context"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -216,5 +218,117 @@ func TestMVP_DoesNotCreateMarkdownCopiesOrBlobs(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestScanAutoProjectsExistingClipNotes(t *testing.T) {
+	ctx := context.Background()
+	home, notes := t.TempDir(), t.TempDir()
+
+	page := `---
+title: "Legacy Page"
+source_url: "https://example.com/legacy"
+clipper: membox-clipper
+clip_mode: "page"
+---
+
+# Legacy Page
+
+A very distinctive sentence that predates the projection feature.
+`
+	note := `---
+title: "A very distinctive sentence… — note"
+source_url: "https://example.com/legacy"
+clipper: membox-clipper
+clip_mode: "selection"
+---
+
+> A very distinctive sentence that predates the projection feature.
+
+Legacy margin note.
+
+Source: [Legacy Page](https://example.com/legacy)
+`
+	if err := os.WriteFile(filepath.Join(notes, "legacy-page.md"), []byte(page), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(notes, "a-very-distinctive-sentence-note.md"), []byte(note), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	box, err := membox.Open(membox.Config{Home: home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer box.Close()
+
+	if _, err := box.AddPath(ctx, membox.AddPathCommand{Directory: notes}); err != nil {
+		t.Fatal(err)
+	}
+	// Scan triggers the auto-repair projection pass (same path as Ctrl+R).
+	if _, err := box.ScanPaths(ctx, membox.ScanPathsCommand{}); err != nil {
+		t.Fatal(err)
+	}
+	pages, projected, err := box.ProjectClipAnnotations(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pages != 1 || projected != 1 {
+		t.Fatalf("projection stats = %d pages / %d projected, want 1/1", pages, projected)
+	}
+
+	server := box.WebServer()
+	baseURL, err := server.Start(ctx, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = server.Shutdown(ctx) }()
+
+	documents, err := box.ListDocuments(ctx, membox.ListDocumentsQuery{Limit: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pageID := ""
+	for _, doc := range documents {
+		if strings.Contains(doc.Path, "legacy-page.md") {
+			pageID = doc.ID
+		}
+	}
+	if pageID == "" {
+		t.Fatal("page clip document not found")
+	}
+
+	resp, err := http.Get(baseURL + "/api/doc/" + pageID + "/annotations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("annotations status = %d", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	text := string(body)
+	if !strings.Contains(text, "Legacy margin note.") {
+		t.Fatalf("projection missing note text: %s", text)
+	}
+	if !strings.Contains(text, "predates the projection feature") {
+		t.Fatalf("projection missing excerpt: %s", text)
+	}
+	if !strings.Contains(text, `"ref"`) {
+		t.Fatalf("projection missing ref join key: %s", text)
+	}
+
+	// Idempotent: scanning again must not duplicate the annotation.
+	if _, err := box.ScanPaths(ctx, membox.ScanPathsCommand{}); err != nil {
+		t.Fatal(err)
+	}
+	resp2, err := http.Get(baseURL + "/api/doc/" + pageID + "/annotations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp2.Body.Close()
+	body2, _ := io.ReadAll(resp2.Body)
+	if got := strings.Count(string(body2), `"exact"`); got != 1 {
+		t.Fatalf("expected exactly 1 annotation after re-scan, got %d", got)
 	}
 }

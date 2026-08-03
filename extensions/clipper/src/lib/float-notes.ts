@@ -40,6 +40,17 @@ export type FloatStatus = {
 
 const STORAGE_PREFIX = 'membox.floats:';
 const HOST_ID = 'membox-float-notes-host';
+const NOTES_ENABLED_KEY = 'membox.notes-enabled';
+
+/** Note-taking is opt-in: disabled until the user explicitly enables it. */
+export async function getNotesEnabled(): Promise<boolean> {
+  const stored = await browser.storage.local.get(NOTES_ENABLED_KEY);
+  return stored[NOTES_ENABLED_KEY] === true;
+}
+
+export async function setNotesEnabled(enabled: boolean): Promise<void> {
+  await browser.storage.local.set({ [NOTES_ENABLED_KEY]: enabled });
+}
 const CARD_WIDTH = 240;
 const CARD_EST_HEIGHT = 120;
 const DRAG_THRESHOLD = 4;
@@ -91,9 +102,20 @@ export class FloatNotesLayer {
   private zTop = 20;
   private editingId: string | null = null;
   private dragCleanup: (() => void) | null = null;
+  /** URL used as the card key — the original article URL even inside Miru. */
+  private pageUrl: string;
+
+  constructor(pageUrl?: string) {
+    this.pageUrl = pageUrl || location.href;
+  }
+
+  /** Remove the overlay entirely (used when note-taking is turned off). */
+  destroy() {
+    this.teardown();
+  }
 
   async init() {
-    this.state = await loadFloatState();
+    this.state = await loadFloatState(this.pageUrl);
     this.theme = detectMiruTheme();
     this.render();
     window.addEventListener('resize', () => this.render());
@@ -104,10 +126,9 @@ export class FloatNotesLayer {
   private async syncWithMemboxInBackground() {
     try {
       if (!browser.runtime?.id) return;
-      const url = location.href;
       const res = (await browser.runtime.sendMessage({
         type: 'membox.clips-for-url',
-        url,
+        url: this.pageUrl,
       })) as {
         ok: boolean;
         clips?: Array<{ id: string; excerpt?: string; note?: string; title?: string }>;
@@ -139,7 +160,7 @@ export class FloatNotesLayer {
         note: n.editedLocally ? n.note : (c.note ?? '').trim(),
       };
     });
-    await saveFloatState(this.state);
+    await saveFloatState(this.state, this.pageUrl);
     this.render();
     return { ...this.getStatus(), savedCount: clips.length };
   }
@@ -183,14 +204,14 @@ export class FloatNotesLayer {
       editedLocally: false,
     };
     this.state.notes = [next, ...this.state.notes.filter((n) => n.id !== note.id)];
-    await saveFloatState(this.state);
+    await saveFloatState(this.state, this.pageUrl);
     this.render();
     return next;
   }
 
   async setCollapsed(collapsed: boolean) {
     this.state.collapsed = collapsed;
-    await saveFloatState(this.state);
+    await saveFloatState(this.state, this.pageUrl);
     this.render();
   }
 
@@ -208,7 +229,7 @@ export class FloatNotesLayer {
       return { ...n, hidden: true };
     });
     if (!changed) return;
-    await saveFloatState(this.state);
+    await saveFloatState(this.state, this.pageUrl);
     this.render();
   }
 
@@ -222,7 +243,7 @@ export class FloatNotesLayer {
     });
     if (restored === 0) return 0;
     this.state.collapsed = false;
-    await saveFloatState(this.state);
+    await saveFloatState(this.state, this.pageUrl);
     this.render();
     return restored;
   }
@@ -277,14 +298,14 @@ export class FloatNotesLayer {
     });
     this.state.notes.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
     this.state.collapsed = false;
-    await saveFloatState(this.state);
+    await saveFloatState(this.state, this.pageUrl);
     this.render();
     return added;
   }
 
   async clearPage() {
     this.state = { collapsed: true, notes: [] };
-    await saveFloatState(this.state);
+    await saveFloatState(this.state, this.pageUrl);
     this.teardown();
   }
 
@@ -443,7 +464,7 @@ export class FloatNotesLayer {
       changed = true;
       return { ...n, note: text, editedLocally: true };
     });
-    if (changed) await saveFloatState(this.state);
+    if (changed) await saveFloatState(this.state, this.pageUrl);
     this.render();
   }
 
@@ -523,7 +544,7 @@ export class FloatNotesLayer {
               : { ...n, top: nextTop, left: nextLeft }
             : n,
         );
-        void saveFloatState(this.state);
+        void saveFloatState(this.state, this.pageUrl);
       };
       pin.addEventListener('pointermove', onMove);
       pin.addEventListener('pointerup', onUp);
@@ -572,7 +593,7 @@ export class FloatNotesLayer {
         fixedLeft: n.left,
       };
     });
-    await saveFloatState(this.state);
+    await saveFloatState(this.state, this.pageUrl);
     this.render();
   }
 
@@ -585,7 +606,7 @@ export class FloatNotesLayer {
       note.top = note.originTop;
       note.left = note.originLeft;
     }
-    await saveFloatState(this.state);
+    await saveFloatState(this.state, this.pageUrl);
     this.render();
     flashExcerpt(note.excerpt);
   }

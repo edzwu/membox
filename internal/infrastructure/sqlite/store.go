@@ -308,6 +308,43 @@ CREATE INDEX IF NOT EXISTS document_sources_mode ON document_sources(clip_mode);
 	return nil
 }
 
+func (s *Store) ListDocumentSources(ctx context.Context, clipMode string) ([]port.DocumentSourceRecord, error) {
+	query := documentSelect + `
+JOIN document_sources ds ON ds.document_id = d.id
+WHERE l.status='active'
+`
+	var args []any
+	if clipMode != "" {
+		query += ` AND ds.clip_mode=?`
+		args = append(args, clipMode)
+	}
+	query += ` ORDER BY ds.created_at, d.id`
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("listing document sources: %w", err)
+	}
+	defer rows.Close()
+	var out []port.DocumentSourceRecord
+	for rows.Next() {
+		document, absolutePath, err := scanDocument(rows)
+		if err != nil {
+			return nil, err
+		}
+		var mode, sourceURL string
+		_ = s.db.QueryRowContext(ctx, `SELECT clip_mode, source_url FROM document_sources WHERE document_id=?`, string(document.ID)).
+			Scan(&mode, &sourceURL)
+		out = append(out, port.DocumentSourceRecord{
+			DocumentID:   document.ID,
+			Title:        document.Index.Title,
+			AbsolutePath: absolutePath,
+			RelativePath: document.Location.RelativePath,
+			ClipMode:     mode,
+			SourceURL:    sourceURL,
+		})
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) UpsertDocumentSource(ctx context.Context, documentID catalog.DocumentID, sourceURLNorm, clipMode string, now time.Time) error {
 	sourceURLNorm = strings.TrimSpace(sourceURLNorm)
 	if documentID == "" || sourceURLNorm == "" {

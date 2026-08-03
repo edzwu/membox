@@ -450,6 +450,43 @@ User: 点击 Save to membox
 
 ---
 
+## 10.5 Annotation 投影（已实现）
+
+**原则：note.md 文档是实体，Miru annotation 是投影。**
+
+```text
+原始页选区 Save
+  POST /api/ingest (selection, excerpt_raw)
+    ├─ 建 *-note.md（实体）
+    ├─ graph link page→note
+    └─ 投影：找同 source_url 的 page clip
+         ├─ 存在 → 服务端锚定摘录 → 写入 page 的 annotation sidecar
+         └─ 不存在 → 等 page clip 进来时 backfill
+```
+
+| 场景 | 体验 |
+| --- | --- |
+| 原始网页 | 浮动卡片（扩展渲染），**默认禁用，popup 里点 Enable 才生效** |
+| Miru 阅读页 | **原生 annotation**：摘录高亮 + 编号上标 + 边栏笔记卡；不出浮动卡片 |
+
+存量迁移：`mm path scan`（TUI Ctrl+R）会自动重建投影；也可 `mm clip project` 显式执行。
+
+实现要点：
+
+- 锚定在服务端（`bridge_annotate.go`）：Markdown → 近似正文文本 → 空白宽松匹配摘录 → start/end + 32 字 prefix/suffix。前端 `resolveAnnotationRange` 用文本回退重新锚定，server offset 只是提示。
+- sidecar 带 `ref: <note文档UUID>`（join key，Miru parse/capture 全链路透传）。
+- sidecar 必须带 `sourceHash`（sha256）+ `sourceLength`（**JS UTF-16 长度**），否则 Miru 校验拒绝。
+- 幂等：同一 `exact` 文本 = 同一条投影，重存更新不复制。
+- 防丢失：Miru integration 对锚定失败的 annotation 记为 pending，下次 save 合并回去；hash 不匹配（正文被编辑）不阻断恢复。
+- Miru 侧 annotation 的删除只影响投影；重新 ingest 会重建。
+
+已知限制：
+
+- 扩展里改笔记仍是本地态，不回写 membox（下一阶段的同步项）。
+- 摘录含公式/表格时锚定可能失败 → 投影跳过，note 文档与 link 不受影响。
+
+---
+
 ## 11. 开放问题
 
 1. **常驻方式**：仅文档约定 `mm serve`，还是要 daemon/launchd？  

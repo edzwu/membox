@@ -666,6 +666,12 @@ func (s *Service) ListClipsBySourceURL(ctx context.Context, sourceURLNorm string
 	return s.store.ListDocumentsBySourceURL(ctx, strings.TrimSpace(sourceURLNorm), selectionNotesOnly)
 }
 
+// ListDocumentSources enumerates browser-ingested documents, optionally
+// filtered by clip mode.
+func (s *Service) ListDocumentSources(ctx context.Context, clipMode string) ([]port.DocumentSourceRecord, error) {
+	return s.store.ListDocumentSources(ctx, clipMode)
+}
+
 func (s *Service) defaultCreatePath(ctx context.Context) (*catalog.IndexedPath, error) {
 	summaries, err := s.store.ListPaths(ctx, false)
 	if err != nil {

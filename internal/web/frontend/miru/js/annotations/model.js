@@ -135,7 +135,7 @@ export function applyAnnotationRange(range, flags) {
     attachNoteBadge(span, id);
     insertNoteCard(id, flags.note, span);
   }
-  state.annotations.push({ id, hl: !!flags.hl, ul: !!flags.ul, sl: !!flags.sl, note: flags.note || null });
+  state.annotations.push({ id, hl: !!flags.hl, ul: !!flags.ul, sl: !!flags.sl, note: flags.note || null, ref: flags.ref || null });
   refreshNoteNumbers();
   updateMarkdownDownloadControl();
   scheduleNoteLayout();
