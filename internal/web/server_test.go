@@ -73,6 +73,9 @@ func TestServerServesReaderAndMarkdown(t *testing.T) {
 	if docResp.StatusCode != http.StatusOK || !strings.Contains(string(docBody), "# Flash Attention") {
 		t.Fatalf("unexpected doc response: status=%d body=%q", docResp.StatusCode, docBody)
 	}
+	if got := docResp.Header.Get("X-Membox-Filename"); got != "flash.md" {
+		t.Fatalf("X-Membox-Filename = %q, want flash.md", got)
+	}
 
 	missingResp, err := http.Get(baseURL + "/api/doc/does-not-exist")
 	if err != nil {

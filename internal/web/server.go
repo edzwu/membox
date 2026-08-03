@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -76,13 +77,22 @@ func (s *Server) handleDocument(writer http.ResponseWriter, request *http.Reques
 		http.Error(writer, "missing document selector", http.StatusBadRequest)
 		return
 	}
+	document, absolute, err := s.service.ResolveDocument(request.Context(), selector)
+	if err != nil {
+		http.Error(writer, err.Error(), http.StatusNotFound)
+		return
+	}
 	body, err := s.service.ReadDocument(request.Context(), selector)
 	if err != nil {
 		http.Error(writer, err.Error(), http.StatusNotFound)
 		return
 	}
+	// Miru derives the displayed title from state.droppedFilename; send the
+	// on-disk filename so the reader shows it instead of "Untitled".
 	writer.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 	writer.Header().Set("Cache-Control", "no-store")
+	writer.Header().Set("X-Membox-Filename", filepath.Base(document.Location.RelativePath))
+	writer.Header().Set("X-Membox-Path", absolute)
 	_, _ = writer.Write(body)
 }
 
