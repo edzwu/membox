@@ -1,19 +1,12 @@
-/* Miru — Pretext-inspired margin note layout: treat annotation cards as
-   independently placed obstacles, then preserve one uninterrupted reading
-   column. On wide screens cards occupy a collision-resolved margin rail;
-   otherwise they fall back to normal in-flow asides. */
+/* Miru — margin note layout.
+   Wide screens: notes sit in a collision-resolved right rail next to the
+   reading column. Narrow screens: notes fall back to in-flow asides after
+   their anchor block. The reading column itself is never punctured. */
 
 import { elements } from '../dom.js';
 import { NOTE_RAIL_WIDTH, NOTE_RAIL_GAP, NOTE_RAIL_OUTER_GUTTER, NOTE_RAIL_STACK_GAP } from '../constants.js';
 
 let noteLayoutTimer = null;
-let afterNoteLayout = null;
-
-// Extra pass (floated note cards) that must run after every rail layout
-// without coupling this module to js/annotations/float.js.
-export function onAfterNoteLayout(fn) {
-  afterNoteLayout = fn;
-}
 
 export function refreshNoteNumbers() {
   const refs = Array.from(elements.article.querySelectorAll('span.annot-note-ref'));
@@ -27,14 +20,27 @@ export function refreshNoteNumbers() {
   });
 }
 
+// Drop leftover float-era chrome if an old session or export left any behind.
+function scrubLegacyFloatChrome() {
+  elements.article.querySelectorAll('.annot-ghost, .annot-ghost-clear, .annot-leader').forEach((n) => n.remove());
+  elements.article.querySelectorAll('.annot-note-floated').forEach((card) => {
+    card.classList.remove('annot-note-floated', 'is-dragging', 'will-dock');
+    card.style.removeProperty('left');
+    card.style.removeProperty('width');
+  });
+  elements.article.querySelectorAll('.has-annot-ghost').forEach((el) => {
+    el.classList.remove('has-annot-ghost');
+  });
+}
+
 export function layoutMarginNotes() {
+  scrubLegacyFloatChrome();
   refreshNoteNumbers();
   layoutRailCards();
-  if (afterNoteLayout) afterNoteLayout();
 }
 
 function layoutRailCards() {
-  const cards = Array.from(elements.article.querySelectorAll('.annot-note:not(.annot-note-in-cell):not(.annot-note-floated)'));
+  const cards = Array.from(elements.article.querySelectorAll('.annot-note:not(.annot-note-in-cell)'));
   if (!cards.length) {
     elements.article.classList.remove('has-note-rail');
     return;
@@ -58,6 +64,8 @@ function layoutRailCards() {
     .map((card) => {
       const anchor = elements.article.querySelector(`span.annot[data-annot-id="${card.dataset.annotId}"]`);
       if (!anchor || anchor.getClientRects().length === 0) {
+        // Anchor is in a collapsed section (or gone): park the card out of
+        // the way until the section opens and layout runs again.
         card.hidden = true;
         return null;
       }
@@ -74,10 +82,12 @@ function layoutRailCards() {
     .sort((a, b) => a.anchorTop - b.anchorTop);
 
   let previousBottom = -Infinity;
-  positioned.forEach((item) => {
+  positioned.forEach((item, index) => {
     const top = Math.max(item.anchorTop, previousBottom + NOTE_RAIL_STACK_GAP);
     const parentTop = item.parent.getBoundingClientRect().top;
     item.card.style.top = Math.round(top - parentTop) + 'px';
+    // Later cards stack above earlier ones when they overlap during scroll.
+    item.card.style.zIndex = String(4 + index);
     previousBottom = top + item.height;
   });
 }

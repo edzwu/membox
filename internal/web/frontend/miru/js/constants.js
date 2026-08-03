@@ -15,11 +15,6 @@ export const NOTE_RAIL_GAP = 24;
 export const NOTE_RAIL_OUTER_GUTTER = 16;
 export const NOTE_RAIL_STACK_GAP = 12;
 
-// Floated note cards (dragged into the prose column, text wraps around them).
-export const FLOAT_TEXT_GAP = 16;    // gutter between the wrap hole and prose
-export const FLOAT_BOTTOM_GAP = 10;  // room below the card before text resumes
-export const FLOAT_DOCK_THRESHOLD = 56; // px beyond the prose edge meaning "dock me"
-
 // Ray's default "M" frame uses 64px. Keep the same breathing room around
 // both section snapshots and full-document PNGs.
 export const PNG_EXPORT_PADDING = 64;

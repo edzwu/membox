@@ -150,7 +150,6 @@ export function exportSiteZip() {
       var open = !anyOpen;
       sections.forEach(function (s) { s.classList.toggle('is-collapsed', !open); });
       setFoldIcon(open);
-      syncFloatedCards();
     });
   }
 
@@ -159,34 +158,8 @@ export function exportSiteZip() {
       if (event.target.closest('a')) return;
       var section = heading.closest('.fold-section');
       if (section) section.classList.toggle('is-collapsed');
-      syncFloatedCards();
     });
   });
-
-  // Floated note cards keep their wrap: ghosts are in-flow and reflow with
-  // the document, so only the absolutely-positioned cards need re-syncing
-  // after layout changes (resize, fold, font load).
-  function syncFloatedCards() {
-    var cards = document.querySelectorAll('.annot-note-floated');
-    for (var i = 0; i < cards.length; i++) {
-      var card = cards[i];
-      var ghost = document.querySelector('.annot-ghost[data-annot-id="' + card.dataset.annotId + '"]');
-      if (!ghost || !ghost.getClientRects().length) continue;
-      var container = card.parentElement;
-      if (!container) continue;
-      var cr = container.getBoundingClientRect();
-      var gr = ghost.getBoundingClientRect();
-      card.style.top = (gr.top - cr.top) + 'px';
-      card.style.left = ghost.style.float === 'left'
-        ? (gr.left - cr.left) + 'px'
-        : (gr.right - cr.left - card.offsetWidth) + 'px';
-    }
-  }
-  window.addEventListener('resize', syncFloatedCards);
-  if (document.fonts && document.fonts.ready) {
-    document.fonts.ready.then(syncFloatedCards);
-  }
-  syncFloatedCards();
 })();
       `;
 

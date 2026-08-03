@@ -24,26 +24,30 @@ function preserveNoteLayout(source, clone) {
   });
 }
 
-// mode 'pin': freeze the live geometry for a static snapshot (PNG).
-// mode 'site': keep floats alive — ghosts/sentinels keep wrapping and the
-// site's inline script re-syncs cards on resize/fold; leaders go stale and
-// are stripped.
+// mode 'pin': freeze the live rail geometry for a static snapshot (PNG).
+// mode 'site': drop absolute rail positioning so notes flow as asides in the
+// portable HTML (no live layout pass there).
 function cleanExportClone(source, mode = 'site') {
   const clone = source.cloneNode(true);
+  // Legacy float-era chrome never ships in exports.
+  clone.querySelectorAll('.annot-ghost, .annot-ghost-clear, .annot-leader').forEach((n) => n.remove());
+  clone.querySelectorAll('.annot-note-floated').forEach((note) => {
+    note.classList.remove('annot-note-floated', 'is-dragging', 'will-dock');
+    note.style.removeProperty('left');
+    note.style.removeProperty('width');
+    note.hidden = false;
+  });
   if (mode === 'pin') {
     preserveNoteLayout(source, clone);
     clone.querySelectorAll('.annot-note-in-rail').forEach((note) => { note.hidden = false; });
-    // Leaders are a transient in-app affordance; snapshots keep the wrap only.
-    clone.querySelectorAll('.annot-leader').forEach((node) => node.remove());
   } else {
     clone.classList.remove('has-note-rail');
     clone.querySelectorAll('.annot-note-in-rail').forEach((note) => {
       note.classList.remove('annot-note-in-rail');
       note.style.removeProperty('top');
+      note.style.removeProperty('z-index');
       note.hidden = false;
     });
-    clone.querySelectorAll('.annot-leader').forEach((node) => node.remove());
-    clone.querySelectorAll('.annot-note-floated').forEach((note) => { note.hidden = false; });
   }
   // Keep heading IDs so TOC anchor links still work in exports; strip the rest.
   if (clone.id && !clone.matches('h1, h2, h3, h4, h5, h6')) {

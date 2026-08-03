@@ -6,8 +6,7 @@
 import { elements } from '../dom.js';
 import { state } from '../state.js';
 import { ANNOTATION_FORMAT, ANNOTATION_VERSION, ANNOTATION_LEGACY_VERSIONS, ANNOTATION_CONTEXT_LENGTH, ANNOTATION_TEXT_EXCLUDE } from '../constants.js';
-import { applyAnnotationRange, findAnnot } from './model.js';
-import { captureFloatGeometry, floatGeometryFromAnchor } from './float.js';
+import { applyAnnotationRange } from './model.js';
 import { updateMarkdownDownloadControl } from '../ui/chrome.js';
 
 export async function fingerprintMarkdown(text, expectedFormat = '') {
@@ -68,13 +67,6 @@ function captureAnnotationAnchor(entry, canonicalText) {
     strikethrough: !!entry.sl,
     note: entry.note || null,
   };
-  // Floated cards persist anchor-relative wrap geometry: x as a fraction of
-  // the column width, dy in px below the anchor passage. It survives viewport
-  // changes far better than absolute offsets and degrades gracefully.
-  if (entry.float) {
-    const geometry = captureFloatGeometry(entry, span);
-    if (geometry) anchor.float = geometry;
-  }
   return anchor;
 }
 
@@ -158,7 +150,6 @@ export function parseAnnotationSidecar(text) {
       underline,
       strikethrough,
       note,
-      float: parseFloatGeometry(item.float),
     };
   });
 
@@ -180,16 +171,6 @@ function parseProgress(value) {
   const y = value.y;
   if (!Number.isFinite(y) || y < 0 || y > 100000000) return null;
   return { y: Math.round(y), at: typeof value.at === 'string' ? value.at : '' };
-}
-
-function parseFloatGeometry(value) {
-  if (value === null || value === undefined) return null;
-  const edge = value && (value.edge === 'left' || value.edge === 'right') ? value.edge : null;
-  const dy = value && typeof value.dy === 'number' && Number.isFinite(value.dy) ? value.dy : NaN;
-  if (!edge || !(dy > -100000 && dy < 100000)) {
-    throw new Error('Invalid annotation anchor');
-  }
-  return { edge, dy };
 }
 
 export async function verifyAnnotationSource(data, markdown) {
@@ -304,19 +285,12 @@ export function restoreAnnotationSidecar(data) {
       const range = resolveAnnotationRange(anchor, canonicalText);
       if (!range) return;
       try {
-        const span = applyAnnotationRange(range, {
+        applyAnnotationRange(range, {
           hl: anchor.highlight,
           ul: anchor.underline,
           sl: anchor.strikethrough,
           note: anchor.note,
         });
-        // Setting entry.float is enough: the scheduled note-layout pass picks
-        // it up and floats the freshly created card (see float.js).
-        if (anchor.float && span) {
-          const entry = findAnnot(span.dataset.annotId);
-          const geometry = entry && floatGeometryFromAnchor(anchor.float, span);
-          if (geometry) entry.float = geometry;
-        }
         restored++;
       } catch (err) {
         console.warn('Could not restore annotation:', err);

@@ -5,6 +5,7 @@
 import { elements } from '../dom.js';
 import { state } from '../state.js';
 import { refreshNoteNumbers, scheduleNoteLayout } from './layout.js';
+import { focusNote } from './focus.js';
 import { updateMarkdownDownloadControl } from '../ui/chrome.js';
 
 export function findAnnot(id) {
@@ -138,6 +139,9 @@ export function applyAnnotationRange(range, flags) {
   refreshNoteNumbers();
   updateMarkdownDownloadControl();
   scheduleNoteLayout();
+  if (flags.note) {
+    requestAnimationFrame(() => focusNote(id, { scrollTo: 'card', duration: 1600 }));
+  }
   return span;
 }
 
@@ -166,6 +170,7 @@ export function setNoteOnPassage(entry, annotEl, text) {
     annotEl.classList.add('annot-note-ref');
     attachNoteBadge(annotEl, entry.id);
     insertNoteCard(entry.id, text, annotEl);
+    requestAnimationFrame(() => focusNote(entry.id, { scrollTo: 'card', duration: 1600 }));
   }
   refreshNoteNumbers();
   scheduleNoteLayout();
@@ -177,18 +182,6 @@ export function deleteAnnotation(id) {
   const annotEl = elements.article.querySelector(`span.annot[data-annot-id="${id}"]`);
   const card = elements.article.querySelector(`.annot-note[data-annot-id="${id}"]`);
   if (card) card.remove();
-  const ghost = elements.article.querySelector(`.annot-ghost[data-annot-id="${id}"]`);
-  if (ghost) {
-    const host = ghost.parentElement;
-    ghost.remove();
-    if (host && !host.querySelector(':scope > .annot-ghost')) {
-      host.classList.remove('has-annot-ghost');
-      const sentinel = host.querySelector(':scope > .annot-ghost-clear');
-      if (sentinel) sentinel.remove();
-    }
-  }
-  const leader = elements.article.querySelector(`.annot-leader[data-annot-id="${id}"]`);
-  if (leader) leader.remove();
   if (annotEl) unwrapAnnotEl(annotEl);
   refreshNoteNumbers();
   removeAnnot(id);

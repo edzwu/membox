@@ -8,7 +8,7 @@ import { elements } from '../dom.js';
 import { ANNOTATION_TEXT_EXCLUDE } from '../constants.js';
 import { showToast } from '../ui/feedback.js';
 import { scheduleNoteLayout } from './layout.js';
-import { initNoteFloats, consumeSuppressedClick } from './float.js';
+import { initNoteFocus, focusNote } from './focus.js';
 import { annotationTextFromRange } from './sidecar.js';
 import {
   findAnnot,
@@ -202,8 +202,6 @@ function onAnnotMouseUp(e) {
 }
 
 function onAnnotPassageClick(e) {
-  // The click landing right after a card drag is part of the gesture.
-  if (consumeSuppressedClick()) return;
   // Note card edit/delete buttons take priority.
   const noteBtn = e.target.closest('[data-note-action]');
   if (noteBtn) {
@@ -219,8 +217,21 @@ function onAnnotPassageClick(e) {
     return;
   }
 
+  // Click a note card body → jump to its passage (rail stays put).
+  const card = e.target.closest('.annot-note');
+  if (card && card.dataset.annotId) {
+    focusNote(card.dataset.annotId, { scrollTo: 'anchor' });
+    return;
+  }
+
   const annotEl = e.target.closest('span.annot');
   if (!annotEl) return;
+
+  // Note anchors also light up their card in the rail.
+  if (annotEl.classList.contains('annot-note-ref') && annotEl.dataset.annotId) {
+    focusNote(annotEl.dataset.annotId, { scrollTo: 'card' });
+  }
+
   currentAnnotEl = annotEl;
   currentRange = null;
   buildAnnotToolbar('edit', findAnnot(annotEl.dataset.annotId));
@@ -256,5 +267,5 @@ export function initAnnotations() {
     document.fonts.ready.then(scheduleNoteLayout);
   }
 
-  initNoteFloats();
+  initNoteFocus();
 }

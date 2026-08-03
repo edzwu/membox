@@ -844,14 +844,6 @@ body.is-snippet .toc {
   position: relative;
 }
 
-/* A clear sentinel (classic clearfix) at the end of a ghost-carrying
-   container makes it grow to contain the float, so the wrap hole stays
-   contained inside its own section — without a flow-root toggle and its
-   margin-collapsing side effects. */
-.annot-ghost-clear {
-  clear: both;
-}
-
 .fold-section.is-collapsed .fold-body {
   display: none;
 }
@@ -968,13 +960,13 @@ body.is-snippet .toc {
   font-weight: 600;
   margin-left: 1px;
   user-select: none;
+  cursor: pointer;
 }
 
-/* Notes never squeeze prose. The default is an in-flow editorial aside after
-   its block; sufficiently wide layouts promote it into a separate margin rail. */
+/* Notes never squeeze prose. Default: in-flow aside after the block.
+   Wide layouts promote them into a right margin rail (see layout.js). */
 .annot-note {
   position: relative;
-  float: none;
   width: min(32em, 100%);
   margin: 0.6em 0 0.9em auto;
   padding: 0.55em 0.85em;
@@ -987,17 +979,26 @@ body.is-snippet .toc {
   line-height: 1.55;
   color: var(--ink-soft);
   box-shadow: 0 1px 3px var(--shadow);
-  transition: box-shadow 0.18s ease, opacity 0.18s ease;
+  cursor: pointer;
+  transition: box-shadow 0.18s ease, border-color 0.18s ease, background 0.18s ease;
 }
 
-/* Table notes stay inside their originating cell. Keeping them in normal flow
-   grows only the row height instead of introducing an invalid sibling in <tr>. */
+.annot-note:hover {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+}
+
+.annot-note .annot-note-input,
+.annot-note .annot-note-edit-input {
+  cursor: text;
+}
+
+/* Table notes stay inside their originating cell. */
 .annot-note.annot-note-in-cell {
-  float: none;
   clear: both;
   width: 100%;
   margin: 0.55em 0 0.1em;
   padding: 0.45em 0.65em;
+  cursor: default;
 }
 
 .annot-note.annot-note-in-rail:not(.annot-note-in-cell) {
@@ -1015,84 +1016,6 @@ body.is-snippet .toc {
   right: 100%;
   width: var(--annot-rail-gap);
   border-top: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
-}
-
-/* Ghost float spacer: the invisible obstacle prose wraps around. The visible
-   card is absolutely positioned over it; the browser's own line layout does
-   all the wrapping (the pretext idea, with native layout). */
-.annot-ghost {
-  pointer-events: none;
-  user-select: none;
-}
-
-.annot-note.annot-note-floated {
-  position: absolute;
-  z-index: 5;
-  width: var(--annot-rail-width);
-  margin: 0;
-}
-
-/* Note cards are draggable into the prose column (except in-cell ones). */
-.annot-note:not(.annot-note-in-cell) {
-  cursor: grab;
-  touch-action: none;
-}
-
-/* Grip affordance: dotted handle along the accent edge, revealed on hover. */
-.annot-note:not(.annot-note-in-cell)::after {
-  content: '';
-  position: absolute;
-  left: 1px;
-  top: 8px;
-  bottom: 8px;
-  width: 5px;
-  border-radius: 2px;
-  background-image: radial-gradient(circle, var(--paper) 1px, transparent 1.3px);
-  background-size: 4px 5px;
-  background-position: center;
-  opacity: 0;
-  transition: opacity 0.15s ease;
-  pointer-events: none;
-}
-
-.annot-note:not(.annot-note-in-cell):hover::after,
-.annot-note.is-dragging::after {
-  opacity: 0.85;
-}
-
-.annot-note:not(.annot-note-in-cell) .annot-note-input {
-  cursor: text;
-}
-
-.annot-note.is-dragging {
-  cursor: grabbing;
-  opacity: 0.97;
-  box-shadow: 0 12px 30px var(--shadow);
-}
-
-/* Dragged past the prose edge: about to dock back into the margin rail. */
-.annot-note.will-dock {
-  opacity: 0.5;
-}
-
-/* Leader line from a floated card to its anchor passage: a transient
-   wayfinding aid shown while dragging/hovering, faded out afterwards. */
-.annot-leader {
-  position: absolute;
-  left: 0;
-  top: 0;
-  width: 1px;
-  height: 1px;
-  overflow: visible;
-  z-index: 3;
-  pointer-events: none;
-  color: color-mix(in srgb, var(--accent) 40%, var(--line));
-  opacity: 0;
-  transition: opacity 0.4s ease;
-}
-
-.annot-leader.is-visible {
-  opacity: 1;
 }
 
 /* --------------------------------------------------------------------------
@@ -1217,28 +1140,19 @@ pre.snippet-code {
   }
 }
 
-.annot-leader path {
-  stroke: currentColor;
-  stroke-width: 1;
-  fill: none;
-}
-
-.annot-leader circle {
-  fill: currentColor;
-}
-
-body.is-note-dragging {
-  user-select: none;
-}
-
-/* Hover linkage between a floated card and its anchor passage. */
+/* Hover / click linkage between a note card and its anchor passage. */
 span.annot.anchor-active {
   background: color-mix(in srgb, var(--accent) 18%, transparent);
   border-radius: 2px;
+  outline: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  outline-offset: 1px;
 }
 
+.annot-note.note-focus,
 .annot-note.anchor-active {
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent), 0 1px 3px var(--shadow);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 40%, transparent), 0 2px 8px var(--shadow);
+  background: color-mix(in srgb, var(--accent-soft) 55%, var(--paper-raised));
 }
 
 .annot-note-label {
