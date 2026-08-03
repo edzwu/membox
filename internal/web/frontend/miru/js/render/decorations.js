@@ -19,6 +19,24 @@ export function wrapTables() {
   });
 }
 
+// Links whose entire label is a heading-anchor glyph are "headerlinks" from
+// generated docs (Sphinx, go.dev, MDN, ...): navigation artifacts, not
+// content. Dropping them from headings keeps TOC labels, anchor ids, and the
+// reading view clean without rewriting the Markdown source.
+const HEADERLINK_GLYPHS = new Set(['¶', '§', '#', '＃', '🔗', '∞']);
+
+export function stripHeadingHeaderLinks() {
+  const headings = elements.article.querySelectorAll('h1, h2, h3, h4, h5, h6');
+  headings.forEach((heading) => {
+    heading.querySelectorAll('a').forEach((link) => {
+      if (HEADERLINK_GLYPHS.has((link.textContent || '').trim())) {
+        link.remove();
+      }
+    });
+    heading.normalize();
+  });
+}
+
 export function markExternalLinks() {
   const links = elements.article.querySelectorAll('a[href]');
   links.forEach((link) => {
