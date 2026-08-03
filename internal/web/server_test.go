@@ -274,3 +274,114 @@ func TestServerSaveCreatesDocumentWithUUID(t *testing.T) {
 		t.Fatalf("saved file content unexpected: %q", saved)
 	}
 }
+
+func TestServerIngestCreatesDocumentAndViewURL(t *testing.T) {
+	baseURL, _, notesDir := startServer(t)
+
+	payload := strings.NewReader(`{"title":"Clip Me","body":"# Clip Me\n\nhello from extension\n","source_url":"https://example.com/a"}`)
+	resp, err := http.Post(baseURL+"/api/ingest", "application/json", payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("ingest failed: status=%d body=%q", resp.StatusCode, body)
+	}
+
+	var result struct {
+		ID      string `json:"id"`
+		Path    string `json:"path"`
+		ViewURL string `json:"view_url"`
+		Created bool   `json:"created"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		t.Fatalf("invalid ingest response %q: %v", body, err)
+	}
+	if result.ID == "" || !result.Created {
+		t.Fatalf("unexpected ingest result: %+v", result)
+	}
+	if result.ViewURL != baseURL+"/?id="+result.ID {
+		t.Fatalf("view_url = %q", result.ViewURL)
+	}
+	canonicalNotes, err := filepath.EvalSymlinks(notesDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPath := filepath.Join(canonicalNotes, "clip-me.md")
+	if result.Path != wantPath {
+		t.Fatalf("path = %q, want %q", result.Path, wantPath)
+	}
+	saved, err := os.ReadFile(result.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(saved)
+	if !strings.Contains(text, "source_url:") || !strings.Contains(text, "hello from extension") {
+		t.Fatalf("saved clip unexpected: %q", text)
+	}
+}
+
+func TestServerIngestRequiresTokenWhenConfigured(t *testing.T) {
+	ctx := context.Background()
+	home := t.TempDir()
+	notesDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(notesDir, "a.md"), []byte("# A\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	service, err := bootstrap.Open(filepath.Join(home, "membox.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = service.Close() })
+	if _, err := service.AddPath(ctx, notesDir); err != nil {
+		t.Fatal(err)
+	}
+
+	server := web.NewServer(service)
+	server.SetToken("secret-token")
+	baseURL, err := server.Start(ctx, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = server.Shutdown(ctx) })
+
+	payload := strings.NewReader(`{"title":"T","body":"# T\n\nbody\n"}`)
+	resp, err := http.Post(baseURL+"/api/ingest", "application/json", payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", resp.StatusCode)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, baseURL+"/api/ingest", strings.NewReader(`{"title":"T","body":"# T\n\nbody\n"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Membox-Token", "secret-token")
+	okResp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer okResp.Body.Close()
+	if okResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(okResp.Body)
+		t.Fatalf("authed ingest failed: %d %s", okResp.StatusCode, body)
+	}
+
+	statusResp, err := http.Get(baseURL + "/api/bridge/status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer statusResp.Body.Close()
+	var status map[string]any
+	if err := json.NewDecoder(statusResp.Body).Decode(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status["auth_required"] != true {
+		t.Fatalf("status = %#v", status)
+	}
+}

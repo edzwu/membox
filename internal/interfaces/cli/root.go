@@ -122,7 +122,16 @@ func newRoot(ctx context.Context, runtime *runtime, in io.Reader, out, stderr io
 	root.SetOut(out)
 	root.SetErr(stderr)
 	root.PersistentFlags().StringVar(&runtime.home, "home", "", "membox home directory")
-	root.AddCommand(newPathCommand(runtime), newDocCommand(runtime), newNoteCommand(runtime), newTopicCommand(runtime), newLinkCommand(runtime), newConfigCommand(runtime), newIndexCommand(runtime))
+	root.AddCommand(
+		newPathCommand(runtime),
+		newDocCommand(runtime),
+		newNoteCommand(runtime),
+		newTopicCommand(runtime),
+		newLinkCommand(runtime),
+		newConfigCommand(runtime),
+		newIndexCommand(runtime),
+		newServeCommand(runtime),
+	)
 	root.SetVersionTemplate("{{printf \"%s\" .Version}}\n")
 	return root
 }

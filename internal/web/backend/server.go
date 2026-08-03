@@ -27,6 +27,7 @@ type Server struct {
 	integrationFS fs.FS
 	httpServer    *http.Server
 	baseURL       string
+	token         string // empty = auth disabled (same-origin Miru / tests)
 }
 
 // NewServer receives frontend files from the composition root rather than
@@ -34,6 +35,16 @@ type Server struct {
 func NewServer(service *application.Service, miruFS, integrationFS fs.FS) *Server {
 	return &Server{service: service, miruFS: miruFS, integrationFS: integrationFS}
 }
+
+// SetToken enables bearer checks on extension-facing write endpoints.
+// Empty token keeps those endpoints open (local Miru / unit tests).
+func (s *Server) SetToken(token string) { s.token = strings.TrimSpace(token) }
+
+// Token returns the configured bridge token, if any.
+func (s *Server) Token() string { return s.token }
+
+// BaseURL returns the listening URL after Start, or empty beforehand.
+func (s *Server) BaseURL() string { return s.baseURL }
 
 // Start binds to 127.0.0.1 on the given port (0 picks a free port), begins
 // serving in the background, and returns the base URL.
@@ -44,6 +55,8 @@ func (s *Server) Start(ctx context.Context, port int) (string, error) {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/status", s.handleStatus)
+	mux.HandleFunc("/api/bridge/status", s.handleBridgeStatus)
+	mux.HandleFunc("/api/ingest", s.handleIngest)
 	mux.HandleFunc("/api/doc/", s.handleDocument)
 	mux.HandleFunc("/api/save", s.handleSave)
 	mux.HandleFunc("/api/sync", s.handleSync)
@@ -54,7 +67,7 @@ func (s *Server) Start(ctx context.Context, port int) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("starting web server: %w", err)
 	}
-	s.httpServer = &http.Server{Handler: mux}
+	s.httpServer = &http.Server{Handler: withCORS(mux)}
 	go func() { _ = s.httpServer.Serve(listener) }()
 
 	s.baseURL = fmt.Sprintf("http://%s", listener.Addr().String())

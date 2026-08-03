@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -60,6 +61,8 @@ type App interface {
 	ListSettings(context.Context) ([]membox.SettingView, error)
 	SetSetting(context.Context, string, string) error
 	OpenDocumentWeb(context.Context, string) (string, error)
+	StartWebServer(context.Context, int) (string, error)
+	BridgeInfo() (baseURL, token string)
 	ScanPaths(context.Context, membox.ScanPathsCommand) (membox.ScanReport, error)
 	ListPaths(context.Context) ([]membox.PathView, error)
 	GetIndexStatus(context.Context) (membox.IndexStatusView, error)
@@ -213,6 +216,10 @@ type openWebMsg struct {
 	url string
 	err error
 }
+type bridgeReadyMsg struct {
+	url string
+	err error
+}
 type noteCreatedMsg struct {
 	document membox.DocumentView
 	command  *exec.Cmd
@@ -246,7 +253,14 @@ func Run(ctx context.Context, app App, launcher host.Launcher, programOptions ..
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(textinput.Blink, m.spinner.Tick, listDocumentsCmd(m.ctx, m.app, m.listSequence), viewerModeCmd(m.ctx, m.app), settingsCmd(m.ctx, m.app))
+	return tea.Batch(
+		textinput.Blink,
+		m.spinner.Tick,
+		listDocumentsCmd(m.ctx, m.app, m.listSequence),
+		viewerModeCmd(m.ctx, m.app),
+		settingsCmd(m.ctx, m.app),
+		startBridgeCmd(m.ctx, m.app),
+	)
 }
 
 func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
@@ -276,6 +290,13 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateFilterInput(msg)
 		}
 		return m.updateNavigation(msg)
+	case bridgeReadyMsg:
+		if msg.err != nil {
+			// Non-fatal: leaf viewer and CLI still work without the bridge.
+			m.statusMessage = "bridge offline: " + msg.err.Error()
+		} else if msg.url != "" {
+			m.statusMessage = "bridge " + msg.url
+		}
 	case settingsMsg:
 		if msg.err != nil {
 			m.err = msg.err
@@ -1926,11 +1947,18 @@ func (m Model) configPanelView() string {
 		label := fitWidth(setting.Label, 10)
 		var options []string
 		for _, option := range setting.Options {
-			if option == setting.Value {
-				options = append(options, accentStyle.Render("["+option+"]"))
-			} else {
-				options = append(options, dimStyle.Render(" "+option+" "))
+			shown := option
+			if setting.Key == "main_path" {
+				shown = shortPathLabel(option)
 			}
+			if option == setting.Value {
+				options = append(options, accentStyle.Render("["+shown+"]"))
+			} else {
+				options = append(options, dimStyle.Render(" "+shown+" "))
+			}
+		}
+		if len(options) == 0 && setting.Key == "main_path" {
+			options = append(options, dimStyle.Render("(no paths — mm path add)"))
 		}
 		row := label + " " + strings.Join(options, "")
 		if index == m.configSelected {
@@ -1942,6 +1970,23 @@ func (m Model) configPanelView() string {
 	}
 	lines = append(lines, dimStyle.Render("↑↓ select • ←→ change • esc close"))
 	return border.Render(strings.Join(lines, "\n"))
+}
+
+func shortPathLabel(path string) string {
+	path = filepath.Clean(path)
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		if path == home || strings.HasPrefix(path, home+string(filepath.Separator)) {
+			path = "~" + strings.TrimPrefix(path, home)
+		}
+	}
+	if len(path) <= 28 {
+		return path
+	}
+	parts := strings.Split(path, string(filepath.Separator))
+	if len(parts) >= 2 {
+		return parts[len(parts)-2] + "/" + parts[len(parts)-1]
+	}
+	return path[len(path)-28:]
 }
 
 func (m Model) fullscreenView() string {
@@ -2597,6 +2642,12 @@ func settingsCmd(ctx context.Context, app App) tea.Cmd {
 	return func() tea.Msg {
 		settings, err := app.ListSettings(ctx)
 		return settingsMsg{settings: settings, err: err}
+	}
+}
+func startBridgeCmd(ctx context.Context, app App) tea.Cmd {
+	return func() tea.Msg {
+		url, err := app.StartWebServer(ctx, 0)
+		return bridgeReadyMsg{url: url, err: err}
 	}
 }
 func setSettingCmd(ctx context.Context, app App, key, value string) tea.Cmd {

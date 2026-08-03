@@ -34,6 +34,7 @@ type fakeApp struct {
 	pins      map[string]bool
 	viewer    string
 	model     string
+	mainPath  string
 	webOpened []string
 }
 
@@ -128,9 +129,14 @@ func (f *fakeApp) ListSettings(context.Context) ([]membox.SettingView, error) {
 	if model == "" {
 		model = "k3"
 	}
+	mainPath := f.mainPath
+	if mainPath == "" {
+		mainPath = "/tmp/notes"
+	}
 	return []membox.SettingView{
 		{Key: "viewer", Label: "viewer", Value: viewer, Options: []string{"leaf", "web"}},
 		{Key: "model", Label: "model", Value: model, Options: []string{"k3", "grok-4.5"}},
+		{Key: "main_path", Label: "main path", Value: mainPath, Options: []string{"/tmp/notes", "/tmp/other"}},
 	}, nil
 }
 func (f *fakeApp) SetSetting(_ context.Context, key, value string) error {
@@ -143,6 +149,9 @@ func (f *fakeApp) SetSetting(_ context.Context, key, value string) error {
 		}
 		f.model = value
 		return nil
+	case "main_path":
+		f.mainPath = value
+		return nil
 	default:
 		return fmt.Errorf("unknown setting %q", key)
 	}
@@ -150,6 +159,12 @@ func (f *fakeApp) SetSetting(_ context.Context, key, value string) error {
 func (f *fakeApp) OpenDocumentWeb(_ context.Context, selector string) (string, error) {
 	f.webOpened = append(f.webOpened, selector)
 	return "http://127.0.0.1:9999/?id=" + selector, nil
+}
+func (f *fakeApp) StartWebServer(context.Context, int) (string, error) {
+	return "http://127.0.0.1:8787", nil
+}
+func (f *fakeApp) BridgeInfo() (string, string) {
+	return "http://127.0.0.1:8787", "test-token"
 }
 
 func TestModel_DefaultShowsTreeAndPreview(t *testing.T) {

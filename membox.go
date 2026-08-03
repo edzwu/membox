@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,6 +16,7 @@ import (
 	"membox/internal/bootstrap"
 	"membox/internal/domain/catalog"
 	"membox/internal/web"
+	"membox/internal/web/backend"
 )
 
 type Config struct {
@@ -36,6 +39,7 @@ func DefaultConfig() (Config, error) {
 type Box struct {
 	service   *application.Service
 	webServer *web.Server
+	home      string
 }
 
 func Open(config Config) (*Box, error) {
@@ -45,11 +49,14 @@ func Open(config Config) (*Box, error) {
 		}
 		config.DatabasePath = filepath.Join(config.Home, "membox.db")
 	}
+	if config.Home == "" {
+		config.Home = filepath.Dir(config.DatabasePath)
+	}
 	service, err := bootstrap.Open(config.DatabasePath)
 	if err != nil {
 		return nil, err
 	}
-	return &Box{service: service}, nil
+	return &Box{service: service, home: config.Home}, nil
 }
 
 func (b *Box) Close() error {
@@ -65,6 +72,66 @@ func (b *Box) Close() error {
 // WebServer returns a localhost HTTP server that renders indexed Markdown in
 // the browser using the embedded Miru reader.
 func (b *Box) WebServer() *web.Server { return web.NewServer(b.service) }
+
+// DefaultBridgePort is the preferred fixed port so the browser extension can
+// keep a stable pairing URL while the TUI (or mm serve) is running.
+const DefaultBridgePort = 8787
+
+// StartWebServer starts the shared localhost Miru + ingest bridge if needed.
+// port 0 prefers DefaultBridgePort then falls back to an ephemeral port.
+// Returns the base URL (http://127.0.0.1:…).
+func (b *Box) StartWebServer(ctx context.Context, port int) (string, error) {
+	if b.webServer != nil {
+		return b.webServer.BaseURL(), nil
+	}
+	// Reuse token across restarts so the browser extension pairing survives
+	// quitting and reopening the TUI.
+	token, err := backend.LoadOrCreateBridgeToken(b.home)
+	if err != nil {
+		return "", err
+	}
+	attempts := []int{port}
+	if port == 0 {
+		attempts = []int{DefaultBridgePort, 0}
+	}
+	var lastErr error
+	for _, candidate := range attempts {
+		server := web.NewServer(b.service)
+		server.SetToken(token)
+		baseURL, startErr := server.Start(ctx, candidate)
+		if startErr != nil {
+			lastErr = startErr
+			continue
+		}
+		listenPort := 0
+		if u, parseErr := url.Parse(baseURL); parseErr == nil {
+			listenPort, _ = strconv.Atoi(u.Port())
+		}
+		if _, writeErr := backend.WriteBridgeFile(b.home, backend.BridgeFile{
+			BaseURL:     baseURL,
+			Token:       token,
+			Port:        listenPort,
+			HostVersion: Version,
+		}); writeErr != nil {
+			_ = server.Shutdown(ctx)
+			return "", writeErr
+		}
+		b.webServer = server
+		return baseURL, nil
+	}
+	if lastErr == nil {
+		lastErr = errors.New("failed to start web server")
+	}
+	return "", lastErr
+}
+
+// BridgeInfo returns the live bridge base URL and token after StartWebServer.
+func (b *Box) BridgeInfo() (baseURL, token string) {
+	if b.webServer == nil {
+		return "", ""
+	}
+	return b.webServer.BaseURL(), b.webServer.Token()
+}
 
 // GetViewer returns the configured viewer mode (leaf or web).
 func (b *Box) GetViewer(ctx context.Context) (string, error) {
@@ -112,12 +179,8 @@ func (b *Box) OpenDocumentWeb(ctx context.Context, selector string) (string, err
 	if document.Status != catalog.DocumentActive {
 		return "", fmt.Errorf("document %s is %s at %s", document.ID, document.Status, absolute)
 	}
-	if b.webServer == nil {
-		server := web.NewServer(b.service)
-		if _, err := server.Start(ctx, 0); err != nil {
-			return "", err
-		}
-		b.webServer = server
+	if _, err := b.StartWebServer(ctx, 0); err != nil {
+		return "", err
 	}
 	return b.webServer.ViewURL(string(document.ID)), nil
 }

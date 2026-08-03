@@ -646,8 +646,34 @@ func (s *Service) defaultCreatePath(ctx context.Context) (*catalog.IndexedPath, 
 	if len(summaries) == 0 {
 		return nil, errors.New("no configured paths; add one with mm path add")
 	}
+	preferred, err := s.store.GetSetting(ctx, SettingMainPath)
+	if err != nil {
+		return nil, err
+	}
+	preferred = strings.TrimSpace(preferred)
+	if preferred != "" {
+		for i := range summaries {
+			if pathRootsEqual(summaries[i].Path.Root, preferred) {
+				path := summaries[i].Path
+				return &path, nil
+			}
+		}
+	}
+	// Default: first configured path (paths[0]).
 	path := summaries[0].Path
 	return &path, nil
+}
+
+func pathRootsEqual(a, b string) bool {
+	left, err := filepath.Abs(filepath.Clean(a))
+	if err != nil {
+		left = filepath.Clean(a)
+	}
+	right, err := filepath.Abs(filepath.Clean(b))
+	if err != nil {
+		right = filepath.Clean(b)
+	}
+	return left == right
 }
 
 func (s *Service) availableNotePath(root, filename string) (string, error) {
@@ -802,15 +828,18 @@ type Setting struct {
 }
 
 // settingSpecs declares all configurable options. Adding a new setting only
-// requires appending one entry here.
+// requires appending one entry here. Options may be empty for dynamic lists
+// (see ListSettings).
 var settingSpecs = []Setting{
 	{Key: "viewer", Label: "viewer", Value: "leaf", Options: []string{"leaf", "web"}},
 	{Key: "model", Label: "model", Value: "k3", Options: []string{"k3", "grok-4.5"}},
+	{Key: SettingMainPath, Label: "main path", Value: "", Options: nil},
 }
 
 const (
-	ViewerLeaf = "leaf"
-	ViewerWeb  = "web"
+	ViewerLeaf      = "leaf"
+	ViewerWeb       = "web"
+	SettingMainPath = "main_path"
 )
 
 // GetViewer returns the configured viewer mode, defaulting to leaf.
@@ -827,13 +856,55 @@ func (s *Service) SetViewer(ctx context.Context, viewer string) error {
 func (s *Service) ListSettings(ctx context.Context) ([]Setting, error) {
 	out := make([]Setting, 0, len(settingSpecs))
 	for _, spec := range settingSpecs {
+		if spec.Key == SettingMainPath {
+			setting, err := s.mainPathSetting(ctx)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, setting)
+			continue
+		}
 		value, err := s.getSetting(ctx, spec.Key)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, Setting{Key: spec.Key, Label: spec.Label, Value: value, Options: spec.Options})
+		out = append(out, Setting{Key: spec.Key, Label: spec.Label, Value: value, Options: append([]string(nil), spec.Options...)})
 	}
 	return out, nil
+}
+
+func (s *Service) mainPathSetting(ctx context.Context) (Setting, error) {
+	summaries, err := s.store.ListPaths(ctx, false)
+	if err != nil {
+		return Setting{}, err
+	}
+	options := make([]string, 0, len(summaries))
+	for _, summary := range summaries {
+		options = append(options, summary.Path.Root)
+	}
+	value := ""
+	if len(options) > 0 {
+		value = options[0]
+	}
+	stored, err := s.store.GetSetting(ctx, SettingMainPath)
+	if err != nil {
+		return Setting{}, err
+	}
+	stored = strings.TrimSpace(stored)
+	if stored != "" {
+		for _, option := range options {
+			if pathRootsEqual(option, stored) {
+				value = option
+				break
+			}
+		}
+	}
+	return Setting{
+		Key:     SettingMainPath,
+		Label:   "main path",
+		Value:   value,
+		Options: options,
+	}, nil
 }
 
 // SetSetting validates and persists one configurable option.
@@ -843,6 +914,18 @@ func (s *Service) SetSetting(ctx context.Context, key, value string) error {
 		return fmt.Errorf("unknown setting %q", key)
 	}
 	value = strings.TrimSpace(value)
+	if key == SettingMainPath {
+		summaries, err := s.store.ListPaths(ctx, false)
+		if err != nil {
+			return err
+		}
+		for _, summary := range summaries {
+			if pathRootsEqual(summary.Path.Root, value) {
+				return s.store.SetSetting(ctx, key, summary.Path.Root)
+			}
+		}
+		return fmt.Errorf("main path %q is not a configured path; add it with mm path add", value)
+	}
 	valid := false
 	for _, option := range spec.Options {
 		if value == option {
@@ -860,6 +943,13 @@ func (s *Service) getSetting(ctx context.Context, key string) (string, error) {
 	spec, ok := findSettingSpec(key)
 	if !ok {
 		return "", fmt.Errorf("unknown setting %q", key)
+	}
+	if key == SettingMainPath {
+		setting, err := s.mainPathSetting(ctx)
+		if err != nil {
+			return "", err
+		}
+		return setting.Value, nil
 	}
 	value, err := s.store.GetSetting(ctx, key)
 	if err != nil {

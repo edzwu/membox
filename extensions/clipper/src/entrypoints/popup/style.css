@@ -1,0 +1,143 @@
+:root {
+  color-scheme: light dark;
+  --bg: #f5f4ed;
+  --ink: #171714;
+  --muted: #77746d;
+  --line: #dedbd0;
+  --accent: #1b365d;
+  --accent-soft: #e8edf3;
+  --ok: #2f6b3a;
+  --bad: #9b2c2c;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #141413;
+    --ink: #e8e6dc;
+    --muted: #8b897f;
+    --line: #2f2e29;
+    --accent: #84a4c4;
+    --accent-soft: #283345;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font: 13px/1.45 var(--font);
+  color: var(--ink);
+  background: var(--bg);
+  min-width: 320px;
+}
+
+.panel {
+  padding: 14px 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.brand {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.status {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--line);
+  color: var(--muted);
+}
+
+.status-ok { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
+.status-bad { background: color-mix(in srgb, var(--bad) 18%, transparent); color: var(--bad); }
+
+.hint {
+  margin: 0;
+  color: var(--muted);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.field span {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+input[type="url"],
+input[type="password"],
+input[type="text"] {
+  width: 100%;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font: inherit;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink);
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+}
+
+button {
+  appearance: none;
+  border: 0;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button.primary {
+  flex: 1;
+  background: var(--accent);
+  color: #fff;
+}
+
+button.secondary {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.message {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--ink);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+}

@@ -15,3 +15,9 @@ go.work.sum
 .DS_Store
 .idea/
 .vscode/
+
+# browser extension (WXT)
+node_modules/
+extensions/*/.output/
+extensions/*/.wxt/
+extensions/*/dist/

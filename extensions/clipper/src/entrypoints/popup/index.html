@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>membox clipper</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main class="panel">
+      <header class="header">
+        <div class="brand">membox</div>
+        <div id="status" class="status status-unknown">checking…</div>
+      </header>
+
+      <p class="hint">Save the current page as Markdown into membox and open it in Miru.</p>
+
+      <label class="field">
+        <span>Server URL</span>
+        <input id="baseUrl" type="url" placeholder="http://127.0.0.1:8787" autocomplete="off" />
+      </label>
+
+      <label class="field">
+        <span>Bridge token</span>
+        <input id="token" type="password" placeholder="from mm serve" autocomplete="off" />
+      </label>
+
+      <label class="check">
+        <input id="autoOpen" type="checkbox" checked />
+        <span>Open in Miru after save</span>
+      </label>
+
+      <div class="actions">
+        <button id="saveSettings" type="button" class="secondary">Save settings</button>
+        <button id="clip" type="button" class="primary">Save to membox</button>
+      </div>
+
+      <pre id="message" class="message" hidden></pre>
+    </main>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>
