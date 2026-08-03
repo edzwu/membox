@@ -62,6 +62,18 @@ export function assignHeadingIds() {
   return headings;
 }
 
+function makeTocLink(heading) {
+  const a = document.createElement('a');
+  const label = heading.dataset.headingLabel || getHeadingLabel(heading);
+  a.href = `#${heading.id}`;
+  a.className = `toc-${heading.tagName.toLowerCase()}`;
+  a.dataset.target = heading.id;
+  a.setAttribute('aria-label', label);
+  a.title = label;
+  appendHeadingContent(a, heading);
+  return a;
+}
+
 export function buildToc(headings) {
   elements.tocNav.innerHTML = '';
 
@@ -77,18 +89,32 @@ export function buildToc(headings) {
   const list = document.createElement('ul');
   list.className = 'toc-list';
 
+  // Two-level outline: h3 headings nest under their preceding h2. Sublists
+  // are progressive-disclosed — collapsed by default, expanded by the
+  // scrollspy while that section is being read (see setActiveToc).
+  let group = null;
+
   headings.forEach((heading) => {
+    const link = makeTocLink(heading);
     const li = document.createElement('li');
-    const a = document.createElement('a');
-    const label = heading.dataset.headingLabel || getHeadingLabel(heading);
-    a.href = `#${heading.id}`;
-    a.className = `toc-${heading.tagName.toLowerCase()}`;
-    a.dataset.target = heading.id;
-    a.setAttribute('aria-label', label);
-    a.title = label;
-    appendHeadingContent(a, heading);
-    li.appendChild(a);
+    li.appendChild(link);
+
+    if (heading.tagName === 'H3' && group) {
+      if (!group.subList) {
+        group.li.classList.add('toc-group');
+        const wrap = document.createElement('div');
+        wrap.className = 'toc-sub-wrap';
+        group.subList = document.createElement('ul');
+        group.subList.className = 'toc-sub';
+        wrap.appendChild(group.subList);
+        group.li.appendChild(wrap);
+      }
+      group.subList.appendChild(li);
+      return;
+    }
+
     list.appendChild(li);
+    group = heading.tagName === 'H2' ? { li, subList: null } : null;
   });
 
   elements.tocNav.appendChild(title);
@@ -99,6 +125,15 @@ function setActiveToc(id) {
   const links = elements.tocNav.querySelectorAll('a');
   links.forEach((link) => {
     link.classList.toggle('active', link.dataset.target === id);
+  });
+
+  // Progressive disclosure: expand the group containing the active heading,
+  // fold the others away.
+  const activeLink = id
+    ? elements.tocNav.querySelector(`a[data-target="${CSS.escape(id)}"]`)
+    : null;
+  elements.tocNav.querySelectorAll('.toc-group').forEach((grp) => {
+    grp.classList.toggle('is-expanded', Boolean(activeLink && grp.contains(activeLink)));
   });
 }
 

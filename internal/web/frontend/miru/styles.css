@@ -294,28 +294,36 @@ button {
 /* --------------------------------------------------------------------------
    Layout
    -------------------------------------------------------------------------- */
+/* TOC left, reading column (+ optional note rail) right — centered as one
+   unit so the outline stays close to the prose and never hugs the viewport
+   edge. Notes keep the right margin; they no longer collide with the TOC. */
 .layout {
   display: flex;
-  padding-top: var(--topbar-height);
+  justify-content: center;
+  align-items: flex-start;
+  gap: 28px;
+  padding: var(--topbar-height) 24px 0;
   min-height: 100vh;
+  box-sizing: border-box;
 }
 
 .toc {
   width: var(--toc-width);
-  flex-shrink: 0;
-  padding: 32px 20px 32px 28px;
+  flex: 0 0 var(--toc-width);
+  padding: 32px 0;
   position: sticky;
   top: var(--topbar-height);
   align-self: flex-start;
   max-height: calc(100vh - var(--topbar-height));
   overflow-y: auto;
   scrollbar-width: thin;
-  transition: width 0.2s ease;
+  transition: width 0.2s ease, flex-basis 0.2s ease;
 }
 
 .toc.is-collapsed {
   width: 44px;
-  padding: 32px 8px 32px 8px;
+  flex-basis: 44px;
+  padding: 32px 0;
   overflow-y: hidden;
 }
 
@@ -339,7 +347,7 @@ button {
   justify-content: center;
   position: absolute;
   top: 16px;
-  right: 12px;
+  right: 0;
   z-index: 10;
   transition: color 0.15s ease, background 0.15s ease, transform 0.2s ease;
 }
@@ -421,8 +429,32 @@ button {
   border-left-color: var(--accent);
 }
 
-.toc-list .toc-h2 { padding-left: 20px; }
-.toc-list .toc-h3 { padding-left: 28px; font-size: 13px; }
+.toc-list .toc-h1 { font-weight: 600; color: var(--ink-soft); }
+.toc-list .toc-h3 { padding-left: 24px; font-size: 12.5px; }
+
+/* Progressive disclosure: h3 sublists stay collapsed until the scrollspy
+   reaches their section. The grid-rows trick animates an unknown height. */
+.toc-sub-wrap {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.22s ease;
+}
+
+.toc-group.is-expanded > .toc-sub-wrap {
+  grid-template-rows: 1fr;
+}
+
+.toc-sub {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toc-sub-wrap { transition: none; }
+}
 
 .toc-list .katex {
   font-size: 1em;
@@ -442,10 +474,22 @@ button {
 }
 
 .main {
-  flex: 1;
-  display: flex;
-  justify-content: center;
-  padding: 32px 28px 72px;
+  /* Default: reading column only, snug against the left TOC. */
+  flex: 0 1 var(--article-max);
+  width: 100%;
+  max-width: var(--article-max);
+  min-width: 0;
+  padding: 32px 0 72px;
+}
+
+/* Wide desktops: reserve the right margin for the annotation rail so notes
+   float beside the prose instead of colliding with the outline. Width matches
+   js/annotations/layout.js (article + gap + rail + 2×outer gutter). */
+@media (min-width: 1200px) {
+  .main {
+    flex-basis: calc(var(--article-max) + var(--annot-rail-gap) + var(--annot-rail-width) + 32px);
+    max-width: calc(var(--article-max) + var(--annot-rail-gap) + var(--annot-rail-width) + 32px);
+  }
 }
 
 .article {
@@ -1287,6 +1331,17 @@ span.annot.anchor-active {
   margin-right: auto;
 }
 
+/* On wide screens .main is wider than the reading column (note-rail reserve).
+   Keep prose flush to the TOC side so the outline stays close. */
+@media (min-width: 1200px) {
+  .fold-section > .fold-heading,
+  .fold-section > .fold-body,
+  .article > :not(.fold-section):not(pre):not(.snippet-frame) {
+    margin-left: 0;
+    margin-right: auto;
+  }
+}
+
 .article p {
   margin: 0.55em 0;
 }
@@ -1539,13 +1594,20 @@ span.annot.anchor-active {
   margin-right: auto;
 }
 
-/* Wide reading surfaces reserve a real annotation lane. The prose keeps its
-   full measure; the whole prose+rail composition is centered as one unit. */
+/* Wide: left-align reading column against the TOC; right side stays free for notes. */
+@media (min-width: 1200px) {
+  .article > :not(.fold-section):not(pre):not(.snippet-frame) {
+    margin-left: 0;
+    margin-right: auto;
+  }
+}
+
+/* Note rail sits in the reserved right margin of .main. */
 .article.has-note-rail > .fold-section > .fold-heading,
 .article.has-note-rail > .fold-section > .fold-body,
 .article.has-note-rail > :not(.fold-section):not(pre):not(.snippet-frame) {
-  margin-left: max(16px, calc(50% - 552px));
-  margin-right: 0;
+  margin-left: 0;
+  margin-right: auto;
 }
 
 .article.has-note-rail pre,
@@ -1553,12 +1615,12 @@ span.annot.anchor-active {
   max-width: var(--article-max);
 }
 
-/* Adaptive code blocks: at least reading-column width, wider only when needed. */
+/* Code stays inside the reading column so it never collides with the TOC. */
 .article pre,
 .fold-body pre {
   width: max-content;
   min-width: min(100%, var(--article-max));
-  max-width: calc(100vw - var(--toc-width) - 56px);
+  max-width: 100%;
   margin: 0.5em auto;
   overflow-x: auto;
 }
@@ -1566,7 +1628,7 @@ span.annot.anchor-active {
 @media (max-width: 768px) {
   .article pre,
   .fold-body pre {
-    max-width: calc(100vw - 40px);
+    max-width: 100%;
   }
 }
 
@@ -1686,12 +1748,23 @@ body.is-dragover::after {
     padding: 0 16px;
   }
 
+  .layout {
+    display: block;
+    padding: var(--topbar-height) 0 0;
+  }
+
+  .main {
+    max-width: none;
+    padding: 24px 20px 64px;
+  }
+
   .toc {
     position: fixed;
     top: var(--topbar-height);
     left: 0;
     bottom: 0;
     width: 260px;
+    flex: none;
     padding: 24px;
     background: var(--paper-raised);
     border-right: 1px solid var(--line);
@@ -1722,10 +1795,6 @@ body.is-dragover::after {
 
   body.is-empty .toc-toggle {
     display: none;
-  }
-
-  .main {
-    padding: 24px 20px 64px;
   }
 
   .article {
