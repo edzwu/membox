@@ -3,6 +3,7 @@ package membox
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"membox/internal/application/port"
 	"membox/internal/bootstrap"
 	"membox/internal/domain/catalog"
+	"membox/internal/web"
 )
 
 type Config struct {
@@ -31,7 +33,10 @@ func DefaultConfig() (Config, error) {
 	return Config{Home: home, DatabasePath: filepath.Join(home, "membox.db")}, nil
 }
 
-type Box struct{ service *application.Service }
+type Box struct {
+	service   *application.Service
+	webServer *web.Server
+}
 
 func Open(config Config) (*Box, error) {
 	if config.DatabasePath == "" {
@@ -47,7 +52,75 @@ func Open(config Config) (*Box, error) {
 	return &Box{service: service}, nil
 }
 
-func (b *Box) Close() error { return b.service.Close() }
+func (b *Box) Close() error {
+	var shutdownErr error
+	if b.webServer != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		shutdownErr = b.webServer.Shutdown(ctx)
+		cancel()
+	}
+	return errors.Join(shutdownErr, b.service.Close())
+}
+
+// WebServer returns a localhost HTTP server that renders indexed Markdown in
+// the browser using the embedded Miru reader.
+func (b *Box) WebServer() *web.Server { return web.NewServer(b.service) }
+
+// GetViewer returns the configured viewer mode (leaf or web).
+func (b *Box) GetViewer(ctx context.Context) (string, error) {
+	return b.service.GetViewer(ctx)
+}
+
+// SetViewer persists the viewer mode (leaf or web).
+func (b *Box) SetViewer(ctx context.Context, viewer string) error {
+	return b.service.SetViewer(ctx, viewer)
+}
+
+// SettingView describes one configurable option for the config UI.
+type SettingView struct {
+	Key     string   `json:"key"`
+	Label   string   `json:"label"`
+	Value   string   `json:"value"`
+	Options []string `json:"options"`
+}
+
+// ListSettings returns every configurable option with its current value.
+func (b *Box) ListSettings(ctx context.Context) ([]SettingView, error) {
+	settings, err := b.service.ListSettings(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]SettingView, 0, len(settings))
+	for _, setting := range settings {
+		out = append(out, SettingView{Key: setting.Key, Label: setting.Label, Value: setting.Value, Options: setting.Options})
+	}
+	return out, nil
+}
+
+// SetSetting validates and persists one configurable option.
+func (b *Box) SetSetting(ctx context.Context, key, value string) error {
+	return b.service.SetSetting(ctx, key, value)
+}
+
+// OpenDocumentWeb lazily starts the shared local web server and returns the
+// browser URL rendering the given document. The server is shut down by Close.
+func (b *Box) OpenDocumentWeb(ctx context.Context, selector string) (string, error) {
+	document, absolute, err := b.service.ResolveDocument(ctx, selector)
+	if err != nil {
+		return "", err
+	}
+	if document.Status != catalog.DocumentActive {
+		return "", fmt.Errorf("document %s is %s at %s", document.ID, document.Status, absolute)
+	}
+	if b.webServer == nil {
+		server := web.NewServer(b.service)
+		if _, err := server.Start(ctx, 0); err != nil {
+			return "", err
+		}
+		b.webServer = server
+	}
+	return b.webServer.ViewURL(string(document.ID)), nil
+}
 
 type PathView struct {
 	ID         int64      `json:"id"`

@@ -101,6 +101,8 @@ type CatalogStore interface {
 	ResolveDocument(ctx context.Context, selector string) (*catalog.Document, string, error)
 	GraphStore
 	Status(ctx context.Context) (StatusSnapshot, error)
+	GetSetting(ctx context.Context, key string) (string, error)
+	SetSetting(ctx context.Context, key, value string) error
 }
 
 type StatusSnapshot struct {

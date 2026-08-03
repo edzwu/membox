@@ -489,6 +489,7 @@ func (s *Service) ResolveTopicSelector(ctx context.Context, selector string) (*c
 
 type CreateNoteOptions struct {
 	Title        string
+	Body         string
 	FromSelector string
 	Topic        bool
 }
@@ -531,7 +532,10 @@ func (s *Service) CreateNote(ctx context.Context, opts CreateNoteOptions) (Creat
 	if err != nil {
 		return CreateNoteResult{}, err
 	}
-	body := []byte("# " + title + "\n\n")
+	body := []byte(opts.Body)
+	if len(body) == 0 {
+		body = []byte("# " + title + "\n\n")
+	}
 	if err := s.writer.WriteNew(ctx, absolute, body); err != nil {
 		return CreateNoteResult{}, err
 	}
@@ -727,6 +731,103 @@ func (s *Service) ListTopicDocuments(ctx context.Context, selector string) (*cat
 
 func (s *Service) Status(ctx context.Context) (port.StatusSnapshot, error) {
 	return s.store.Status(ctx)
+}
+
+// Setting is one user-configurable option shown in the config panel.
+type Setting struct {
+	Key     string
+	Label   string
+	Value   string
+	Options []string
+}
+
+// settingSpecs declares all configurable options. Adding a new setting only
+// requires appending one entry here.
+var settingSpecs = []Setting{
+	{Key: "viewer", Label: "viewer", Value: "leaf", Options: []string{"leaf", "web"}},
+	{Key: "model", Label: "model", Value: "k3", Options: []string{"k3", "grok-4.5"}},
+}
+
+const (
+	ViewerLeaf = "leaf"
+	ViewerWeb  = "web"
+)
+
+// GetViewer returns the configured viewer mode, defaulting to leaf.
+func (s *Service) GetViewer(ctx context.Context) (string, error) {
+	return s.getSetting(ctx, "viewer")
+}
+
+// SetViewer persists the viewer mode after validating it.
+func (s *Service) SetViewer(ctx context.Context, viewer string) error {
+	return s.SetSetting(ctx, "viewer", viewer)
+}
+
+// ListSettings returns every configurable option with its current value.
+func (s *Service) ListSettings(ctx context.Context) ([]Setting, error) {
+	out := make([]Setting, 0, len(settingSpecs))
+	for _, spec := range settingSpecs {
+		value, err := s.getSetting(ctx, spec.Key)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, Setting{Key: spec.Key, Label: spec.Label, Value: value, Options: spec.Options})
+	}
+	return out, nil
+}
+
+// SetSetting validates and persists one configurable option.
+func (s *Service) SetSetting(ctx context.Context, key, value string) error {
+	spec, ok := findSettingSpec(key)
+	if !ok {
+		return fmt.Errorf("unknown setting %q", key)
+	}
+	value = strings.TrimSpace(value)
+	valid := false
+	for _, option := range spec.Options {
+		if value == option {
+			valid = true
+			break
+		}
+	}
+	if !valid {
+		return fmt.Errorf("invalid value %q for %q: use %s", value, key, strings.Join(spec.Options, " or "))
+	}
+	return s.store.SetSetting(ctx, key, value)
+}
+
+func (s *Service) getSetting(ctx context.Context, key string) (string, error) {
+	spec, ok := findSettingSpec(key)
+	if !ok {
+		return "", fmt.Errorf("unknown setting %q", key)
+	}
+	value, err := s.store.GetSetting(ctx, key)
+	if err != nil {
+		return "", err
+	}
+	if value == "" {
+		return spec.Value, nil
+	}
+	valid := false
+	for _, option := range spec.Options {
+		if value == option {
+			valid = true
+			break
+		}
+	}
+	if !valid {
+		return "", fmt.Errorf("invalid value %q for setting %q", value, key)
+	}
+	return value, nil
+}
+
+func findSettingSpec(key string) (Setting, bool) {
+	for _, spec := range settingSpecs {
+		if spec.Key == key {
+			return spec, true
+		}
+	}
+	return Setting{}, false
 }
 
 func (s *Service) resolvePath(ctx context.Context, selector string) (*catalog.IndexedPath, error) {

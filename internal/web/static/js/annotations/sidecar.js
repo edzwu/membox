@@ -1,0 +1,307 @@
+/* Miru — the portable `.miru.json` annotation sidecar: fingerprint the
+   source Markdown, anchor each annotation by both text offset and
+   exact-text-with-context (so repeated passages restore reliably), and
+   validate/restore a sidecar dropped back onto its Markdown. */
+
+import { elements } from '../dom.js';
+import { state } from '../state.js';
+import { ANNOTATION_FORMAT, ANNOTATION_VERSION, ANNOTATION_LEGACY_VERSIONS, ANNOTATION_CONTEXT_LENGTH, ANNOTATION_TEXT_EXCLUDE } from '../constants.js';
+import { applyAnnotationRange, findAnnot } from './model.js';
+import { captureFloatGeometry, floatGeometryFromAnchor } from './float.js';
+import { updateMarkdownDownloadControl } from '../ui/chrome.js';
+
+export async function fingerprintMarkdown(text, expectedFormat = '') {
+  const bytes = new TextEncoder().encode(text);
+  const wantsFallback = expectedFormat.startsWith('fnv1a32:');
+  if (!wantsFallback && window.crypto && window.crypto.subtle) {
+    const digest = new Uint8Array(await window.crypto.subtle.digest('SHA-256', bytes));
+    return 'sha256:' + Array.from(digest, (b) => b.toString(16).padStart(2, '0')).join('');
+  }
+  if (expectedFormat.startsWith('sha256:')) {
+    throw new Error('This browser cannot verify the annotation bundle');
+  }
+  // Portable fallback for older/insecure browser contexts. This is only a
+  // pairing guard, not a security boundary.
+  let hash = 0x811c9dc5;
+  bytes.forEach((byte) => {
+    hash ^= byte;
+    hash = Math.imul(hash, 0x01000193);
+  });
+  return 'fnv1a32:' + (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+export function annotationTextFromRange(range) {
+  const holder = document.createElement('div');
+  holder.appendChild(range.cloneContents());
+  holder.querySelectorAll(ANNOTATION_TEXT_EXCLUDE).forEach((node) => node.remove());
+  return holder.textContent || '';
+}
+
+function canonicalArticleText() {
+  const range = document.createRange();
+  range.selectNodeContents(elements.article);
+  return annotationTextFromRange(range);
+}
+
+function captureAnnotationAnchor(entry, canonicalText) {
+  const span = elements.article.querySelector(`span.annot[data-annot-id="${entry.id}"]`);
+  if (!span) return null;
+
+  const before = document.createRange();
+  before.selectNodeContents(elements.article);
+  before.setEndBefore(span);
+  const selected = document.createRange();
+  selected.selectNodeContents(span);
+
+  const start = annotationTextFromRange(before).length;
+  const exact = annotationTextFromRange(selected);
+  if (!exact) return null;
+  const end = start + exact.length;
+  const anchor = {
+    start,
+    end,
+    exact,
+    prefix: canonicalText.slice(Math.max(0, start - ANNOTATION_CONTEXT_LENGTH), start),
+    suffix: canonicalText.slice(end, end + ANNOTATION_CONTEXT_LENGTH),
+    highlight: !!entry.hl,
+    underline: !!entry.ul,
+    strikethrough: !!entry.sl,
+    note: entry.note || null,
+  };
+  // Floated cards persist anchor-relative wrap geometry: x as a fraction of
+  // the column width, dy in px below the anchor passage. It survives viewport
+  // changes far better than absolute offsets and degrades gracefully.
+  if (entry.float) {
+    const geometry = captureFloatGeometry(entry, span);
+    if (geometry) anchor.float = geometry;
+  }
+  return anchor;
+}
+
+export async function buildAnnotationSidecar(markdownFile, markdown) {
+  const canonicalText = canonicalArticleText();
+  const title = state.docTitle || 'Untitled';
+  const savedAnnotations = state.annotations
+    .map((entry) => captureAnnotationAnchor(entry, canonicalText))
+    .filter(Boolean)
+    .sort((a, b) => a.start - b.start);
+  if (savedAnnotations.length !== state.annotations.length) {
+    throw new Error('Could not anchor every annotation');
+  }
+  const sourceHash = await fingerprintMarkdown(markdown);
+  return {
+    format: ANNOTATION_FORMAT,
+    version: ANNOTATION_VERSION,
+    markdownFile,
+    sourceHash,
+    sourceLength: markdown.length,
+    textLength: canonicalText.length,
+    title,
+    exportedAt: new Date().toISOString(),
+    annotations: savedAnnotations,
+  };
+}
+
+export function parseAnnotationSidecar(text) {
+  if (!text || text.length > 5 * 1024 * 1024) {
+    throw new Error('Invalid Miru annotation file');
+  }
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch (err) {
+    throw new Error('Invalid Miru annotation JSON');
+  }
+  if (!data || data.format !== ANNOTATION_FORMAT ||
+      (data.version !== ANNOTATION_VERSION && !(ANNOTATION_LEGACY_VERSIONS || []).includes(data.version))) {
+    throw new Error('Unsupported Miru annotation format');
+  }
+  if (typeof data.sourceHash !== 'string' ||
+      !/^(?:sha256:[a-f0-9]{64}|fnv1a32:[a-f0-9]{8})$/i.test(data.sourceHash) ||
+      !Array.isArray(data.annotations) || data.annotations.length > 2000) {
+    throw new Error('Invalid Miru annotation file');
+  }
+
+  const normalized = data.annotations.map((item) => {
+    const validPosition = item && Number.isInteger(item.start) && item.start >= 0;
+    const validExact = item && typeof item.exact === 'string' && item.exact.length > 0 && item.exact.length <= 100000;
+    const validNote = item && (item.note === null || item.note === undefined ||
+      (typeof item.note === 'string' && item.note.length <= 100000));
+    if (!validPosition || !validExact || !validNote) {
+      throw new Error('Invalid annotation anchor');
+    }
+    const highlight = !!item.highlight;
+    const underline = !!item.underline;
+    const strikethrough = !!item.strikethrough;
+    const note = typeof item.note === 'string' && item.note ? item.note : null;
+    if (!highlight && !underline && !strikethrough && !note) {
+      throw new Error('Empty annotation entry');
+    }
+    return {
+      start: item.start,
+      end: item.start + item.exact.length,
+      exact: item.exact,
+      prefix: typeof item.prefix === 'string' ? item.prefix.slice(-ANNOTATION_CONTEXT_LENGTH) : '',
+      suffix: typeof item.suffix === 'string' ? item.suffix.slice(0, ANNOTATION_CONTEXT_LENGTH) : '',
+      highlight,
+      underline,
+      strikethrough,
+      note,
+      float: parseFloatGeometry(item.float),
+    };
+  });
+
+  return {
+    format: data.format,
+    version: data.version,
+    markdownFile: typeof data.markdownFile === 'string' ? data.markdownFile : '',
+    sourceHash: data.sourceHash,
+    sourceLength: Number.isInteger(data.sourceLength) ? data.sourceLength : null,
+    title: typeof data.title === 'string' ? data.title.slice(0, 500) : '',
+    annotations: normalized,
+  };
+}
+
+function parseFloatGeometry(value) {
+  if (value === null || value === undefined) return null;
+  const edge = value && (value.edge === 'left' || value.edge === 'right') ? value.edge : null;
+  const dy = value && typeof value.dy === 'number' && Number.isFinite(value.dy) ? value.dy : NaN;
+  if (!edge || !(dy > -100000 && dy < 100000)) {
+    throw new Error('Invalid annotation anchor');
+  }
+  return { edge, dy };
+}
+
+export async function verifyAnnotationSource(data, markdown) {
+  if (data.sourceLength !== null && data.sourceLength !== markdown.length) {
+    throw new Error('Annotations belong to a different Markdown file');
+  }
+  const hash = await fingerprintMarkdown(markdown, data.sourceHash);
+  if (hash !== data.sourceHash) {
+    throw new Error('Annotations belong to a different Markdown file');
+  }
+}
+
+function annotationTextNodes() {
+  const walker = document.createTreeWalker(elements.article, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      const parent = node.parentElement;
+      return parent && parent.closest(ANNOTATION_TEXT_EXCLUDE)
+        ? NodeFilter.FILTER_REJECT
+        : NodeFilter.FILTER_ACCEPT;
+    },
+  });
+  const nodes = [];
+  let node;
+  while ((node = walker.nextNode())) {
+    if (node.nodeValue.length) nodes.push(node);
+  }
+  return nodes;
+}
+
+function rangeFromAnnotationOffsets(start, end) {
+  const nodes = annotationTextNodes();
+  if (!nodes.length || start < 0 || end <= start) return null;
+  const total = nodes.reduce((sum, node) => sum + node.nodeValue.length, 0);
+  if (end > total) return null;
+
+  function locate(offset, isEnd) {
+    let cursor = 0;
+    for (let i = 0; i < nodes.length; i++) {
+      const node = nodes[i];
+      const next = cursor + node.nodeValue.length;
+      if (offset < next || (isEnd && offset === next) || i === nodes.length - 1) {
+        return { node, offset: Math.max(0, Math.min(node.nodeValue.length, offset - cursor)) };
+      }
+      cursor = next;
+    }
+    return null;
+  }
+
+  const from = locate(start, false);
+  const to = locate(end, true);
+  if (!from || !to) return null;
+  const range = document.createRange();
+  range.setStart(from.node, from.offset);
+  range.setEnd(to.node, to.offset);
+  return range;
+}
+
+function commonPrefixLength(a, b) {
+  const limit = Math.min(a.length, b.length);
+  let i = 0;
+  while (i < limit && a[i] === b[i]) i++;
+  return i;
+}
+
+function commonSuffixLength(a, b) {
+  const limit = Math.min(a.length, b.length);
+  let i = 0;
+  while (i < limit && a[a.length - 1 - i] === b[b.length - 1 - i]) i++;
+  return i;
+}
+
+function resolveAnnotationRange(anchor, canonicalText) {
+  let range = rangeFromAnnotationOffsets(anchor.start, anchor.end);
+  if (range && annotationTextFromRange(range) === anchor.exact) return range;
+
+  // Text-quote fallback makes the sidecar tolerant of harmless renderer/DOM
+  // changes while prefix/suffix context disambiguates repeated passages.
+  let bestStart = -1;
+  let bestScore = -Infinity;
+  let index = canonicalText.indexOf(anchor.exact);
+  while (index !== -1) {
+    const before = canonicalText.slice(Math.max(0, index - anchor.prefix.length), index);
+    const afterAt = index + anchor.exact.length;
+    const after = canonicalText.slice(afterAt, afterAt + anchor.suffix.length);
+    const contextScore = commonSuffixLength(before, anchor.prefix) +
+      commonPrefixLength(after, anchor.suffix);
+    const score = contextScore * 1000 - Math.min(Math.abs(index - anchor.start), 999);
+    if (score > bestScore) {
+      bestScore = score;
+      bestStart = index;
+    }
+    index = canonicalText.indexOf(anchor.exact, index + 1);
+  }
+  if (bestStart === -1) return null;
+  range = rangeFromAnnotationOffsets(bestStart, bestStart + anchor.exact.length);
+  return range && annotationTextFromRange(range) === anchor.exact ? range : null;
+}
+
+export function restoreAnnotationSidecar(data) {
+  if (data.title) {
+    state.docTitle = data.title.trim() || 'Untitled';
+    const title = elements.article.querySelector('.doc-title');
+    if (title) title.textContent = state.docTitle;
+  }
+
+  const canonicalText = canonicalArticleText();
+  let restored = 0;
+  data.annotations
+    .slice()
+    .sort((a, b) => a.start - b.start)
+    .forEach((anchor) => {
+      const range = resolveAnnotationRange(anchor, canonicalText);
+      if (!range) return;
+      try {
+        const span = applyAnnotationRange(range, {
+          hl: anchor.highlight,
+          ul: anchor.underline,
+          sl: anchor.strikethrough,
+          note: anchor.note,
+        });
+        // Setting entry.float is enough: the scheduled note-layout pass picks
+        // it up and floats the freshly created card (see float.js).
+        if (anchor.float && span) {
+          const entry = findAnnot(span.dataset.annotId);
+          const geometry = entry && floatGeometryFromAnchor(anchor.float, span);
+          if (geometry) entry.float = geometry;
+        }
+        restored++;
+      } catch (err) {
+        console.warn('Could not restore annotation:', err);
+      }
+    });
+  updateMarkdownDownloadControl();
+  return restored;
+}

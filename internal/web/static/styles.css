@@ -1,0 +1,1829 @@
+/* Miru — quiet Markdown reader
+   Warm parchment, single ink-blue accent, serif-led reading. */
+
+@font-face {
+  font-family: 'Commit Mono';
+  src: url('vendor/fonts/CommitMono-400-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Commit Mono';
+  src: url('vendor/fonts/CommitMono-400-Italic.woff2') format('woff2');
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+
+/* --------------------------------------------------------------------------
+   Tokens
+   -------------------------------------------------------------------------- */
+:root {
+  --paper:           #f5f4ed;
+  --paper-raised:    #faf9f5;
+  --ink:             #171714;
+  --ink-soft:        #55534d;
+  --muted:           #77746d;
+  --accent:          #1b365d;
+  --accent-soft:     #e8edf3;
+  --line:            #dedbd0;
+  --code-text:       #3a332d;
+  --code-surface:    #eae5e1;
+  --code-edge:       rgba(25, 20, 12, 0.14);
+  --code-shadow-inset: rgba(25, 20, 12, 0.04);
+  --code-shadow:     rgba(60, 50, 42, 0.10);
+  --code-action-border: rgba(25, 20, 12, 0.14);
+  --code-action-bg:     rgba(255, 255, 255, 0.35);
+  --code-action-hover-bg: rgba(255, 255, 255, 0.55);
+  --code-action-color:  #7d7166;
+  --shadow:          rgba(0, 0, 0, 0.05);
+
+  --hljs-comment:    #8d7f73;
+  --hljs-keyword:    #8a4b2a;
+  --hljs-string:     #58683f;
+  --hljs-number:     #71558b;
+  --hljs-title:      #4a5878;
+  --hljs-type:       #7a6220;
+  --hljs-attr:       #5e5a70;
+  --hljs-meta:       #866f5e;
+
+  --annot-hl-bg:     rgba(255, 214, 102, 0.42);
+  --annot-rail-width: 220px;
+  --annot-rail-gap:   24px;
+
+  --font-serif: Charter, Georgia, "Songti SC", "STSong", "Noto Serif CJK SC", "Source Han Serif SC", "Times New Roman", serif;
+  --font-sans:  -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono:  "Commit Mono", "SF Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace;
+
+  --topbar-height: 60px;
+  --toc-width:     230px;
+  --article-max:   860px;
+  --radius:        8px;
+}
+
+[data-theme="dark"] {
+  --paper:        #141413;
+  --paper-raised: #1e1e1c;
+  --ink:          #e8e6dc;
+  --ink-soft:     #b8b6ac;
+  --muted:        #8b897f;
+  --accent:       #84a4c4;
+  --accent-soft:  #283345;
+  --line:         #2f2e29;
+  --code-text:    #e9e4dc;
+  --code-surface: #26231f;
+  --code-edge:    rgba(240, 240, 240, 0.10);
+  --code-shadow-inset: rgba(240, 240, 240, 0.04);
+  --code-shadow:  rgba(0, 0, 0, 0.28);
+  --code-action-border: rgba(240, 240, 240, 0.18);
+  --code-action-bg:     rgba(255, 255, 255, 0.08);
+  --code-action-hover-bg: rgba(255, 255, 255, 0.14);
+  --code-action-color:  #c8c0b4;
+  --shadow:       rgba(0, 0, 0, 0.18);
+
+  --hljs-comment: #857c70;
+  --hljs-keyword: #d89b72;
+  --hljs-string:  #adba8b;
+  --hljs-number:  #bca1d6;
+  --hljs-title:   #9fb4d8;
+  --hljs-type:    #d3bc7e;
+  --hljs-attr:    #b9b3cc;
+  --hljs-meta:    #a78f79;
+
+  --annot-hl-bg:  rgba(255, 214, 102, 0.20);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --paper:        #141413;
+    --paper-raised: #1e1e1c;
+    --ink:          #e8e6dc;
+    --ink-soft:     #b8b6ac;
+    --muted:        #8b897f;
+    --accent:       #84a4c4;
+    --accent-soft:  #283345;
+    --line:         #2f2e29;
+    --code-text:    #e9e4dc;
+    --code-surface: #26231f;
+    --code-edge:    rgba(240, 240, 240, 0.10);
+    --code-shadow-inset: rgba(240, 240, 240, 0.04);
+    --code-shadow:  rgba(0, 0, 0, 0.28);
+    --code-action-border: rgba(240, 240, 240, 0.18);
+    --code-action-bg:     rgba(255, 255, 255, 0.08);
+    --code-action-hover-bg: rgba(255, 255, 255, 0.14);
+    --code-action-color:  #c8c0b4;
+    --shadow:       rgba(0, 0, 0, 0.18);
+
+    --hljs-comment: #857c70;
+    --hljs-keyword: #d89b72;
+    --hljs-string:  #adba8b;
+    --hljs-number:  #bca1d6;
+    --hljs-title:   #9fb4d8;
+    --hljs-type:    #d3bc7e;
+    --hljs-attr:    #b9b3cc;
+    --hljs-meta:    #a78f79;
+
+    --annot-hl-bg:  rgba(255, 214, 102, 0.20);
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Reset + base
+   -------------------------------------------------------------------------- */
+*, *::before, *::after { box-sizing: border-box; }
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+button {
+  font-family: inherit;
+}
+
+/* --------------------------------------------------------------------------
+   Topbar
+   -------------------------------------------------------------------------- */
+.topbar {
+  position: fixed;
+  inset: 0 0 auto 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: var(--topbar-height);
+  padding: 0 24px;
+  background: var(--paper);
+  border-bottom: 1px solid var(--line);
+}
+
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.brand-mark {
+  width: 22px;
+  height: 22px;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.brand-name {
+  font-family: var(--font-serif);
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--accent);
+  letter-spacing: 0;
+}
+
+.brand-social {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  color: var(--muted);
+  text-decoration: none;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.brand-social:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.topbar-center {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.action {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.action:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.new-paste {
+  border: 1px solid var(--line);
+  background: var(--paper-raised);
+  color: var(--ink-soft);
+  padding: 7px 14px;
+}
+
+.new-paste:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.save-note {
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--paper);
+  padding: 7px 16px;
+  font-weight: 600;
+}
+
+.save-note:hover {
+  color: var(--paper);
+  background: var(--accent);
+  filter: brightness(1.12);
+}
+
+.save-note:disabled {
+  opacity: 0.6;
+  cursor: default;
+  filter: none;
+}
+
+.theme-toggle {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.theme-icon {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.fold-toggle {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.fold-icon {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.toc-toggle { display: none; }
+
+/* --------------------------------------------------------------------------
+   Layout
+   -------------------------------------------------------------------------- */
+.layout {
+  display: flex;
+  padding-top: var(--topbar-height);
+  min-height: 100vh;
+}
+
+.toc {
+  width: var(--toc-width);
+  flex-shrink: 0;
+  padding: 32px 20px 32px 28px;
+  position: sticky;
+  top: var(--topbar-height);
+  align-self: flex-start;
+  max-height: calc(100vh - var(--topbar-height));
+  overflow-y: auto;
+  scrollbar-width: thin;
+  transition: width 0.2s ease;
+}
+
+.toc.is-collapsed {
+  width: 44px;
+  padding: 32px 8px 32px 8px;
+  overflow-y: hidden;
+}
+
+.toc.is-collapsed .toc-nav {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.toc-pin {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 6px;
+  cursor: pointer;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  position: absolute;
+  top: 16px;
+  right: 12px;
+  z-index: 10;
+  transition: color 0.15s ease, background 0.15s ease, transform 0.2s ease;
+}
+
+.toc-pin:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.toc.is-collapsed .toc-pin {
+  right: auto;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.toc.is-collapsed .toc-pin-icon {
+  transform: rotate(180deg);
+}
+
+.toc-pin-icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  transition: transform 0.2s ease;
+}
+
+@media (min-width: 769px) {
+  .toc-pin {
+    display: inline-flex;
+  }
+}
+
+.toc::-webkit-scrollbar { width: 6px; }
+.toc::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+
+.toc-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.toc-title {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 10px 12px;
+}
+
+.toc-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.toc-list li {
+  margin: 0;
+}
+
+.toc-list a {
+  display: block;
+  text-decoration: none;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.35;
+  padding: 4px 0 4px 12px;
+  border-left: 2px solid transparent;
+  transition: color 0.12s ease, border-color 0.12s ease;
+}
+
+.toc-list a:hover {
+  color: var(--accent);
+}
+
+.toc-list a.active {
+  color: var(--accent);
+  border-left-color: var(--accent);
+}
+
+.toc-list .toc-h2 { padding-left: 20px; }
+.toc-list .toc-h3 { padding-left: 28px; font-size: 13px; }
+
+.toc-list .katex {
+  font-size: 1em;
+  line-height: 1;
+}
+
+.toc-list .katex-display {
+  display: inline;
+  margin: 0;
+}
+
+.toc-empty {
+  font-size: 13px;
+  color: var(--muted);
+  padding-left: 12px;
+  font-style: italic;
+}
+
+.main {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  padding: 32px 28px 72px;
+}
+
+.article {
+  width: 100%;
+}
+
+/* --------------------------------------------------------------------------
+   Empty state
+   -------------------------------------------------------------------------- */
+.empty {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--paper);
+  padding: 24px;
+  text-align: center;
+}
+
+.empty-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  max-width: 400px;
+}
+
+.empty-title {
+  font-family: var(--font-serif);
+  font-size: 54px;
+  font-weight: 500;
+  line-height: 1;
+  color: var(--accent);
+  margin: 0 0 16px;
+  letter-spacing: -0.5px;
+}
+
+.empty-cn {
+  display: inline-block;
+  margin-left: 12px;
+  font-family: "Songti TC", "Noto Serif CJK TC", "Source Han Serif TC", "Songti SC", "Noto Serif CJK SC", serif;
+  font-weight: 500;
+  font-size: 58px;
+  color: var(--ink-soft);
+  line-height: 1;
+  vertical-align: baseline;
+  letter-spacing: 0.04em;
+}
+
+.empty-subtitle {
+  font-family: var(--font-serif);
+  font-size: 21px;
+  color: var(--ink-soft);
+  margin: 0;
+  letter-spacing: 0.01em;
+}
+
+.empty-kbd {
+  font-family: var(--font-mono);
+  font-size: 16px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, transparent);
+  border-radius: 10px;
+  padding: 12px 22px;
+  margin: 28px 0 20px;
+  box-shadow: 0 1px 2px var(--shadow);
+  letter-spacing: 0.04em;
+}
+
+.empty-footer {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 0;
+  line-height: 1.8;
+  letter-spacing: 0.01em;
+}
+
+.empty-footer a {
+  color: var(--ink-soft);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--ink-soft) 35%, transparent);
+  text-underline-offset: 2px;
+}
+
+.empty-hints {
+  font-family: var(--font-serif);
+  font-size: 14px;
+  color: var(--muted);
+  margin: 0 0 32px;
+  letter-spacing: 0.03em;
+}
+
+/* Hide empty state when reading */
+body.is-reading .empty {
+  display: none;
+}
+
+body.is-reading .new-paste {
+  display: inline-flex;
+}
+
+body.is-empty .new-paste,
+body.is-empty .toc-toggle {
+  display: none;
+}
+
+body.is-snippet .toc {
+  display: none;
+}
+
+/* --------------------------------------------------------------------------
+   Article typography
+   -------------------------------------------------------------------------- */
+.article {
+  font-family: var(--font-serif);
+  font-size: 15px;
+  line-height: 1.55;
+  letter-spacing: 0.02em;
+  color: var(--ink);
+}
+
+.article :first-child { margin-top: 0; }
+
+.article h1,
+.article h2,
+.article h3,
+.article h4,
+.article h5,
+.article h6 {
+  font-family: var(--font-serif);
+  font-weight: 500;
+  line-height: 1.25;
+  color: var(--ink);
+  margin: 1.2em 0 0.45em;
+  letter-spacing: 0;
+  scroll-margin-top: calc(var(--topbar-height) + 24px);
+}
+
+.article h1 { font-size: 2em; }
+.article h2 { font-size: 1.55em; }
+.article h3 { font-size: 1.25em; }
+.article h4 { font-size: 1.1em; }
+.article h5 { font-size: 1em; }
+.article h6 { font-size: 0.95em; color: var(--ink-soft); }
+
+/* --------------------------------------------------------------------------
+   Document title (editable)
+   -------------------------------------------------------------------------- */
+.doc-title {
+  font-family: var(--font-serif);
+  font-size: 1.6em;
+  font-weight: 500;
+  color: var(--ink);
+  margin: 0 auto 1em;
+  padding: 0 0 0.35em;
+  border-bottom: 1px solid var(--line);
+  outline: none;
+  transition: border-color 0.15s ease;
+  cursor: text;
+  letter-spacing: 0;
+  line-height: 1.3;
+}
+
+.doc-title:hover {
+  border-bottom-color: color-mix(in srgb, var(--accent) 50%, var(--line));
+}
+
+.doc-title:focus {
+  border-bottom-color: var(--accent);
+}
+
+/* --------------------------------------------------------------------------
+   Article metadata (frontmatter)
+   -------------------------------------------------------------------------- */
+.article-meta {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 0 auto 1.6em;
+  padding: 14px 18px;
+  background: var(--paper-raised);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  box-shadow: 0 1px 3px var(--shadow);
+}
+
+.article-meta-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 5px 0;
+}
+
+.article-meta-row + .article-meta-row {
+  border-top: 1px solid var(--line);
+}
+
+.article-meta-label {
+  flex-shrink: 0;
+  min-width: 5em;
+  color: var(--muted);
+  font-weight: 500;
+  text-transform: capitalize;
+  letter-spacing: 0.02em;
+}
+
+.article-meta-value {
+  color: var(--ink-soft);
+  word-break: break-word;
+}
+
+.article-meta-value a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.article-meta-value a:hover {
+  color: var(--accent);
+}
+
+.article-meta-tag {
+  display: inline-block;
+  padding: 2px 8px;
+  margin: 2px 4px 2px 0;
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+@media (max-width: 768px) {
+  .article-meta {
+    padding: 12px 14px;
+    margin-bottom: 1.2em;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Foldable sections (Vim-inspired)
+   -------------------------------------------------------------------------- */
+.fold-section {
+  position: relative;
+}
+
+.fold-heading {
+  cursor: pointer;
+  position: relative;
+  padding-right: 2.8em;
+  transition: color 0.12s ease;
+}
+
+.fold-heading:hover {
+  color: var(--accent);
+}
+
+.fold-heading::before {
+  content: '▾';
+  position: absolute;
+  left: -1.2em;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--accent);
+  font-size: 0.75em;
+  line-height: 1;
+  opacity: 0.7;
+  transition: opacity 0.12s ease, transform 0.15s ease;
+}
+
+.fold-section.is-collapsed .fold-heading::before {
+  content: '▸';
+}
+
+.fold-heading:hover::before {
+  opacity: 1;
+}
+
+.section-copy,
+.section-download {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 1;
+  padding: 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, color 0.15s ease;
+}
+
+.section-copy { right: 0; }
+.section-download { right: 1.4em; }
+
+.fold-heading:hover .section-copy,
+.fold-heading:hover .section-download,
+.section-copy:focus-visible,
+.section-download:focus-visible {
+  opacity: 1;
+}
+
+.section-copy:hover,
+.section-download:hover {
+  color: var(--accent);
+}
+
+.lead-section {
+  position: relative;
+}
+
+.lead-section > :first-child {
+  margin-top: 0;
+}
+
+.lead-copy {
+  position: absolute;
+  right: -1.5em;
+  top: 0.1em;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 1;
+  padding: 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, color 0.15s ease;
+}
+
+.lead-section:hover .lead-copy,
+.lead-copy:focus-visible {
+  opacity: 1;
+}
+
+.lead-copy:hover {
+  color: var(--accent);
+}
+
+.fold-body {
+  display: block;
+  position: relative;
+}
+
+/* A clear sentinel (classic clearfix) at the end of a ghost-carrying
+   container makes it grow to contain the float, so the wrap hole stays
+   contained inside its own section — without a flow-root toggle and its
+   margin-collapsing side effects. */
+.annot-ghost-clear {
+  clear: both;
+}
+
+.fold-section.is-collapsed .fold-body {
+  display: none;
+}
+
+/* --------------------------------------------------------------------------
+   Annotations — selection toolbar, highlight, underline, margin notes
+   -------------------------------------------------------------------------- */
+.annot-toolbar {
+  position: absolute;
+  z-index: 150;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  background: var(--ink);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px var(--shadow);
+}
+
+.annot-toolbar[hidden] {
+  display: none;
+}
+
+.annot-toolbar button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--paper);
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.annot-toolbar button:hover {
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+}
+
+.annot-toolbar button.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.annot-toolbar button.annot-del:hover {
+  background: #b3402f;
+  color: #fff;
+}
+
+[data-theme="dark"] .annot-toolbar button:hover {
+  background: rgba(255, 255, 255, 0.10);
+}
+
+.annot-note-input {
+  appearance: none;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--paper);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  padding: 5px 8px;
+  width: 180px;
+}
+
+.annot-note-input::placeholder {
+  color: color-mix(in srgb, var(--paper) 55%, transparent);
+}
+
+/* Highlight (class-based so a passage can also carry other marks) */
+.article .annot-hl {
+  background: var(--annot-hl-bg);
+  color: inherit;
+  padding: 0 1px;
+  border-radius: 2px;
+}
+
+/* Underline */
+.article .annot-ul {
+  text-decoration: underline;
+  text-decoration-color: var(--accent);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+}
+
+/* Strikethrough */
+.article .annot-sl {
+  text-decoration: line-through;
+  text-decoration-color: var(--accent);
+  text-decoration-thickness: 2px;
+}
+
+/* Underline + strikethrough on the same passage */
+.article .annot-ul.annot-sl {
+  text-decoration: underline line-through;
+  text-decoration-color: var(--accent);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+}
+
+/* Note anchor: dotted underline + numbered superscript */
+.annot-note-ref {
+  border-bottom: 1px dotted var(--accent);
+}
+
+.annot-note-num {
+  color: var(--accent);
+  font-family: var(--font-sans);
+  font-size: 0.68em;
+  font-weight: 600;
+  margin-left: 1px;
+  user-select: none;
+}
+
+/* Notes never squeeze prose. The default is an in-flow editorial aside after
+   its block; sufficiently wide layouts promote it into a separate margin rail. */
+.annot-note {
+  position: relative;
+  float: none;
+  width: min(32em, 100%);
+  margin: 0.6em 0 0.9em auto;
+  padding: 0.55em 0.85em;
+  background: var(--paper-raised);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--ink-soft);
+  box-shadow: 0 1px 3px var(--shadow);
+  transition: box-shadow 0.18s ease, opacity 0.18s ease;
+}
+
+/* Table notes stay inside their originating cell. Keeping them in normal flow
+   grows only the row height instead of introducing an invalid sibling in <tr>. */
+.annot-note.annot-note-in-cell {
+  float: none;
+  clear: both;
+  width: 100%;
+  margin: 0.55em 0 0.1em;
+  padding: 0.45em 0.65em;
+}
+
+.annot-note.annot-note-in-rail:not(.annot-note-in-cell) {
+  position: absolute;
+  left: calc(100% + var(--annot-rail-gap));
+  z-index: 4;
+  width: var(--annot-rail-width);
+  margin: 0;
+}
+
+.annot-note.annot-note-in-rail::before {
+  content: '';
+  position: absolute;
+  top: 1.05em;
+  right: 100%;
+  width: var(--annot-rail-gap);
+  border-top: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+}
+
+/* Ghost float spacer: the invisible obstacle prose wraps around. The visible
+   card is absolutely positioned over it; the browser's own line layout does
+   all the wrapping (the pretext idea, with native layout). */
+.annot-ghost {
+  pointer-events: none;
+  user-select: none;
+}
+
+.annot-note.annot-note-floated {
+  position: absolute;
+  z-index: 5;
+  width: var(--annot-rail-width);
+  margin: 0;
+}
+
+/* Note cards are draggable into the prose column (except in-cell ones). */
+.annot-note:not(.annot-note-in-cell) {
+  cursor: grab;
+  touch-action: none;
+}
+
+/* Grip affordance: dotted handle along the accent edge, revealed on hover. */
+.annot-note:not(.annot-note-in-cell)::after {
+  content: '';
+  position: absolute;
+  left: 1px;
+  top: 8px;
+  bottom: 8px;
+  width: 5px;
+  border-radius: 2px;
+  background-image: radial-gradient(circle, var(--paper) 1px, transparent 1.3px);
+  background-size: 4px 5px;
+  background-position: center;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  pointer-events: none;
+}
+
+.annot-note:not(.annot-note-in-cell):hover::after,
+.annot-note.is-dragging::after {
+  opacity: 0.85;
+}
+
+.annot-note:not(.annot-note-in-cell) .annot-note-input {
+  cursor: text;
+}
+
+.annot-note.is-dragging {
+  cursor: grabbing;
+  opacity: 0.97;
+  box-shadow: 0 12px 30px var(--shadow);
+}
+
+/* Dragged past the prose edge: about to dock back into the margin rail. */
+.annot-note.will-dock {
+  opacity: 0.5;
+}
+
+/* Leader line from a floated card to its anchor passage: a transient
+   wayfinding aid shown while dragging/hovering, faded out afterwards. */
+.annot-leader {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  overflow: visible;
+  z-index: 3;
+  pointer-events: none;
+  color: color-mix(in srgb, var(--accent) 40%, var(--line));
+  opacity: 0;
+  transition: opacity 0.4s ease;
+}
+
+.annot-leader.is-visible {
+  opacity: 1;
+}
+
+/* --------------------------------------------------------------------------
+   Snippet mode — ray-style framed card for pasted code
+   -------------------------------------------------------------------------- */
+.snippet-frame {
+  background: #d2c5bc;
+  border: 0;
+  border-radius: 14px;
+  padding: clamp(18px, 4vw, 44px);
+  margin: 0.5em auto;
+  width: max-content;
+  max-width: none;
+}
+
+.snippet-card {
+  position: relative;
+  background: #eae5e1;
+  box-shadow: inset 0 0 0 1px rgba(25,20,12,0.16), 0 18px 44px rgba(60,50,42,0.22);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+[data-theme="dark"] .snippet-frame {
+  background: #1a1a1a;
+}
+
+[data-theme="dark"] .snippet-card {
+  background: #26231f;
+  box-shadow: inset 0 0 0 1px rgba(240,240,240,0.12), 0 18px 44px rgba(0,0,0,0.5);
+}
+
+.snippet-titlebar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(25,20,12,0.12);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--muted);
+  user-select: none;
+}
+
+[data-theme="dark"] .snippet-titlebar {
+  border-bottom-color: rgba(240,240,240,0.10);
+}
+
+.snippet-star {
+  color: var(--accent);
+  font-size: 13px;
+}
+
+.snippet-filename {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink);
+  outline: none;
+  border-radius: 4px;
+  padding: 1px 4px;
+  min-width: 3em;
+}
+
+.snippet-filename:focus {
+  background: var(--accent-soft);
+}
+
+.snippet-langpicker {
+  position: relative;
+  margin-left: auto;
+}
+
+.snippet-langtag {
+  display: inline-block;
+  color: var(--accent);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px 9px;
+  cursor: pointer;
+}
+
+.snippet-langselect {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.snippet-copy {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.snippet-copy:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.snippet-card pre.snippet-code,
+pre.snippet-code {
+  width: auto;
+  max-width: none;
+  min-width: 220px;
+  margin: 0;
+  padding: 14px 18px;
+  font-size: 13.5px;
+  line-height: 1.65;
+  box-sizing: border-box;
+}
+
+@media (max-width: 768px) {
+  .snippet-frame {
+    padding: 10px;
+  }
+}
+
+.annot-leader path {
+  stroke: currentColor;
+  stroke-width: 1;
+  fill: none;
+}
+
+.annot-leader circle {
+  fill: currentColor;
+}
+
+body.is-note-dragging {
+  user-select: none;
+}
+
+/* Hover linkage between a floated card and its anchor passage. */
+span.annot.anchor-active {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border-radius: 2px;
+}
+
+.annot-note.anchor-active {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent), 0 1px 3px var(--shadow);
+}
+
+.annot-note-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.25em;
+  height: 1.25em;
+  padding: 0 0.15em;
+  background: var(--accent);
+  color: var(--paper);
+  border-radius: 999px;
+  font-size: 0.72em;
+  font-weight: 600;
+  line-height: 1;
+  margin-right: 0.25em;
+  transform: translateY(-0.5px);
+}
+
+/* Note card edit / delete buttons (stripped from exports). */
+.annot-note-edit,
+.annot-note-del {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 4px;
+  margin-left: 2px;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+
+.annot-note:hover .annot-note-edit,
+.annot-note:hover .annot-note-del,
+.annot-note-edit:focus-visible,
+.annot-note-del:focus-visible {
+  opacity: 1;
+}
+
+.annot-note-edit:hover,
+.annot-note-del:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.annot-note-edit-input {
+  width: 11em;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  padding: 2px 5px;
+  font-size: 12px;
+}
+
+@media (max-width: 900px) {
+  .annot-note {
+    width: 100%;
+    margin: 0.6em 0;
+  }
+}
+
+/* Dark mode fold indicator */
+[data-theme="dark"] .fold-heading::before {
+  color: var(--accent);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .fold-heading::before {
+    color: var(--accent);
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Article width layout
+   -------------------------------------------------------------------------- */
+.article > .fold-section {
+  max-width: none;
+}
+
+.fold-section > .fold-heading,
+.fold-section > .fold-body {
+  max-width: var(--article-max);
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.article p {
+  margin: 0.55em 0;
+}
+
+.article a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--accent) 38%, transparent);
+  text-underline-offset: 2px;
+  transition: text-decoration-color 0.15s ease;
+}
+
+.article a:hover {
+  text-decoration-color: var(--accent);
+}
+
+.article strong {
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.article em {
+  font-style: normal;
+  color: var(--accent);
+}
+
+.article ul,
+.article ol {
+  padding-left: 1.4em;
+  margin: 0.6em 0;
+}
+
+.article li {
+  margin: 0.15em 0;
+}
+
+.article ul li::marker {
+  color: var(--accent);
+}
+
+.article ol li::marker {
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.article blockquote {
+  margin: 0.8em 0;
+  padding: 0.1em 0 0.1em 1em;
+  border-left: 3px solid var(--accent);
+  color: var(--muted);
+}
+
+.article blockquote p:first-child { margin-top: 0; }
+.article blockquote p:last-child { margin-bottom: 0; }
+
+.article hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 1.5em 0;
+}
+
+/* Code — Ray paper-inspired syntax highlighting */
+.article code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: var(--code-surface);
+  color: var(--code-text);
+  padding: 0.12em 0.32em;
+  border-radius: 4px;
+  word-break: break-word;
+  letter-spacing: 0;
+}
+
+.article pre {
+  background: var(--code-surface);
+  border-radius: 8px;
+  padding: 16px 20px;
+  overflow-x: auto;
+  margin: 0.5em 0;
+  position: relative;
+  border: 1px solid var(--code-edge);
+  box-shadow: inset 0 0 0 1px var(--code-shadow-inset), 0 10px 28px var(--code-shadow);
+}
+
+.article pre code {
+  font-family: var(--font-mono);
+  background: transparent;
+  color: var(--code-text);
+  padding: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  border-radius: 0;
+  display: block;
+  letter-spacing: 0;
+  word-break: normal;
+}
+
+/* Syntax highlighting colors come from theme variables, so light and dark
+   share a single set of rules. */
+.article pre code .hljs-comment,
+.article pre code .hljs-quote { color: var(--hljs-comment); font-style: italic; }
+.article pre code .hljs-keyword,
+.article pre code .hljs-selector-tag,
+.article pre code .hljs-literal,
+.article pre code .hljs-name { color: var(--hljs-keyword); }
+.article pre code .hljs-string,
+.article pre code .hljs-regexp,
+.article pre code .hljs-addition { color: var(--hljs-string); }
+.article pre code .hljs-number,
+.article pre code .hljs-symbol,
+.article pre code .hljs-bullet,
+.article pre code .hljs-link { color: var(--hljs-number); }
+.article pre code .hljs-title,
+.article pre code .hljs-section { color: var(--hljs-title); }
+.article pre code .hljs-type,
+.article pre code .hljs-built_in,
+.article pre code .hljs-class { color: var(--hljs-type); }
+.article pre code .hljs-attr,
+.article pre code .hljs-attribute,
+.article pre code .hljs-variable,
+.article pre code .hljs-template-variable,
+.article pre code .hljs-property { color: var(--hljs-attr); }
+.article pre code .hljs-meta,
+.article pre code .hljs-doctag,
+.article pre code .hljs-deletion { color: var(--hljs-meta); }
+
+/* Copy button inside code blocks */
+.code-copy {
+  position: absolute;
+  top: 6px;
+  right: 12px;
+  appearance: none;
+  border: 1px solid var(--code-action-border);
+  background: var(--code-action-bg);
+  color: var(--code-action-color);
+  font-family: var(--font-sans);
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0;
+  z-index: 1;
+  transition: opacity 0.15s ease, color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+}
+
+.code-lang {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  font-family: var(--font-sans);
+  font-size: 10px;
+  line-height: 1;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--code-action-color);
+  pointer-events: none;
+  user-select: none;
+  transition: opacity 0.15s ease;
+}
+
+.article pre:hover .code-copy,
+.code-copy:focus-visible {
+  opacity: 1;
+}
+
+.article pre:hover .code-lang {
+  opacity: 0;
+}
+
+.code-copy:hover,
+.code-copy.copied {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--code-action-hover-bg);
+}
+
+/* Tables */
+.table-wrapper {
+  overflow-x: auto;
+  margin: 0.9em 0;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+}
+
+.article table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95em;
+  margin: 0;
+  min-width: 480px;
+}
+
+.article th,
+.article td {
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+.article th {
+  font-weight: 600;
+  color: var(--ink-soft);
+  background: var(--paper-raised);
+}
+
+.article tr:last-child td { border-bottom: 0; }
+
+.katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  margin: 0.9em 0;
+}
+
+/* Left-align display math so it lines up with body text instead of
+   appearing to float off-center alongside left-justified paragraphs. */
+.article .katex-display > .katex {
+  text-align: left;
+}
+
+.katex {
+  font-size: 1em;
+}
+
+/* Images */
+.article img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+  display: block;
+  margin: 0.9em auto;
+}
+
+.article figure {
+  margin: 0.9em 0;
+}
+
+.article figcaption {
+  font-size: 13px;
+  color: var(--muted);
+  text-align: center;
+  margin-top: 0.4em;
+}
+
+/* Top-level content before the first heading is not wrapped in a fold-section,
+   so constrain it to the same reading column after element margin shorthands. */
+.article > :not(.fold-section):not(pre):not(.snippet-frame) {
+  max-width: var(--article-max);
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* Wide reading surfaces reserve a real annotation lane. The prose keeps its
+   full measure; the whole prose+rail composition is centered as one unit. */
+.article.has-note-rail > .fold-section > .fold-heading,
+.article.has-note-rail > .fold-section > .fold-body,
+.article.has-note-rail > :not(.fold-section):not(pre):not(.snippet-frame) {
+  margin-left: max(16px, calc(50% - 552px));
+  margin-right: 0;
+}
+
+.article.has-note-rail pre,
+.article.has-note-rail .fold-body pre {
+  max-width: var(--article-max);
+}
+
+/* Adaptive code blocks: at least reading-column width, wider only when needed. */
+.article pre,
+.fold-body pre {
+  width: max-content;
+  min-width: min(100%, var(--article-max));
+  max-width: calc(100vw - var(--toc-width) - 56px);
+  margin: 0.5em auto;
+  overflow-x: auto;
+}
+
+@media (max-width: 768px) {
+  .article pre,
+  .fold-body pre {
+    max-width: calc(100vw - 40px);
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Toast
+   -------------------------------------------------------------------------- */
+.toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%) translateY(10px);
+  z-index: 200;
+  background: var(--ink);
+  color: var(--paper);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  padding: 10px 18px;
+  border-radius: 999px;
+  box-shadow: 0 4px 16px var(--shadow);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.toast.visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* Drag and drop overlay — full-viewport dashed frame shown while a file is
+   dragged over the page. pointer-events: none keeps the drop target live. */
+body.is-dragover::after {
+  content: 'Drop to open';
+  position: fixed;
+  inset: 16px;
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--paper) 88%, transparent);
+  border: 2px dashed var(--accent);
+  border-radius: 12px;
+  color: var(--accent);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  letter-spacing: 0.04em;
+  pointer-events: none;
+}
+
+.copy-all,
+.download-all,
+.png-all,
+.html-all,
+.copy-png {
+  position: fixed;
+  right: 24px;
+  z-index: 70;
+  width: 36px;
+  height: 36px;
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--paper-raised);
+  color: var(--ink-soft);
+  border-radius: var(--radius);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 16px var(--shadow);
+  transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+}
+
+.copy-all:hover,
+.copy-all.copied,
+.download-all:hover,
+.download-all.copied,
+.png-all:hover,
+.png-all.copied,
+.html-all:hover,
+.html-all.copied,
+.copy-png:hover,
+.copy-png.copied {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.copy-all {
+  bottom: 24px;
+}
+
+.download-all {
+  bottom: 68px;
+}
+
+.png-all {
+  bottom: 112px;
+}
+
+.copy-png {
+  bottom: 156px;
+}
+
+.html-all {
+  bottom: 200px;
+}
+
+/* --------------------------------------------------------------------------
+   Mobile / drawer
+   -------------------------------------------------------------------------- */
+@media (max-width: 768px) {
+  :root {
+    --topbar-height: 56px;
+  }
+
+  .topbar {
+    padding: 0 16px;
+  }
+
+  .toc {
+    position: fixed;
+    top: var(--topbar-height);
+    left: 0;
+    bottom: 0;
+    width: 260px;
+    padding: 24px;
+    background: var(--paper-raised);
+    border-right: 1px solid var(--line);
+    z-index: 90;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+    box-shadow: 4px 0 24px var(--shadow);
+  }
+
+  .toc.is-open {
+    transform: translateX(0);
+  }
+
+  .toc-backdrop {
+    position: fixed;
+    inset: var(--topbar-height) 0 0 0;
+    background: rgba(0, 0, 0, 0.18);
+    z-index: 80;
+  }
+
+  .toc-backdrop:not([hidden]) {
+    display: block;
+  }
+
+  .toc-toggle {
+    display: inline-flex;
+  }
+
+  body.is-empty .toc-toggle {
+    display: none;
+  }
+
+  .main {
+    padding: 24px 20px 64px;
+  }
+
+  .article {
+    font-size: 15px;
+    line-height: 1.55;
+  }
+
+  .article pre {
+    padding: 14px 16px;
+  }
+
+  .article pre code {
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  .lead-copy {
+    right: 0;
+    opacity: 1;
+  }
+
+  .code-copy {
+    opacity: 1;
+    top: 3px;
+    right: 12px;
+  }
+
+  .code-lang {
+    opacity: 0;
+    top: 5px;
+    right: 12px;
+  }
+
+  .empty-title {
+    font-size: 52px;
+  }
+
+  .empty-subtitle {
+    font-size: 18px;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Reduced motion
+   -------------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Focus visibility
+   -------------------------------------------------------------------------- */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+button:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* Utility: visually hidden screen-reader text if needed */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
