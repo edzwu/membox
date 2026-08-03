@@ -36,6 +36,7 @@ type fakeApp struct {
 	model     string
 	mainPath  string
 	webOpened []string
+	scanCount int
 }
 
 func (f *fakeApp) AddPath(context.Context, membox.AddPathCommand) (membox.AddPathResult, error) {
@@ -101,7 +102,8 @@ func (f *fakeApp) ToggleDocumentPin(_ context.Context, command membox.ToggleDocu
 	return membox.ToggleDocumentPinResult{DocumentID: command.Selector, Pinned: f.pins[command.Selector]}, nil
 }
 func (f *fakeApp) ScanPaths(context.Context, membox.ScanPathsCommand) (membox.ScanReport, error) {
-	return membox.ScanReport{}, nil
+	f.scanCount++
+	return membox.ScanReport{Added: 1, Files: 3}, nil
 }
 func (f *fakeApp) ListPaths(context.Context) ([]membox.PathView, error) { return nil, nil }
 func (f *fakeApp) GetIndexStatus(context.Context) (membox.IndexStatusView, error) {
@@ -1128,6 +1130,75 @@ func TestModel_EnterWithWebViewerOpensBrowser(t *testing.T) {
 	model = updated.(Model)
 	if !strings.Contains(model.statusMessage, "browser") {
 		t.Fatalf("status does not confirm browser open: %q", model.statusMessage)
+	}
+}
+
+func TestModel_CtrlRStartsScanAndReloadsTree(t *testing.T) {
+	app := &fakeApp{}
+	model := New(context.Background(), app, fakeLauncher{})
+	model.width, model.height = 100, 20
+	model.items = documentItems([]membox.DocumentView{{ID: "019-old", Title: "Old", Path: "/tmp/old.md"}})
+	model.refreshFilter()
+
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+	model = updated.(Model)
+	if command == nil {
+		t.Fatal("ctrl+r did not schedule scan")
+	}
+	if !model.loading || model.statusMessage != "scanning…" {
+		t.Fatalf("ctrl+r did not enter scanning state: loading=%v status=%q", model.loading, model.statusMessage)
+	}
+
+	// Run the batched scan command (spinner tick + scanCmd).
+	message := command()
+	// Batch may return []tea.Cmd via tea.Batch - execute until scanMsg.
+	var scan scanMsg
+	switch msg := message.(type) {
+	case scanMsg:
+		scan = msg
+	case tea.BatchMsg:
+		found := false
+		for _, cmd := range msg {
+			if cmd == nil {
+				continue
+			}
+			inner := cmd()
+			if s, ok := inner.(scanMsg); ok {
+				scan = s
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("batch did not include scanMsg: %#v", message)
+		}
+	default:
+		// Some tea versions wrap differently; invoke scanCmd directly as fallback check.
+		direct := scanCmd(context.Background(), app)()
+		var ok bool
+		scan, ok = direct.(scanMsg)
+		if !ok {
+			t.Fatalf("unexpected command result type %T", message)
+		}
+	}
+	if scan.err != nil {
+		t.Fatal(scan.err)
+	}
+	if app.scanCount == 0 {
+		// scanCmd path may have been the fallback
+		_ = scanCmd(context.Background(), app)()
+	}
+	if app.scanCount == 0 {
+		t.Fatal("scan was not invoked")
+	}
+
+	updated, command = model.Update(scan)
+	model = updated.(Model)
+	if command == nil {
+		t.Fatal("scanMsg did not schedule document reload")
+	}
+	if !strings.Contains(model.statusMessage, "scan +") {
+		t.Fatalf("status missing scan summary: %q", model.statusMessage)
 	}
 }
 

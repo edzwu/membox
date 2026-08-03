@@ -280,6 +280,14 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		// Refresh works from any surface (tree, input, config) so a clipper
+		// import can be picked up without hunting for the bare "r" binding.
+		if msg.String() == "ctrl+r" {
+			if m.configVisible {
+				m.configVisible = false
+			}
+			return m, m.startScan()
+		}
 		if m.configVisible {
 			return m.updateConfigPanel(msg)
 		}
@@ -348,10 +356,13 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.sequence == m.listSequence {
 			m.loading, m.err = false, msg.err
 			if msg.err == nil {
+				previousID := ""
+				if current, ok := m.selectedDocument(); ok {
+					previousID = current.ID
+				}
 				m.items = documentItems(msg.documents)
-				m.selected = 0
-				m.scrollTop = 0
 				m.refreshFilter()
+				m.restoreSelection(previousID)
 				if query := m.fullTextFilterQuery(); query != "" {
 					m.loading = true
 					commands = append(commands, m.spinner.Tick, searchDocumentsCmd(m.ctx, m.app, query))
@@ -374,7 +385,10 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case scanMsg:
 		m.loading, m.err = false, msg.err
 		if msg.err == nil {
-			commands = append(commands, listDocumentsCmd(m.ctx, m.app, m.listSequence))
+			m.listSequence++
+			m.loading = true
+			m.statusMessage = formatScanStatus(msg.report)
+			commands = append(commands, m.spinner.Tick, listDocumentsCmd(m.ctx, m.app, m.listSequence))
 		}
 	case editReadyMsg:
 		m.loading, m.err = false, msg.err
@@ -1177,8 +1191,7 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "r":
-		m.loading = true
-		commands = append(commands, m.spinner.Tick, scanCmd(m.ctx, m.app))
+		return m, m.startScan()
 	case "e":
 		if document, ok := m.selectedDocument(); ok {
 			m.loading = true
@@ -1622,6 +1635,39 @@ func (m *Model) refreshFilter() {
 		m.selected = len(m.filtered) - 1
 	}
 	m.keepSelectionVisible()
+}
+
+// startScan runs path scan then reloads the document tree (ctrl+r / r).
+func (m *Model) startScan() tea.Cmd {
+	m.loading = true
+	m.err = nil
+	m.statusMessage = "scanning…"
+	m.deleteConfirm = false
+	return tea.Batch(m.spinner.Tick, scanCmd(m.ctx, m.app))
+}
+
+func (m *Model) restoreSelection(documentID string) {
+	if len(m.filtered) == 0 {
+		m.selected = 0
+		m.scrollTop = 0
+		return
+	}
+	if documentID != "" {
+		for index, candidate := range m.filtered {
+			if candidate.document.ID == documentID {
+				m.selected = index
+				m.keepSelectionVisible()
+				return
+			}
+		}
+	}
+	m.selected = 0
+	m.scrollTop = 0
+	m.keepSelectionVisible()
+}
+
+func formatScanStatus(report membox.ScanReport) string {
+	return fmt.Sprintf("scan +%d ~%d missing=%d files=%d", report.Added, report.Updated, report.Missing, report.Files)
 }
 
 func (m *Model) applyPinnedState(documentID string, pinned bool) {
@@ -2482,7 +2528,7 @@ func (m Model) hints() string {
 	if m.sortMode == sortModeTime {
 		sortLabel = "newest"
 	}
-	return "s sort:" + sortLabel + " • v " + m.viewerMode + " • p pin • d del • space×2 input • ctrl+o cfg • enter open • ctrl+d quit"
+	return "s sort:" + sortLabel + " • v " + m.viewerMode + " • p pin • d del • space×2 input • ctrl+o cfg • ctrl+r scan • enter open • ctrl+d quit"
 }
 
 func searchResultItems(items []item, results []membox.SearchResult, dateFilters []dateFilter, nameQueries []string) []item {
