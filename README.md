@@ -35,6 +35,7 @@ go build -o mm ./cmd/mm
 ./mm topic add <topic-id> <document-id>
 ./mm link add <from-id> <to-id>
 ./mm link list <document-id>
+./mm link graph <document-id>
 ./mm path scan
 ./mm path scan --timestamp=git
 ./mm index status
@@ -111,11 +112,14 @@ topic documents <topic-id>
 link add <from-id> <to-id>
 link remove <from-id> <to-id>
 link list <document-id>
+link graph <document-id>
 ```
 
 Use `/clear` in `NAME`/`FULL` mode to remove all filter tags.
 
 In `CMD` mode, `link list <document-id>` opens a graph-focused board. The focused document appears first, followed by forward and backward linked cards; direction markers distinguish `→` outgoing from `←` incoming. Press `q` to leave the graph focus and return to the tree.
+
+`link graph <document-id>` opens the one-hop canvas graph instead: backlinks fill the left column, the focused document sits in the center (with its topics below), and outgoing links fill the right column. Use `h`/`l` to hop between columns, `j`/`k` to move within one, and `enter` to open the selected card. On narrow terminals it falls back to the thread layout.
 
 `@selected` refers to the currently selected document in argument positions.
 
@@ -139,6 +143,9 @@ Topics are ordinary root-level `topic-*.md` documents, so they can be searched, 
 ./mm link add <from-id> <to-id>
 ./mm link remove <from-id> <to-id>
 ./mm link list <document-id>
+./mm link graph <document-id>            # one-hop neighborhood (links + backlinks)
+./mm link graph <document-id> --depth 2  # expand two hops
+./mm link graph <document-id> --json     # nodes[] + edges[] for tooling
 
 # document -> topic memberships
 ./mm topic create attention
@@ -148,7 +155,7 @@ Topics are ordinary root-level `topic-*.md` documents, so they can be searched, 
 ./mm topic documents <topic-id>
 ```
 
-A document can belong to multiple topics, and a topic can contain multiple documents. `link list` shows outgoing links, incoming links, and assigned topics.
+A document can belong to multiple topics, and a topic can contain multiple documents. `link list` shows outgoing links, incoming links, and assigned topics. `link graph` walks the same edges as a neighborhood: `--depth N` expands N hops in both directions, and `--json` emits `{focus, nodes[], edges[]}` so external tools can render their own visualization.
 
 ## Web view
 

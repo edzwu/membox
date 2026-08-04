@@ -554,6 +554,50 @@ func (b *Box) GetDocumentGraph(ctx context.Context, query GetDocumentGraphQuery)
 	return result, nil
 }
 
+type GetNeighborhoodQuery struct {
+	Selector string
+	Depth    int
+}
+
+type NeighborhoodNodeView struct {
+	DocumentView
+	Distance int `json:"distance"`
+}
+
+type NeighborhoodEdgeView struct {
+	FromID string `json:"from"`
+	ToID   string `json:"to"`
+}
+
+type NeighborhoodView struct {
+	Focus DocumentView           `json:"focus"`
+	Depth int                    `json:"depth"`
+	Nodes []NeighborhoodNodeView `json:"nodes"`
+	Edges []NeighborhoodEdgeView `json:"edges"`
+}
+
+// GetNeighborhood returns every document within Depth link hops of the
+// selector (links and backlinks alike) plus the directed edges between them.
+func (b *Box) GetNeighborhood(ctx context.Context, query GetNeighborhoodQuery) (NeighborhoodView, error) {
+	neighborhood, err := b.service.GetDocumentNeighborhood(ctx, query.Selector, query.Depth)
+	if err != nil {
+		return NeighborhoodView{}, err
+	}
+	view := NeighborhoodView{
+		Focus: documentView(neighborhood.Focus, neighborhood.FocusPath),
+		Depth: neighborhood.Depth,
+		Nodes: make([]NeighborhoodNodeView, 0, len(neighborhood.Nodes)),
+		Edges: make([]NeighborhoodEdgeView, 0, len(neighborhood.Edges)),
+	}
+	for _, node := range neighborhood.Nodes {
+		view.Nodes = append(view.Nodes, NeighborhoodNodeView{DocumentView: documentView(node.Document, node.Path), Distance: node.Distance})
+	}
+	for _, edge := range neighborhood.Edges {
+		view.Edges = append(view.Edges, NeighborhoodEdgeView{FromID: string(edge.From), ToID: string(edge.To)})
+	}
+	return view, nil
+}
+
 type ReadDocumentQuery struct{ Selector string }
 
 func (b *Box) ReadDocument(ctx context.Context, query ReadDocumentQuery) ([]byte, error) {

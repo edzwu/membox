@@ -11,7 +11,7 @@ import (
 
 func newLinkCommand(runtime *runtime) *cobra.Command {
 	link := parentCommand("link", "Manage document links", "a link command is required")
-	link.AddCommand(newLinkAddCommand(runtime), newLinkRemoveCommand(runtime), newLinkListCommand(runtime))
+	link.AddCommand(newLinkAddCommand(runtime), newLinkRemoveCommand(runtime), newLinkListCommand(runtime), newLinkGraphCommand(runtime))
 	return link
 }
 
@@ -95,6 +95,65 @@ func newLinkListCommand(runtime *runtime) *cobra.Command {
 		return nil
 	}
 	return command
+}
+
+func newLinkGraphCommand(runtime *runtime) *cobra.Command {
+	var jsonOutput bool
+	var depth int
+	command := &cobra.Command{Use: "graph <document-id>", Short: "Show the link graph around a document", Args: exactArgs(1, "document ID")}
+	command.Flags().BoolVar(&jsonOutput, "json", false, "output JSON")
+	command.Flags().IntVar(&depth, "depth", 1, "link distance to expand (1 = direct links and backlinks)")
+	command.RunE = func(cmd *cobra.Command, args []string) error {
+		box, err := runtime.get()
+		if err != nil {
+			return err
+		}
+		view, err := box.GetNeighborhood(cmd.Context(), membox.GetNeighborhoodQuery{Selector: args[0], Depth: depth})
+		if err != nil {
+			return err
+		}
+		if jsonOutput {
+			return writeJSON(cmd, view)
+		}
+		printNeighborhood(cmd, view)
+		return nil
+	}
+	return command
+}
+
+func printNeighborhood(cmd *cobra.Command, view membox.NeighborhoodView) {
+	out := cmd.OutOrStdout()
+	fmt.Fprintf(out, "Focus: %s  %s  (depth %d)\n", shortID(view.Focus.ID), displayName(view.Focus.Title, view.Focus.Path), view.Depth)
+	fmt.Fprintf(out, "Nodes: %d  Edges: %d\n", len(view.Nodes), len(view.Edges))
+	outgoing := map[string]bool{}
+	incoming := map[string]bool{}
+	for _, edge := range view.Edges {
+		if edge.FromID == view.Focus.ID {
+			outgoing[edge.ToID] = true
+		}
+		if edge.ToID == view.Focus.ID {
+			incoming[edge.FromID] = true
+		}
+	}
+	for _, node := range view.Nodes {
+		if node.Distance == 0 {
+			continue
+		}
+		marker := "·"
+		if node.Distance == 1 {
+			switch {
+			case outgoing[node.ID] && incoming[node.ID]:
+				marker = "⇄"
+			case outgoing[node.ID]:
+				marker = "→"
+			case incoming[node.ID]:
+				marker = "←"
+			}
+		} else {
+			marker = fmt.Sprintf("%d·", node.Distance)
+		}
+		fmt.Fprintf(out, "  %s %s  %s\n", marker, shortID(node.ID), displayName(node.Title, node.Path))
+	}
 }
 
 func printDocumentLinks(cmd *cobra.Command, graph membox.DocumentGraphView, preview func(selector string) string) {

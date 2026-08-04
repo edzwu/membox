@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode"
@@ -1070,6 +1071,99 @@ func documentLinks(records []port.DocumentRecord) []catalog.DocumentLink {
 		links = append(links, catalog.DocumentLink{Document: record.Document, Path: record.AbsolutePath})
 	}
 	return links
+}
+
+// NeighborhoodNode is one document discovered by the neighborhood walk, with
+// the link distance from the focus document.
+type NeighborhoodNode struct {
+	Document *catalog.Document
+	Path     string
+	Distance int
+}
+
+// NeighborhoodEdge is a directed manual link between two discovered documents.
+type NeighborhoodEdge struct {
+	From catalog.DocumentID
+	To   catalog.DocumentID
+}
+
+// Neighborhood is the document subgraph reachable within `depth` link hops.
+type Neighborhood struct {
+	Focus     *catalog.Document
+	FocusPath string
+	Depth     int
+	Nodes     []NeighborhoodNode
+	Edges     []NeighborhoodEdge
+}
+
+// GetDocumentNeighborhood walks the manual link graph outward from the focus
+// document (links and backlinks alike) up to `depth` hops and returns every
+// discovered document plus the edges between them. Depth < 1 is treated as 1.
+func (s *Service) GetDocumentNeighborhood(ctx context.Context, selector string, depth int) (Neighborhood, error) {
+	if depth < 1 {
+		depth = 1
+	}
+	focus, focusPath, err := s.ResolveDocument(ctx, selector)
+	if err != nil {
+		return Neighborhood{}, err
+	}
+	nodes := map[catalog.DocumentID]NeighborhoodNode{focus.ID: {Document: focus, Path: focusPath, Distance: 0}}
+	edgeSet := map[string]NeighborhoodEdge{}
+	addEdge := func(from, to catalog.DocumentID) {
+		key := string(from) + "\x00" + string(to)
+		edgeSet[key] = NeighborhoodEdge{From: from, To: to}
+	}
+	frontier := []catalog.DocumentID{focus.ID}
+	for distance := 1; distance <= depth && len(frontier) > 0; distance++ {
+		var next []catalog.DocumentID
+		for _, id := range frontier {
+			outgoing, incoming, _, graphErr := s.store.GetDocumentGraph(ctx, id)
+			if graphErr != nil {
+				return Neighborhood{}, graphErr
+			}
+			for _, record := range outgoing {
+				if record.Document == nil {
+					continue
+				}
+				if _, seen := nodes[record.Document.ID]; !seen {
+					nodes[record.Document.ID] = NeighborhoodNode{Document: record.Document, Path: record.AbsolutePath, Distance: distance}
+					next = append(next, record.Document.ID)
+				}
+				addEdge(id, record.Document.ID)
+			}
+			for _, record := range incoming {
+				if record.Document == nil {
+					continue
+				}
+				if _, seen := nodes[record.Document.ID]; !seen {
+					nodes[record.Document.ID] = NeighborhoodNode{Document: record.Document, Path: record.AbsolutePath, Distance: distance}
+					next = append(next, record.Document.ID)
+				}
+				addEdge(record.Document.ID, id)
+			}
+		}
+		frontier = next
+	}
+	result := Neighborhood{Focus: focus, FocusPath: focusPath, Depth: depth}
+	for _, node := range nodes {
+		result.Nodes = append(result.Nodes, node)
+	}
+	sort.Slice(result.Nodes, func(i, j int) bool {
+		if result.Nodes[i].Distance != result.Nodes[j].Distance {
+			return result.Nodes[i].Distance < result.Nodes[j].Distance
+		}
+		return result.Nodes[i].Path < result.Nodes[j].Path
+	})
+	for _, edge := range edgeSet {
+		result.Edges = append(result.Edges, edge)
+	}
+	sort.Slice(result.Edges, func(i, j int) bool {
+		if result.Edges[i].From != result.Edges[j].From {
+			return result.Edges[i].From < result.Edges[j].From
+		}
+		return result.Edges[i].To < result.Edges[j].To
+	})
+	return result, nil
 }
 
 func (s *Service) ListTopicDocuments(ctx context.Context, selector string) (*catalog.Document, string, []catalog.DocumentLink, error) {

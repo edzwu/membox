@@ -765,6 +765,52 @@ func TestModel_LinkListShowsGraphFocusCardsByDirection(t *testing.T) {
 	}
 }
 
+func TestModel_LinkGraphDrawsStarCanvasAndNavigatesColumns(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.width, model.height = 140, 40
+	focus := membox.DocumentView{ID: "focus", Title: "Focus", Path: "/tmp/focus.md", Summary: "focus summary"}
+	outgoing := membox.DocumentView{ID: "out", Title: "Outgoing", Path: "/tmp/out.md", Summary: "out summary"}
+	incoming := membox.DocumentView{ID: "in", Title: "Incoming", Path: "/tmp/in.md", Summary: "in summary"}
+	updated, _ := model.Update(graphFocusMsg{
+		documentID: focus.ID,
+		cards:      []membox.DocumentView{focus, outgoing, incoming},
+		incoming:   1,
+		layout:     "star",
+		topics:     []membox.TopicView{{ID: "t1", Name: "research"}},
+	})
+	model = updated.(Model)
+	if model.graphLayout != "star" || model.viewMode != viewBoard {
+		t.Fatalf("star graph did not enter board mode: layout=%s mode=%s", model.graphLayout, model.viewMode)
+	}
+	if model.graphSelected != 1 {
+		t.Fatalf("star selection should start on the focus card: selected=%d", model.graphSelected)
+	}
+	view := model.View()
+	if !strings.Contains(view, "#research") {
+		t.Fatalf("star canvas missing topics: %q", view)
+	}
+	// One right-hop moves from the focus card into the outgoing column.
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	model = updated.(Model)
+	visIn, visOut := model.visibleStarSegments()
+	if len(visOut) != 1 || model.graphCards[visOut[0]].ID != "out" || model.graphSelected != len(visIn)+1 {
+		t.Fatalf("star selection did not land on outgoing: selected=%d visIn=%v visOut=%v", model.graphSelected, visIn, visOut)
+	}
+	// Left hops back through focus into the backlinks column.
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	model = updated.(Model)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	model = updated.(Model)
+	if model.graphSelected != 0 {
+		t.Fatalf("star selection did not return to backlinks: selected=%d", model.graphSelected)
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	model = updated.(Model)
+	if model.graphFocusID != "" || model.graphLayout != "" || model.viewMode != viewTree {
+		t.Fatalf("q did not leave star graph: focus=%s layout=%s mode=%s", model.graphFocusID, model.graphLayout, model.viewMode)
+	}
+}
+
 func TestModel_FilterNarrowsResults(t *testing.T) {
 	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
 	model.items = documentItems([]membox.DocumentView{

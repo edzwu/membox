@@ -105,6 +105,8 @@ type graphFocusMsg struct {
 	incoming   int
 	err        error
 	previews   map[string]string
+	layout     string
+	topics     []membox.TopicView
 }
 
 type Model struct {
@@ -164,6 +166,10 @@ type Model struct {
 	// Selection while walking the thread tree (index into graphCards).
 	graphSelected int
 	graphPreviews map[string]string
+	// graphLayout is "thread" (the linear link list) or "star" (the one-hop
+	// canvas graph: backlinks left, focus center, links right).
+	graphLayout string
+	graphTopics []membox.TopicView
 	// Full-text filtering for the thread tree: name-mode filters match
 	// filenames live; full-mode hits arrive async from SearchDocuments.
 	graphSearchSequence uint64
@@ -299,7 +305,8 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if m.helpVisible {
 			return m.updateHelp(msg)
 		}
-		if msg.String() == "h" && !m.configVisible && !m.inputActive {
+		// "h" opens help, except while walking a graph where h/l navigate.
+		if msg.String() == "h" && !m.configVisible && !m.inputActive && m.graphFocusID == "" {
 			m.helpVisible, m.helpScroll = true, 0
 			return m, nil
 		}
@@ -509,10 +516,18 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.graphCards = msg.cards
 			m.graphIncoming = msg.incoming
 			m.graphPreviews = msg.previews
+			m.graphLayout = msg.layout
+			m.graphTopics = msg.topics
 			m.graphSelected = 0
 			m.viewMode = viewBoard
 			m.boardScrollY = 0
 			m.statusMessage = "graph focus " + shortID(msg.documentID)
+			if m.graphLayout == "star" {
+				// Star selection order is incoming…, focus, outgoing… — land on
+				// the focus card.
+				m.graphSelected = msg.incoming
+				m.statusMessage += " · star (h/l switch sides, enter opens)"
+			}
 			m.graphSearchQuery, m.graphSearchHits = "", nil
 			// An already-active full-text filter applies to the fresh thread too.
 			if query := m.fullTextFilterQuery(); query != "" {
@@ -1105,7 +1120,12 @@ func (m Model) commandAction(tokens []string) (func() tea.Msg, string, error) {
 			if len(tokens) != 3 {
 				return nil, "link list <document-id>", fmt.Errorf("document is required")
 			}
-			return graphFocusCmd(m.ctx, m.app, selector(tokens[2])), "link list <document-id>", nil
+			return graphFocusCmd(m.ctx, m.app, selector(tokens[2]), "thread"), "link list <document-id>", nil
+		case "graph":
+			if len(tokens) != 3 {
+				return nil, "link graph <document-id>", fmt.Errorf("document is required")
+			}
+			return graphFocusCmd(m.ctx, m.app, selector(tokens[2]), "star"), "link graph <document-id>", nil
 		}
 	case "rename":
 		// Rename operates on the highlighted document so the command stays a
@@ -1154,7 +1174,7 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// opens the focused one (and re-focuses the graph on it afterwards).
 	if m.graphFocusID != "" {
 		switch msg.String() {
-		case "up", "down", "left", "right", "k", "j", "l", "pgup", "pgdown", "home", "end":
+		case "up", "down", "left", "right", "h", "k", "j", "l", "pgup", "pgdown", "home", "end":
 			m.moveGraphSelection(msg.String())
 			return m, nil
 		case "enter":
@@ -1170,6 +1190,7 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.graphIncoming = 0
 			m.graphSelected = 0
 			m.graphSearchQuery, m.graphSearchHits = "", nil
+			m.graphLayout, m.graphTopics = "", nil
 			m.viewMode = viewTree
 			m.keepSelectionVisible()
 		} else if m.viewMode == viewBoard {
@@ -1218,6 +1239,7 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.graphSelected = 0
 		m.graphIncoming = 0
 		m.graphSearchQuery, m.graphSearchHits = "", nil
+		m.graphLayout, m.graphTopics = "", nil
 		if m.viewMode == viewTree {
 			m.viewMode = viewBoard
 			// Snap the highlight to a card that is actually drawn on the board.
@@ -2329,7 +2351,13 @@ func (m Model) boardView() string {
 }
 
 func (m Model) graphBoardView() string {
-	rows, _ := m.graphRows()
+	var rows []string
+	if m.graphLayout == "star" {
+		rows, _ = m.graphStarRows()
+	}
+	if len(rows) == 0 {
+		rows, _ = m.graphRows()
+	}
 	if len(rows) == 0 {
 		return dimStyle.Render("No linked documents.")
 	}
@@ -2464,15 +2492,138 @@ func (m Model) graphRows() ([]string, []int) {
 	return lines, starts
 }
 
+// visibleStarSegments returns the graphCards indexes of the filtered incoming
+// and outgoing neighbors (focus is always visible and sits between them).
+func (m Model) visibleStarSegments() ([]int, []int) {
+	visible := map[string]bool{}
+	for _, idx := range m.visibleGraphIndices() {
+		visible[m.graphCards[idx].ID] = true
+	}
+	outCount := len(m.graphCards) - 1 - m.graphIncoming
+	var incoming, outgoing []int
+	for i := 0; i < m.graphIncoming; i++ {
+		idx := 1 + outCount + i
+		if visible[m.graphCards[idx].ID] {
+			incoming = append(incoming, idx)
+		}
+	}
+	for i := 0; i < outCount; i++ {
+		idx := 1 + i
+		if visible[m.graphCards[idx].ID] {
+			outgoing = append(outgoing, idx)
+		}
+	}
+	return incoming, outgoing
+}
+
+// graphStarRows lays out the one-hop neighborhood as a star canvas: backlinks
+// in the left column, the focus card (plus topics) in the center, links in
+// the right column, with an arrow connector at the focus row. Starts align
+// with the star selection order: incoming…, focus, outgoing…. Returns nil
+// when the terminal is too narrow for three columns (callers fall back to the
+// thread tree).
+func (m Model) graphStarRows() ([]string, []int) {
+	if len(m.graphCards) == 0 {
+		return nil, nil
+	}
+	const connectorW = 3
+	avail := m.width - 2*connectorW - 4
+	if avail/3 < 20 {
+		return nil, nil
+	}
+	colW := min(38, avail/3)
+
+	visIn, visOut := m.visibleStarSegments()
+	focusStarIndex := len(visIn)
+
+	renderColumn := func(cardIdxs []int, starBase int) ([]string, []int) {
+		var rows []string
+		var starts []int
+		for i, idx := range cardIdxs {
+			starts = append(starts, len(rows))
+			candidate := documentItems([]membox.DocumentView{m.graphCards[idx]})[0]
+			rows = append(rows, m.renderCard(candidate, colW, starBase+i == m.graphSelected)...)
+			rows = append(rows, "")
+		}
+		return rows, starts
+	}
+
+	leftRows, inStarts := renderColumn(visIn, 0)
+	rightRows, outStarts := renderColumn(visOut, focusStarIndex+1)
+
+	focusItem := documentItems([]membox.DocumentView{m.graphCards[0]})[0]
+	focusRows := m.renderCard(focusItem, colW, m.graphSelected == focusStarIndex)
+	focusCardHeight := len(focusRows)
+	if len(m.graphTopics) > 0 {
+		names := make([]string, 0, len(m.graphTopics))
+		for _, topic := range m.graphTopics {
+			names = append(names, "#"+topic.Name)
+		}
+		for _, line := range wrapText(strings.Join(names, " "), colW-2) {
+			focusRows = append(focusRows, dimStyle.Render(line))
+		}
+	}
+
+	height := max(len(leftRows), len(focusRows), len(rightRows))
+	pad := func(rows []string) []string {
+		for len(rows) < height {
+			rows = append(rows, strings.Repeat(" ", colW))
+		}
+		return rows
+	}
+	leftRows, focusRows, rightRows = pad(leftRows), pad(focusRows), pad(rightRows)
+
+	// Arrow connectors point into the focus card (backlinks) and out of it
+	// (links), drawn at the vertical center of the focus card.
+	blankConn := strings.Repeat(" ", connectorW)
+	leftConn := make([]string, height)
+	rightConn := make([]string, height)
+	for i := 0; i < height; i++ {
+		leftConn[i], rightConn[i] = blankConn, blankConn
+	}
+	// Place the arrows at the vertical center of the focus card body, not the
+	// topic lines appended below it.
+	mid := min(height-1, max(0, focusCardHeight/2))
+	leftConn[mid] = "──→"
+	rightConn[mid] = "─→ "
+
+	rows := make([]string, height)
+	for i := 0; i < height; i++ {
+		rows[i] = leftRows[i] + leftConn[i] + focusRows[i] + rightConn[i] + rightRows[i]
+	}
+
+	starts := make([]int, 0, len(inStarts)+1+len(outStarts))
+	starts = append(starts, inStarts...)
+	starts = append(starts, 0)
+	starts = append(starts, outStarts...)
+	return rows, starts
+}
+
 // openGraphSelection opens the focused thread-tree card with the configured
 // viewer. The tree keeps its original root — opening a linked document never
 // re-roots the graph.
 func (m Model) openGraphSelection() (tea.Model, tea.Cmd) {
-	visible := m.visibleGraphIndices()
-	if m.graphSelected < 0 || m.graphSelected >= len(visible) {
-		return m, nil
+	var target membox.DocumentView
+	if m.graphLayout == "star" {
+		visIn, visOut := m.visibleStarSegments()
+		p := m.graphSelected
+		switch {
+		case p >= 0 && p < len(visIn):
+			target = m.graphCards[visIn[p]]
+		case p == len(visIn):
+			target = m.graphCards[0]
+		case p > len(visIn) && p-len(visIn)-1 < len(visOut):
+			target = m.graphCards[visOut[p-len(visIn)-1]]
+		default:
+			return m, nil
+		}
+	} else {
+		visible := m.visibleGraphIndices()
+		if m.graphSelected < 0 || m.graphSelected >= len(visible) {
+			return m, nil
+		}
+		target = m.graphCards[visible[m.graphSelected]]
 	}
-	target := m.graphCards[visible[m.graphSelected]]
 	m.loading = true
 	if m.viewerMode == "web" {
 		return m, tea.Batch(m.spinner.Tick, openDocumentWebCmd(m.ctx, m.app, m.launcher, target.ID))
@@ -2480,8 +2631,75 @@ func (m Model) openGraphSelection() (tea.Model, tea.Cmd) {
 	return m, tea.Batch(m.spinner.Tick, resolveViewerCmd(m.ctx, m.app, target.ID))
 }
 
+// moveStarSelection walks the star canvas: up/down stay inside a column,
+// left/right hop between backlinks, focus, and links.
+func (m *Model) moveStarSelection(key string) {
+	visIn, visOut := m.visibleStarSegments()
+	inN, outN := len(visIn), len(visOut)
+	total := inN + 1 + outN
+	if total == 0 {
+		return
+	}
+	if m.graphSelected < 0 {
+		m.graphSelected = 0
+	}
+	if m.graphSelected > total-1 {
+		m.graphSelected = total - 1
+	}
+	var segs [][2]int
+	if inN > 0 {
+		segs = append(segs, [2]int{0, inN - 1})
+	}
+	segs = append(segs, [2]int{inN, inN})
+	if outN > 0 {
+		segs = append(segs, [2]int{inN + 1, total - 1})
+	}
+	current := 0
+	for i, seg := range segs {
+		if m.graphSelected >= seg[0] && m.graphSelected <= seg[1] {
+			current = i
+		}
+	}
+	pos := m.graphSelected - segs[current][0]
+	size := segs[current][1] - segs[current][0]
+	switch key {
+	case "up", "k":
+		if pos > 0 {
+			pos--
+		}
+	case "down", "j":
+		if pos < size {
+			pos++
+		}
+	case "left", "h":
+		if current > 0 {
+			current--
+			pos = min(pos, segs[current][1]-segs[current][0])
+		}
+	case "right", "l":
+		if current < len(segs)-1 {
+			current++
+			pos = min(pos, segs[current][1]-segs[current][0])
+		}
+	case "pgup":
+		pos = max(0, pos-5)
+	case "pgdown":
+		pos = min(size, pos+5)
+	case "home":
+		current, pos = 0, 0
+	case "end":
+		current, pos = len(segs)-1, segs[len(segs)-1][1]-segs[len(segs)-1][0]
+	}
+	m.graphSelected = segs[current][0] + pos
+	m.scrollGraphToSelection()
+}
+
 // moveGraphSelection walks the thread-tree selection and keeps it in view.
 func (m *Model) moveGraphSelection(key string) {
+	if m.graphLayout == "star" {
+		m.moveStarSelection(key)
+		return
+	}
 	n := len(m.visibleGraphIndices())
 	if n == 0 {
 		return
@@ -2516,7 +2734,14 @@ func (m *Model) moveGraphSelection(key string) {
 // scrollGraphToSelection adjusts boardScrollY so the selected thread card is
 // visible.
 func (m *Model) scrollGraphToSelection() {
-	rows, starts := m.graphRows()
+	var rows []string
+	var starts []int
+	if m.graphLayout == "star" {
+		rows, starts = m.graphStarRows()
+	}
+	if len(rows) == 0 {
+		rows, starts = m.graphRows()
+	}
 	if len(starts) == 0 {
 		m.boardScrollY = 0
 		return
@@ -2560,8 +2785,9 @@ func (m *Model) threadSearchCmd(query string) tea.Cmd {
 }
 
 // graphFocusCmd loads a document's link graph (with body previews) so it can
-// be walked as a thread tree.
-func graphFocusCmd(ctx context.Context, app App, selectorValue string) tea.Cmd {
+// be walked as a thread tree or drawn as a one-hop star canvas. layout is
+// "thread" or "star".
+func graphFocusCmd(ctx context.Context, app App, selectorValue string, layout string) tea.Cmd {
 	return func() tea.Msg {
 		graph, err := app.GetDocumentGraph(ctx, membox.GetDocumentGraphQuery{Selector: selectorValue})
 		if err != nil {
@@ -2580,7 +2806,7 @@ func graphFocusCmd(ctx context.Context, app App, selectorValue string) tea.Cmd {
 				}
 			}
 		}
-		return graphFocusMsg{documentID: graph.Focus.ID, cards: cards, incoming: len(graph.Incoming), previews: previews}
+		return graphFocusMsg{documentID: graph.Focus.ID, cards: cards, incoming: len(graph.Incoming), previews: previews, layout: layout, topics: graph.Topics}
 	}
 }
 
