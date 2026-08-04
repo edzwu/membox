@@ -29,65 +29,30 @@ type helpSection struct {
 	entries []helpEntry
 }
 
-// helpSections lists every binding grouped by the surface it belongs to. Keep
-// this in sync with the key handling in model.go.
+// helpSections lists the essential bindings only — one screen, no scroll.
+// Keep this in sync with the key handling in model.go.
 func helpSections() []helpSection {
 	return []helpSection{
-		{title: "General", entries: []helpEntry{
-			{"ctrl+d", "quit"},
-			{"ctrl+r", "rescan paths"},
-			{"ctrl+o", "settings panel"},
-			{":", "command palette"},
+		{title: "Browse", entries: []helpEntry{
+			{"j k", "move selection"},
+			{"enter / tab", "open document / tree ⇄ board"},
+			{"space", "details · ×2 opens filter input"},
+			{"e / o / d", "edit / open app / move to trash"},
+			{"p / s / h", "pin / sort / toggle *-note.md"},
+			{"q", "back"},
+		}},
+		{title: "Filter & commands", entries: []helpEntry{
+			{":", "palette: note new, rename, link list/graph …"},
+			{"tab", "in input: name ⇄ full-text search"},
 			{"ctrl+k", "agent input"},
-			{"?", "open this help"},
-			{"esc", "close this help"},
 		}},
-		{title: "Browse (tree / board)", entries: []helpEntry{
-			{"↑ ↓ / j k", "move selection"},
-			{"pgup / pgdn", "page up / down"},
-			{"home / end", "first / last"},
-			{"tab", "tree ⇄ board"},
-			{"enter", "open document"},
-			{"e", "edit in $EDITOR"},
-			{"o", "open with system app"},
-			{"space / space×2", "details / filter input"},
-			{"s", "sort: name ⇄ newest"},
-			{"p", "pin / unpin"},
-			{"d", "move to trash"},
-			{"h", "toggle *-note.md visibility"},
-			{"q", "back / close panels"},
-		}},
-		{title: "Filter input", entries: []helpEntry{
-			{"space", "add date tag"},
-			{"enter", "add text tag / open"},
-			{"tab", "name ⇄ full-text search"},
-			{"backspace", "remove last tag"},
-			{"ctrl+u", "clear line"},
-			{"ctrl+p", "cycle: name ⇄ cmd ⇄ agent"},
-			{"esc", "hide input"},
-		}},
-		{title: "Command palette", entries: []helpEntry{
-			{"↑ ↓", "history / menu selection"},
-			{"tab", "show suggestions"},
-			{"enter", "run command"},
-			{"esc", "close menu / hide input"},
-		}},
-		{title: "Settings panel", entries: []helpEntry{
-			{"↑ ↓", "select setting"},
-			{"← →", "cycle value (saves)"},
-			{"esc / enter", "close"},
-		}},
-		{title: "Link thread", entries: []helpEntry{
-			{"← → ↑ ↓", "walk linked documents"},
-			{"space×2", "filter cards: name/full text"},
-			{"enter", "open focused document"},
+		{title: "Link graph", entries: []helpEntry{
+			{"h l / j k", "switch columns / move within · enter opens"},
 			{"q", "back to tree"},
 		}},
-		{title: "Fullscreen viewer", entries: []helpEntry{
-			{"j / k, ↑ ↓", "scroll"},
-			{"space / pgdn", "page down"},
-			{"g / shift+g", "top / bottom"},
-			{"q / esc", "back"},
+		{title: "General", entries: []helpEntry{
+			{"ctrl+o / ctrl+d", "settings / quit"},
+			{"esc", "close panels / this help"},
 		}},
 	}
 }
@@ -137,7 +102,7 @@ func (m Model) helpModal() []string {
 	scroll := min(max(0, m.helpScroll), max(0, len(content)-innerHeight))
 	window := content[scroll : scroll+innerHeight]
 	if scrollable {
-		window = append(window, dimStyle.Render(fmt.Sprintf("↑ ↓ scroll %d-%d/%d · h/esc close", scroll+1, scroll+innerHeight, len(content))))
+		window = append(window, dimStyle.Render(fmt.Sprintf("↑ ↓ scroll %d-%d/%d · esc close", scroll+1, scroll+innerHeight, len(content))))
 	}
 
 	box := lipgloss.NewStyle().
