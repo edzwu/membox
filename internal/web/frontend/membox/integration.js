@@ -56,6 +56,45 @@ function createConnectionButton() {
 
 const connectionButton = createConnectionButton();
 
+// Bottom-left status pill: while connected, tells whether the current document
+// already has a membox identity and shows the UUID suffix that identifies it.
+function createStatusBadge() {
+  const badge = document.createElement('button');
+  badge.type = 'button';
+  badge.id = 'membox-doc-status';
+  badge.className = 'membox-doc-status';
+  badge.hidden = true;
+  badge.innerHTML = '<span class="membox-status-dot" aria-hidden="true"></span><span class="membox-status-text"></span>';
+  document.body.appendChild(badge);
+  badge.addEventListener('click', () => {
+    if (!documentID || !navigator.clipboard) return;
+    navigator.clipboard.writeText(documentID)
+      .then(() => showToast(`Copied membox UUID: ${documentID}`))
+      .catch(() => {});
+  });
+  return badge;
+}
+
+const statusBadge = createStatusBadge();
+
+function renderDocStatus() {
+  if (!connected) {
+    statusBadge.hidden = true;
+    return;
+  }
+  const text = statusBadge.querySelector('.membox-status-text');
+  statusBadge.hidden = false;
+  if (documentID) {
+    statusBadge.dataset.saved = 'true';
+    text.textContent = `membox \u00b7 ${String(documentID).slice(-5)}`;
+    statusBadge.title = `Saved in membox \u00b7 ${documentID} (click to copy UUID)`;
+  } else {
+    statusBadge.dataset.saved = 'false';
+    text.textContent = 'membox \u00b7 unsaved';
+    statusBadge.title = 'Connected to membox \u2014 this document has not been saved yet';
+  }
+}
+
 function setDownloadMeaning() {
   if (!connected) {
     updateMarkdownDownloadControl();
@@ -79,6 +118,7 @@ function renderConnection() {
   connectionButton.setAttribute('aria-label', label);
   connectionButton.title = label;
   setDownloadMeaning();
+  renderDocStatus();
 }
 
 async function backendAvailable() {
@@ -112,6 +152,7 @@ function replaceDocumentID(id) {
   if (documentID) url.searchParams.set('id', documentID);
   else url.searchParams.delete('id');
   window.history.replaceState(null, '', url);
+  renderDocStatus();
 }
 
 // ---------------------------------------------------------------------------

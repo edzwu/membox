@@ -72,6 +72,61 @@
   to { transform: translateY(3px); }
 }
 
+/* Bottom-left document status: visible only while connected. Green dot +
+   UUID suffix means the current document lives in membox; a muted dot means
+   it is still an unsynced paste. */
+.membox-doc-status {
+  position: fixed;
+  left: 24px;
+  bottom: 24px;
+  z-index: 70;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px;
+  appearance: none;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--paper-raised);
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  box-shadow: 0 4px 16px var(--shadow);
+  cursor: default;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.membox-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+  flex: 0 0 auto;
+}
+
+.membox-doc-status[data-saved="true"] {
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+
+.membox-doc-status[data-saved="true"] .membox-status-dot {
+  background: #3f8b61;
+}
+
+.membox-doc-status[data-saved="true"]:hover {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
+  background: color-mix(in srgb, var(--accent-soft) 62%, var(--paper-raised));
+}
+
+@media (max-width: 768px) {
+  .membox-doc-status {
+    left: 12px;
+    bottom: 12px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .membox-connection.is-connecting::after,
   .download-all.is-syncing svg {
