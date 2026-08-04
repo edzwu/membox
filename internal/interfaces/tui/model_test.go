@@ -551,8 +551,8 @@ func TestModel_CtrlPCyclesInputModes(t *testing.T) {
 		}
 	}
 	status := model.statusBar()
-	if !strings.Contains(status, "ctrl+p full") {
-		t.Fatalf("status does not show current mode hint: %q", status)
+	if !strings.Contains(status, "h help") {
+		t.Fatalf("status does not show the single help hint: %q", status)
 	}
 }
 
@@ -1294,8 +1294,8 @@ func TestModel_ResultsHaveUUIDInStatus(t *testing.T) {
 	if !strings.Contains(status, "dabf") {
 		t.Fatalf("status bar does not contain UUID: %q", status)
 	}
-	if !strings.HasPrefix(strings.TrimLeft(status, " "), "s sort:newest") {
-		t.Fatalf("sort mode and shortcuts are not on the left: %q", status)
+	if !strings.HasPrefix(strings.TrimLeft(status, " "), "h help") {
+		t.Fatalf("single help hint is not on the left: %q", status)
 	}
 }
 
@@ -1323,7 +1323,7 @@ func TestModel_ViewUsesTerminalHeightExactly(t *testing.T) {
 	if len(lines) != model.height {
 		t.Fatalf("view height=%d terminal height=%d lines=%q", len(lines), model.height, lines)
 	}
-	if !strings.Contains(lines[len(lines)-1], "ctrl+p full") {
+	if !strings.Contains(lines[len(lines)-1], "h help") {
 		t.Fatalf("status bar is not bottom: %q", lines[len(lines)-1])
 	}
 	filter, err := parseDateFilter("+2026-07", time.Now())
@@ -1883,5 +1883,83 @@ func TestModel_HideNotesFiltersClippedNotes(t *testing.T) {
 	got := searchResultItems(model.items, results, nil, nil, model.hideNotes)
 	if len(got) != 1 || got[0].document.ID != "019-doc" {
 		t.Fatalf("search with hide_notes leaked notes: %+v", got)
+	}
+}
+
+func TestModel_HelpModalTogglesWithH(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.width, model.height = 100, 70
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	model = updated.(Model)
+	if !model.helpVisible {
+		t.Fatal("h did not open the help modal")
+	}
+	view := model.View()
+	if !strings.Contains(view, "Keyboard Help") {
+		t.Fatalf("help modal missing title")
+	}
+	for _, category := range []string{"General", "Browse (tree / board)", "Filter input", "Command palette", "Settings panel", "Link thread", "Fullscreen viewer"} {
+		if !strings.Contains(view, category) {
+			t.Fatalf("help modal missing category %q", category)
+		}
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model = updated.(Model)
+	if model.helpVisible {
+		t.Fatal("esc did not close the help modal")
+	}
+}
+
+func TestModel_HelpDoesNotOpenWhileTyping(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.width, model.height = 100, 30
+	space := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}}
+	updated, _ := model.Update(space)
+	model = updated.(Model)
+	updated, _ = model.Update(space)
+	model = updated.(Model)
+	if !model.inputVisible {
+		t.Fatal("double space did not open the filter input")
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	model = updated.(Model)
+	if model.helpVisible {
+		t.Fatal("h opened help while the filter input was active")
+	}
+	if model.input.Value() != "h" {
+		t.Fatalf("h was not typed into the filter input: %q", model.input.Value())
+	}
+}
+
+func TestModel_HelpModalKeepsUnderlyingContent(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.width, model.height = 100, 40
+	model.items = documentItems([]membox.DocumentView{{ID: "019-alpha", Title: "Alpha", Path: "/tmp/alpha.md", RelativePath: "alpha.md"}})
+	model.refreshFilter()
+
+	base := model.View()
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	model = updated.(Model)
+	withHelp := model.View()
+
+	if !strings.Contains(withHelp, "Keyboard Help") {
+		t.Fatal("help modal missing")
+	}
+	// Rows outside the modal rect are untouched: first content row and the
+	// status bar stay exactly as rendered without the panel.
+	baseLines := strings.Split(base, "\n")
+	helpLines := strings.Split(withHelp, "\n")
+	if len(helpLines) != len(baseLines) {
+		t.Fatalf("line count changed: %d vs %d", len(helpLines), len(baseLines))
+	}
+	if helpLines[0] != baseLines[0] {
+		t.Fatalf("top row modified by modal:\nbefore %q\nafter  %q", baseLines[0], helpLines[0])
+	}
+	if !strings.Contains(helpLines[0], "alpha.md") {
+		t.Fatalf("underlying tree content lost: %q", helpLines[0])
+	}
+	last := len(baseLines) - 1
+	if helpLines[last] != baseLines[last] {
+		t.Fatalf("status bar modified by modal:\nbefore %q\nafter  %q", baseLines[last], helpLines[last])
 	}
 }

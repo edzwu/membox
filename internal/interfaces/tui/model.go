@@ -161,8 +161,10 @@ type Model struct {
 	graphCards     []membox.DocumentView
 	graphIncoming  int
 	// Selection while walking the thread tree (index into graphCards).
-	graphSelected    int
-	graphPreviews  map[string]string
+	graphSelected int
+	graphPreviews map[string]string
+	helpVisible   bool
+	helpScroll    int
 }
 
 type searchMsg struct {
@@ -276,6 +278,13 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+d" {
 			return m, tea.Quit
+		}
+		if m.helpVisible {
+			return m.updateHelp(msg)
+		}
+		if msg.String() == "h" && !m.configVisible && !m.inputActive {
+			m.helpVisible, m.helpScroll = true, 0
+			return m, nil
 		}
 		if msg.String() == "ctrl+o" {
 			m.configVisible = !m.configVisible
@@ -1083,7 +1092,7 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// opens the focused one (and re-focuses the graph on it afterwards).
 	if m.graphFocusID != "" {
 		switch msg.String() {
-		case "up", "down", "left", "right", "k", "j", "h", "l", "pgup", "pgdown", "home", "end":
+		case "up", "down", "left", "right", "k", "j", "l", "pgup", "pgdown", "home", "end":
 			m.moveGraphSelection(msg.String())
 			return m, nil
 		case "enter":
@@ -1869,7 +1878,11 @@ func (m Model) layoutWidths() (int, int) {
 
 func (m Model) View() string {
 	if m.fullscreen {
-		return m.fullscreenView()
+		view := m.fullscreenView()
+		if m.helpVisible {
+			view = overlayModal(view, m.helpModal(), m.width)
+		}
+		return view
 	}
 	contentHeight := m.visibleRows()
 	var content string
@@ -1899,7 +1912,11 @@ func (m Model) View() string {
 		parts = append(parts, m.inputView())
 	}
 	parts = append(parts, m.statusBar())
-	return strings.Join(parts, "\n")
+	view := strings.Join(parts, "\n")
+	if m.helpVisible {
+		view = overlayModal(view, m.helpModal(), m.width)
+	}
+	return view
 }
 
 func (m Model) detailsView() string {
@@ -2353,7 +2370,7 @@ func (m *Model) moveGraphSelection(key string) {
 		m.graphSelected = n - 1
 	}
 	switch key {
-	case "up", "left", "k", "h":
+	case "up", "left", "k":
 		if m.graphSelected > 0 {
 			m.graphSelected--
 		}
@@ -2655,34 +2672,10 @@ func (m Model) modeBadge() string {
 	return lipgloss.NewStyle().Background(background).Foreground(foreground).Bold(true).Inline(true).Render(mode)
 }
 
+// hints keeps the status bar quiet: every binding lives in the centered help
+// modal (press h), which groups shortcuts by the surface they belong to.
 func (m Model) hints() string {
-	if m.inputVisible {
-		switch m.inputMode {
-		case inputModeCmd:
-			if m.cmdMenuVisible {
-				return "command • ↑↓ select • tab refresh • enter choose • ctrl+p agent • esc menu"
-			}
-			return "command • ↑↓ history • tab browse • enter run • ctrl+p agent • esc hide"
-		case inputModeAgent:
-			return "agent • enter ask • ctrl+u clear • ctrl+p name • esc hide"
-		default:
-			if m.searchMode == searchModeFull {
-				return "full search • enter text tag/open • ctrl+p cmd • tab name • esc hide"
-			}
-			return "space date tag • enter text tag/open • ctrl+p full • backspace last • /clear • esc hide"
-		}
-	}
-	if m.deleteConfirm {
-		return "delete file? • y confirm • n/esc cancel"
-	}
-	if m.graphFocusID != "" {
-		return "thread • ↑↓ walk • enter open • q back • ctrl+d quit"
-	}
-	sortLabel := "name"
-	if m.sortMode == sortModeTime {
-		sortLabel = "newest"
-	}
-	return "s sort:" + sortLabel + " • v " + m.viewerMode + " • p pin • d del • space×2 input • ctrl+o cfg • ctrl+r scan • enter open • ctrl+d quit"
+	return "h help"
 }
 
 func searchResultItems(items []item, results []membox.SearchResult, dateFilters []dateFilter, nameQueries []string, hideNotes bool) []item {
