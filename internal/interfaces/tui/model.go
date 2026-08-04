@@ -163,14 +163,25 @@ type Model struct {
 	// Selection while walking the thread tree (index into graphCards).
 	graphSelected int
 	graphPreviews map[string]string
-	helpVisible   bool
-	helpScroll    int
+	// Full-text filtering for the thread tree: name-mode filters match
+	// filenames live; full-mode hits arrive async from SearchDocuments.
+	graphSearchSequence uint64
+	graphSearchQuery    string
+	graphSearchHits     map[string]bool
+	helpVisible         bool
+	helpScroll          int
 }
 
 type searchMsg struct {
 	query   string
 	results []membox.SearchResult
 	err     error
+}
+type threadSearchMsg struct {
+	query    string
+	sequence uint64
+	results  []membox.SearchResult
+	err      error
 }
 
 type documentsMsg struct {
@@ -496,8 +507,28 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewMode = viewBoard
 			m.boardScrollY = 0
 			m.statusMessage = "graph focus " + shortID(msg.documentID)
+			m.graphSearchQuery, m.graphSearchHits = "", nil
+			// An already-active full-text filter applies to the fresh thread too.
+			if query := m.fullTextFilterQuery(); query != "" {
+				commands = append(commands, m.threadSearchCmd(query))
+			}
 		}
 		m.clearExecutedCommand()
+	case threadSearchMsg:
+		if msg.sequence == m.graphSearchSequence && msg.err == nil {
+			m.graphSearchQuery = msg.query
+			hits := make(map[string]bool, len(msg.results))
+			for _, result := range msg.results {
+				hits[result.DocumentID] = true
+			}
+			m.graphSearchHits = hits
+			if m.graphFocusID != "" {
+				if visible := len(m.visibleGraphIndices()); visible > 0 && m.graphSelected >= visible {
+					m.graphSelected = visible - 1
+				}
+				m.scrollGraphToSelection()
+			}
+		}
 	case commandResultMsg:
 		m.loading, m.err = false, msg.err
 		if msg.err == nil {
@@ -1107,6 +1138,7 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.graphCards = nil
 			m.graphIncoming = 0
 			m.graphSelected = 0
+			m.graphSearchQuery, m.graphSearchHits = "", nil
 			m.viewMode = viewTree
 			m.keepSelectionVisible()
 		} else if m.viewMode == viewBoard {
@@ -1146,6 +1178,7 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.graphCards = nil
 		m.graphSelected = 0
 		m.graphIncoming = 0
+		m.graphSearchQuery, m.graphSearchHits = "", nil
 		if m.viewMode == viewTree {
 			m.viewMode = viewBoard
 			// Snap the highlight to a card that is actually drawn on the board.
@@ -1610,8 +1643,15 @@ func (m *Model) filterChanged(inputCommand tea.Cmd) tea.Cmd {
 	m.applyPreviewContent()
 	if query := m.fullTextFilterQuery(); query != "" {
 		m.loading = true
-		return tea.Batch(inputCommand, m.spinner.Tick, searchDocumentsCmd(m.ctx, m.app, query))
+		commands := []tea.Cmd{inputCommand, m.spinner.Tick, searchDocumentsCmd(m.ctx, m.app, query)}
+		// The visible thread filters by the same full-text query: body hits
+		// arrive via threadSearchMsg and intersect the linked cards.
+		if m.graphFocusID != "" {
+			commands = append(commands, m.threadSearchCmd(query))
+		}
+		return tea.Batch(commands...)
 	}
+	m.graphSearchQuery, m.graphSearchHits = "", nil
 	m.loading = false
 	m.refreshFilter()
 	return tea.Batch(inputCommand, m.loadPreview())
@@ -1636,6 +1676,14 @@ func (m *Model) refreshFilter() {
 		m.selected = len(m.filtered) - 1
 	}
 	m.keepSelectionVisible()
+	// A live thread view shares the same filters: keep its selection inside
+	// the newly visible cards.
+	if m.graphFocusID != "" {
+		if visible := len(m.visibleGraphIndices()); visible > 0 && m.graphSelected >= visible {
+			m.graphSelected = visible - 1
+		}
+		m.scrollGraphToSelection()
+	}
 }
 
 // startScan runs path scan then reloads the document tree (ctrl+r / r).
@@ -2256,6 +2304,39 @@ func (m Model) graphBoardView() string {
 	return strings.Join(rows, "\n")
 }
 
+// visibleGraphIndices returns the indexes into m.graphCards that survive the
+// current filters, mirroring the document-list semantics: name-mode filters
+// match title/filename/path live, full-mode filters match body content via
+// FTS (hits arrive async), and date filters always apply. The focus card
+// (index 0) stays visible so the thread keeps its anchor.
+func (m Model) visibleGraphIndices() []int {
+	if len(m.graphCards) == 0 {
+		return nil
+	}
+	indices := []int{0}
+	nameQueries := m.nameTextFilterQueries()
+	fullQuery := m.fullTextFilterQuery()
+	// Only apply body hits once they belong to the current query; before the
+	// async result arrives the thread keeps showing its cards.
+	fullReady := fullQuery != "" && m.graphSearchQuery == fullQuery && m.graphSearchHits != nil
+	if len(nameQueries) == 0 && len(m.dateFilters) == 0 && !fullReady {
+		for i := 1; i < len(m.graphCards); i++ {
+			indices = append(indices, i)
+		}
+		return indices
+	}
+	for original, doc := range m.graphCards[1:] {
+		if fullReady && !m.graphSearchHits[doc.ID] {
+			continue
+		}
+		candidate := documentItems([]membox.DocumentView{doc})[0]
+		if matchesTextFilters(candidate.match, nameQueries) && matchesDateFilters(doc, m.dateFilters) {
+			indices = append(indices, original+1)
+		}
+	}
+	return indices
+}
+
 // graphRows flattens the thread tree into display lines and records, for each
 // card in m.graphCards, the line index where that card's block starts (used
 // for selection highlighting and scroll-into-view).
@@ -2297,23 +2378,25 @@ func (m Model) graphRows() ([]string, []int) {
 		}
 	}
 
-	if len(m.graphCards) > 1 {
-		related := documentItems(m.graphCards[1:])
-		for index, candidate := range related {
+	visible := m.visibleGraphIndices()
+	if len(visible) > 1 {
+		related := visible[1:]
+		for position, original := range related {
+			candidate := documentItems([]membox.DocumentView{m.graphCards[original]})[0]
 			lines = append(lines, dimStyle.Render("│"))
 			starts = append(starts, len(lines))
 			direction := "→"
-			if index >= len(m.graphCards)-1-m.graphIncoming {
+			if original >= len(m.graphCards)-m.graphIncoming {
 				direction = "←"
 			}
 			branch := "├─"
 			continuation := "│ "
-			if index+1 == len(related) {
+			if position+1 == len(related) {
 				branch = "└─"
 				continuation = "  "
 			}
 			header := branch + " " + direction + " [" + shortID(candidate.document.ID) + "] " + candidate.filename
-			if index+1 == m.graphSelected {
+			if position+1 == m.graphSelected {
 				lines = append(lines, selectedLine("> "+header))
 			} else {
 				lines = append(lines, dimStyle.Render(branch)+" "+accentStyle.Render(direction)+" ["+shortID(candidate.document.ID)+"] "+candidate.filename)
@@ -2346,10 +2429,11 @@ func (m Model) graphRows() ([]string, []int) {
 // viewer. The tree keeps its original root — opening a linked document never
 // re-roots the graph.
 func (m Model) openGraphSelection() (tea.Model, tea.Cmd) {
-	if m.graphSelected < 0 || m.graphSelected >= len(m.graphCards) {
+	visible := m.visibleGraphIndices()
+	if m.graphSelected < 0 || m.graphSelected >= len(visible) {
 		return m, nil
 	}
-	target := m.graphCards[m.graphSelected]
+	target := m.graphCards[visible[m.graphSelected]]
 	m.loading = true
 	if m.viewerMode == "web" {
 		return m, tea.Batch(m.spinner.Tick, openDocumentWebCmd(m.ctx, m.app, m.launcher, target.ID))
@@ -2359,7 +2443,7 @@ func (m Model) openGraphSelection() (tea.Model, tea.Cmd) {
 
 // moveGraphSelection walks the thread-tree selection and keeps it in view.
 func (m *Model) moveGraphSelection(key string) {
-	n := len(m.graphCards)
+	n := len(m.visibleGraphIndices())
 	if n == 0 {
 		return
 	}
@@ -2421,6 +2505,18 @@ func (m *Model) scrollGraphToSelection() {
 	}
 	if m.boardScrollY < 0 {
 		m.boardScrollY = 0
+	}
+}
+
+// threadSearchCmd runs the full-text query against the index so the thread
+// tree can filter cards by body content — the same FTS path the document list
+// uses. Name-mode filters never need it.
+func (m *Model) threadSearchCmd(query string) tea.Cmd {
+	m.graphSearchSequence++
+	sequence := m.graphSearchSequence
+	return func() tea.Msg {
+		results, err := m.app.SearchDocuments(m.ctx, membox.SearchDocumentsQuery{Query: query, Limit: 100})
+		return threadSearchMsg{query: query, sequence: sequence, results: results, err: err}
 	}
 }
 

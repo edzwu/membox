@@ -75,6 +75,7 @@ func helpSections() []helpSection {
 		}},
 		{title: "Link thread", entries: []helpEntry{
 			{"← → ↑ ↓", "walk linked documents"},
+			{"space×2", "filter cards: name/full text"},
 			{"enter", "open focused document"},
 			{"q", "back to tree"},
 		}},

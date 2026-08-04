@@ -30,21 +30,22 @@ func (fakeLauncher) OpenCommand(context.Context, string) (*exec.Cmd, error) {
 }
 
 type fakeApp struct {
-	resolved  int
-	pins      map[string]bool
-	viewer    string
-	model     string
-	mainPath  string
-	webOpened []string
-	scanCount int
-	graph     membox.DocumentGraphView
+	resolved      int
+	pins          map[string]bool
+	viewer        string
+	model         string
+	mainPath      string
+	webOpened     []string
+	scanCount     int
+	graph         membox.DocumentGraphView
+	searchResults []membox.SearchResult
 }
 
 func (f *fakeApp) AddPath(context.Context, membox.AddPathCommand) (membox.AddPathResult, error) {
 	return membox.AddPathResult{}, nil
 }
 func (f *fakeApp) SearchDocuments(context.Context, membox.SearchDocumentsQuery) ([]membox.SearchResult, error) {
-	return nil, nil
+	return f.searchResults, nil
 }
 func (f *fakeApp) ListDocuments(context.Context, membox.ListDocumentsQuery) ([]membox.DocumentView, error) {
 	return []membox.DocumentView{
@@ -1961,5 +1962,111 @@ func TestModel_HelpModalKeepsUnderlyingContent(t *testing.T) {
 	last := len(baseLines) - 1
 	if helpLines[last] != baseLines[last] {
 		t.Fatalf("status bar modified by modal:\nbefore %q\nafter  %q", baseLines[last], helpLines[last])
+	}
+}
+
+func threadTestModel() Model {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.width, model.height = 100, 40
+	model.graphFocusID = "019-alpha"
+	model.graphCards = []membox.DocumentView{
+		{ID: "019-alpha", Title: "Alpha", Path: "/tmp/alpha.md", RelativePath: "alpha.md"},
+		{ID: "019-note-one", Title: "Raft note", Path: "/tmp/raft-note.md", RelativePath: "raft-note.md"},
+		{ID: "019-note-two", Title: "Quorum note", Path: "/tmp/quorum-note.md", RelativePath: "quorum-note.md"},
+	}
+	model.graphIncoming = 1
+	return model
+}
+
+func TestModel_ThreadViewFiltersByString(t *testing.T) {
+	model := threadTestModel()
+
+	rows, _ := model.graphRows()
+	joined := strings.Join(rows, "\n")
+	if !strings.Contains(joined, "raft-note.md") || !strings.Contains(joined, "quorum-note.md") {
+		t.Fatalf("unfiltered thread missing cards: %q", joined)
+	}
+
+	// A committed string filter narrows the thread; the focus card always stays.
+	model.textFilters = []textFilter{{Value: "raft", Mode: searchModeName, Sequence: 1}}
+	model.refreshFilter()
+	rows, _ = model.graphRows()
+	joined = strings.Join(rows, "\n")
+	if !strings.Contains(joined, "raft-note.md") || strings.Contains(joined, "quorum-note.md") {
+		t.Fatalf("filter did not narrow the thread: %q", joined)
+	}
+	if !strings.Contains(joined, "● focus") || !strings.Contains(joined, "alpha.md") {
+		t.Fatalf("focus card lost while filtering: %q", joined)
+	}
+
+	// Selection is clamped into the visible cards.
+	model.graphSelected = 5
+	model.refreshFilter()
+	if model.graphSelected != 1 {
+		t.Fatalf("graphSelected not clamped to visible cards: %d", model.graphSelected)
+	}
+
+	// Navigation stays inside the filtered set.
+	model.moveGraphSelection("down")
+	model.moveGraphSelection("down")
+	if model.graphSelected != 1 {
+		t.Fatalf("navigation escaped the filtered thread: %d", model.graphSelected)
+	}
+}
+
+func TestModel_ThreadViewFiltersLiveWhileTyping(t *testing.T) {
+	model := threadTestModel()
+	model.inputVisible = true
+	model.searchMode = searchModeName
+	model.input.SetValue("quorum")
+
+	indices := model.visibleGraphIndices()
+	if len(indices) != 2 || indices[0] != 0 || indices[1] != 2 {
+		t.Fatalf("draft filter visible indices = %v, want [0 2]", indices)
+	}
+	rows, _ := model.graphRows()
+	joined := strings.Join(rows, "\n")
+	if strings.Contains(joined, "raft-note.md") || !strings.Contains(joined, "quorum-note.md") {
+		t.Fatalf("draft filter not applied live: %q", joined)
+	}
+	// Incoming direction survives filtering (quorum is the incoming card).
+	if !strings.Contains(joined, "←") {
+		t.Fatalf("incoming direction lost after filtering: %q", joined)
+	}
+}
+
+func TestModel_ThreadViewFullModeFiltersByBody(t *testing.T) {
+	// FTS says only the quorum note's body matches the query.
+	app := &fakeApp{searchResults: []membox.SearchResult{{DocumentID: "019-note-two"}}}
+	model := New(context.Background(), app, fakeLauncher{})
+	model.width, model.height = 100, 40
+	model.graphFocusID = "019-alpha"
+	model.graphCards = []membox.DocumentView{
+		{ID: "019-alpha", Title: "Alpha", Path: "/tmp/alpha.md", RelativePath: "alpha.md"},
+		{ID: "019-note-one", Title: "Raft note", Path: "/tmp/raft-note.md", RelativePath: "raft-note.md"},
+		{ID: "019-note-two", Title: "Quorum note", Path: "/tmp/quorum-note.md", RelativePath: "quorum-note.md"},
+	}
+	model.graphIncoming = 1
+	model.textFilters = []textFilter{{Value: "quorum leader election", Mode: searchModeFull, Sequence: 1}}
+
+	// Before the async FTS result arrives, full mode must not fall back to
+	// filename matching.
+	if indices := model.visibleGraphIndices(); len(indices) != 3 {
+		t.Fatalf("pending full search should keep all cards visible: %v", indices)
+	}
+
+	message := model.threadSearchCmd(model.fullTextFilterQuery())()
+	updated, _ := model.Update(message)
+	model = updated.(Model)
+
+	// "raft-note.md" substring-matches nothing here; only the body FTS hit
+	// survives.
+	rows, _ := model.graphRows()
+	joined := strings.Join(rows, "\n")
+	if strings.Contains(joined, "raft-note.md") || !strings.Contains(joined, "quorum-note.md") {
+		t.Fatalf("full mode did not filter by body search results: %q", joined)
+	}
+	if model.graphSelected > len(model.visibleGraphIndices())-1 {
+		t.Fatalf("selection escaped the filtered thread: %d", model.graphSelected)
 	}
 }
