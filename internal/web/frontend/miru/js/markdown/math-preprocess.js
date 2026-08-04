@@ -88,7 +88,11 @@ export function preprocessMath(text) {
   }
 
   text = text.replace(/```[a-zA-Z0-9]*\n[\s\S]*?\n```/g, protectCodeBlock);
-  text = text.replace(/`[^`]+`/g, protectCodeBlock);
+  // Inline code never spans newlines in Markdown; excluding \n here also
+  // keeps this pass from ever matching across the fenced-block placeholders
+  // above (a match straddling a placeholder swallowed it, leaving the fence
+  // unrestorable — its ASCII-art content then vanished from the render).
+  text = text.replace(/`[^`\n]+`/g, protectCodeBlock);
 
   // 0.5 Protect inline markdown links [text](url) so the URL parentheses are
   //     not mistaken for math delimiters. Whole links are restored after math
@@ -217,10 +221,12 @@ export function preprocessMath(text) {
     text = text.replace(`__MIRU_LINK_${i}__`, () => link);
   }
 
-  // 5. Restore code blocks and inline code.
-  codeBlocks.forEach((content, i) => {
-    text = text.replace(`__MIRU_CODE_${i}__`, () => content);
-  });
+  // 5. Restore code blocks and inline code. Reverse order: an inline match
+  //    may have swallowed an earlier placeholder (nested placeholders), and
+  //    restoring the outer one first re-exposes the inner one in time.
+  for (let i = codeBlocks.length - 1; i >= 0; i--) {
+    text = text.replace(`__MIRU_CODE_${i}__`, () => codeBlocks[i]);
+  }
 
   // 6. Restore math blocks: display as \[...\] for texmath (or \(...\) when
   //    not cleanly block-positioned), inline as \(...\) so texmath's inline

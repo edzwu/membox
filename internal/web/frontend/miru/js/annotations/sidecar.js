@@ -267,9 +267,59 @@ function resolveAnnotationRange(anchor, canonicalText) {
     }
     index = canonicalText.indexOf(anchor.exact, index + 1);
   }
+  if (bestStart !== -1) {
+    range = rangeFromAnnotationOffsets(bestStart, bestStart + anchor.exact.length);
+    if (range && annotationTextFromRange(range) === anchor.exact) return range;
+  }
+  return resolveDense(anchor, canonicalText);
+}
+
+// Browser selections never contain markdown markup, but the rendered text can
+// carry literal markup characters (e.g. backticks the clipper escaped and the
+// renderer shows). Match with markup/whitespace stripped, then map back to
+// canonical offsets.
+function denseAnchorText(text) {
+  const map = [];
+  let out = '';
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '`' || ch === '*' || ch === '_') continue;
+    if (ch === ' ' || ch === '\n' || ch === '\r' || ch === '\t' || ch === '\u00a0') continue;
+    map.push(i);
+    out += ch;
+  }
+  return { text: out, map };
+}
+
+function resolveDense(anchor, canonicalText) {
+  const denseC = denseAnchorText(canonicalText);
+  const denseE = denseAnchorText(anchor.exact).text;
+  if (!denseE) return null;
+  const densePrefix = denseAnchorText(anchor.prefix || '').text;
+  const denseSuffix = denseAnchorText(anchor.suffix || '').text;
+
+  let bestStart = -1;
+  let bestScore = -Infinity;
+  let idx = denseC.text.indexOf(denseE);
+  while (idx !== -1) {
+    const before = denseC.text.slice(Math.max(0, idx - densePrefix.length), idx);
+    const afterAt = idx + denseE.length;
+    const after = denseC.text.slice(afterAt, afterAt + denseSuffix.length);
+    const contextScore = commonSuffixLength(before, densePrefix) +
+      commonPrefixLength(after, denseSuffix);
+    const score = contextScore * 1000 - Math.min(Math.abs(idx - anchor.start), 999);
+    if (score > bestScore) {
+      bestScore = score;
+      bestStart = idx;
+    }
+    idx = denseC.text.indexOf(denseE, idx + 1);
+  }
   if (bestStart === -1) return null;
-  range = rangeFromAnnotationOffsets(bestStart, bestStart + anchor.exact.length);
-  return range && annotationTextFromRange(range) === anchor.exact ? range : null;
+  const start = denseC.map[bestStart];
+  const end = denseC.map[bestStart + denseE.length - 1] + 1;
+  const range = rangeFromAnnotationOffsets(start, end);
+  if (!range) return null;
+  return denseAnchorText(annotationTextFromRange(range)).text === denseE ? range : null;
 }
 
 export function restoreAnnotationSidecar(data) {
