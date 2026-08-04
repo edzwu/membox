@@ -207,6 +207,11 @@ func (s *Server) handleRelated(writer http.ResponseWriter, request *http.Request
 			if link.Document == nil {
 				return
 			}
+			// Internal selection notes are part of the page's own annotation
+			// surface, not related reading material.
+			if strings.HasSuffix(link.Document.Location.RelativePath, "-note.md") {
+				return
+			}
 			title := link.Document.Index.Title
 			if strings.TrimSpace(title) == "" {
 				title = path.Base(link.Document.Location.RelativePath)

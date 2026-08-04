@@ -181,10 +181,6 @@ function renderRelatedGrid(items) {
     tile.dataset.direction = item.direction === 'in' ? 'in' : 'out';
     tile.dataset.tip = `${label}\n${item.id}`;
     tile.setAttribute('aria-label', `${label} (${item.id})`);
-    const span = document.createElement('span');
-    span.className = 'membox-related-label';
-    span.textContent = label;
-    tile.appendChild(span);
     relatedGrid.appendChild(tile);
   }
 }
