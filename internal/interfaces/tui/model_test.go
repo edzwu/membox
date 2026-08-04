@@ -2121,3 +2121,30 @@ func TestModel_RenameCommandKeepsUUIDAndRefreshes(t *testing.T) {
 		t.Fatal("rename without a selectable document should report a usage error")
 	}
 }
+
+func TestModel_ColonOpensCommandPaletteDirectly(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+	model = updated.(Model)
+	if !model.inputVisible || !model.inputActive || model.inputMode != inputModeCmd {
+		t.Fatalf(": did not open the command palette: visible=%v active=%v mode=%s", model.inputVisible, model.inputActive, model.inputMode)
+	}
+	if !strings.Contains(model.modeBadge(), " CMD ") {
+		t.Fatalf("badge does not show CMD mode: %q", model.modeBadge())
+	}
+	if model.input.Value() != "" {
+		t.Fatalf("command input should start empty: %q", model.input.Value())
+	}
+}
+
+func TestModel_CtrlKOpensAgentInputDirectly(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlK})
+	model = updated.(Model)
+	if !model.inputVisible || !model.inputActive || model.inputMode != inputModeAgent {
+		t.Fatalf("ctrl+k did not open the agent input: visible=%v active=%v mode=%s", model.inputVisible, model.inputActive, model.inputMode)
+	}
+	if !strings.Contains(model.modeBadge(), " AGENT ") {
+		t.Fatalf("badge does not show AGENT mode: %q", model.modeBadge())
+	}
+}

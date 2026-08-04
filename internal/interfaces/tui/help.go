@@ -37,6 +37,8 @@ func helpSections() []helpSection {
 			{"ctrl+d", "quit"},
 			{"ctrl+r", "rescan paths"},
 			{"ctrl+o", "settings panel"},
+			{":", "command palette"},
+			{"ctrl+k", "agent input"},
 			{"h / esc", "close this help"},
 		}},
 		{title: "Browse (tree / board)", entries: []helpEntry{

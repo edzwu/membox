@@ -1203,6 +1203,14 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.spaceSequence++
 		sequence := m.spaceSequence
 		commands = append(commands, tea.Tick(doubleSpaceWindow, func(time.Time) tea.Msg { return spaceTimeoutMsg{sequence: sequence} }))
+	case ":":
+		// vim-style: ":" jumps straight to the command palette.
+		m.spaceSequence, m.lastKeyAt = 0, time.Time{}
+		return m, m.openInput(inputModeCmd)
+	case "ctrl+k":
+		// Direct agent input (terminals cannot deliver cmd+k).
+		m.spaceSequence, m.lastKeyAt = 0, time.Time{}
+		return m, m.openInput(inputModeAgent)
 	case "tab":
 		// Toggle between tree and board view when input is not active
 		m.graphFocusID = ""
