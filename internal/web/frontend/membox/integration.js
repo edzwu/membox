@@ -172,6 +172,17 @@ function sidecarFilename() {
   return state.droppedFilename || sanitizeFilename(state.docTitle || 'document') + '.md';
 }
 
+// Merge back annotations that could not be re-anchored this load so no save
+// (auto or explicit sync) ever destroys notes it merely failed to display.
+function mergePendingAnchors(sidecar) {
+  if (!pendingAnchors.length) return;
+  const have = new Set(sidecar.annotations.map((a) => a.exact));
+  const kept = pendingAnchors.filter((a) => !have.has(a.exact));
+  if (kept.length) {
+    sidecar.annotations = [...sidecar.annotations, ...kept].sort((a, b) => a.start - b.start);
+  }
+}
+
 async function persistReadingState(keepalive) {
   if (!documentID || !state.currentMarkdown) return;
   try {
@@ -179,15 +190,8 @@ async function persistReadingState(keepalive) {
     // Only an actual annotation mutation makes the submitted set authoritative
     // for deletions. Scroll/progress saves must never delete note documents.
     sidecar.replaceAnnotations = annotationsMutated;
-    if (pendingAnchors.length) {
-      // Merge back annotations that could not be re-anchored this load so a
-      // save never destroys notes it merely failed to display.
-      const have = new Set(sidecar.annotations.map((a) => a.exact));
-      const kept = pendingAnchors.filter((a) => !have.has(a.exact));
-      if (kept.length) {
-        sidecar.annotations = [...sidecar.annotations, ...kept].sort((a, b) => a.start - b.start);
-      }
-    }
+    const liveCount = sidecar.annotations.length;
+    mergePendingAnchors(sidecar);
     // Wipe protection: annotations loaded, none survived, and the user never
     // deleted any → keep the stored annotations, only refresh progress.
     if (sidecar.annotations.length === 0 && loadedAnnotationCount > 0 && !annotationsMutated) {
@@ -210,6 +214,23 @@ async function persistReadingState(keepalive) {
       keepalive: !!keepalive,
     });
     if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
+    // Write the server-assigned note UUIDs back into the live entries. Without
+    // this, every save re-submits ref-less annotations and the backend has to
+    // re-match them by text; a mismatch then creates duplicate note files.
+    // Response order mirrors the submitted set (pending anchors trail it).
+    if (!keepalive) {
+      try {
+        const result = await response.clone().json();
+        const saved = result && Array.isArray(result.annotations) ? result.annotations : [];
+        for (let i = 0; i < liveCount && i < saved.length && i < state.annotations.length; i++) {
+          if (saved[i] && saved[i].ref && !state.annotations[i].ref) {
+            state.annotations[i].ref = saved[i].ref;
+          }
+        }
+      } catch (err) {
+        /* ref write-back is best-effort */
+      }
+    }
   } catch (err) {
     console.error('membox: failed to save reading state', err);
   }
@@ -390,6 +411,9 @@ async function syncToMembox() {
     try {
       const markdownFile = sanitizeFilename(title) + '.md';
       annotations = await buildAnnotationSidecar(markdownFile, body, currentProgress());
+      // Explicit sync replaces stored notes, so it must carry every note we
+      // know about — including ones that failed to re-anchor this load.
+      mergePendingAnchors(annotations);
     } catch (err) {
       console.warn('membox: could not pack annotation sidecar', err);
     }

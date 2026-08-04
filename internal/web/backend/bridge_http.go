@@ -358,7 +358,12 @@ func parseClipBody(body string) (excerpt, note, mode string) {
 		trim := strings.TrimSpace(line)
 		if strings.HasPrefix(trim, ">") {
 			inExcerpt = true
-			excerptLines = append(excerptLines, strings.TrimSpace(strings.TrimPrefix(trim, ">")))
+			// Unquote one blockquote level but keep the line's own indentation:
+			// ">     list.Sort()" must stay "    list.Sort()" so multi-line
+			// excerpts match the rendered article text across saves.
+			unquoted := strings.TrimPrefix(strings.TrimLeft(line, " \t"), ">")
+			unquoted = strings.TrimPrefix(unquoted, " ")
+			excerptLines = append(excerptLines, strings.TrimRight(unquoted, " \t\r"))
 			continue
 		}
 		if trim == "" {
@@ -388,7 +393,7 @@ func parseClipBody(body string) (excerpt, note, mode string) {
 		}
 		noteLines = append(noteLines, trim)
 	}
-	excerpt = strings.TrimSpace(strings.Join(excerptLines, " "))
+	excerpt = strings.TrimSpace(strings.Join(excerptLines, "\n"))
 	note = strings.TrimSpace(strings.Join(noteLines, "\n"))
 	return excerpt, note, mode
 }

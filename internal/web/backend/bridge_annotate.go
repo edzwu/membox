@@ -282,7 +282,7 @@ func (s *Server) reconcileAnnotationNotes(ctx context.Context, pageID string, pa
 					continue
 				}
 				candidateExact, _, _ := parseClipBody(string(body))
-				if strings.TrimSpace(cleanInlineMarkdown(candidateExact)) != strings.TrimSpace(cleanInlineMarkdown(exact)) {
+				if denseExcerpt(candidateExact) != denseExcerpt(exact) {
 					continue
 				}
 				distance := candidate.Start - anchor.Start
@@ -299,7 +299,7 @@ func (s *Server) reconcileAnnotationNotes(ctx context.Context, pageID string, pa
 		if ref != "" {
 			if current, readErr := s.service.ReadDocument(ctx, ref); readErr == nil {
 				oldExact, oldNote, _ := parseClipBody(string(current))
-				if strings.TrimSpace(cleanInlineMarkdown(oldExact)) == strings.TrimSpace(cleanInlineMarkdown(exact)) && strings.TrimSpace(oldNote) == note {
+				if denseExcerpt(oldExact) == denseExcerpt(exact) && strings.TrimSpace(oldNote) == note {
 					body = "" // no content churn; update anchor metadata only
 				} else {
 					body = selectionNoteMarkdown(string(current), exact, note)
@@ -343,6 +343,15 @@ func (s *Server) reconcileAnnotationNotes(ctx context.Context, pageID string, pa
 		return nil, err
 	}
 	return out, nil
+}
+
+// denseExcerpt normalizes an excerpt for identity comparison: inline markup
+// cleaned, then ALL whitespace removed. Stored excerpts historically flattened
+// newlines to spaces and dropped indentation, while browser selections keep
+// them, so only a whitespace-free form compares stably across both.
+func denseExcerpt(s string) string {
+	dense, _ := denseRunes(cleanInlineMarkdown(s))
+	return dense
 }
 
 func annotationNoteTitle(exact string) string {
