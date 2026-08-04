@@ -174,10 +174,16 @@ function sidecarFilename() {
 
 // Merge back annotations that could not be re-anchored this load so no save
 // (auto or explicit sync) ever destroys notes it merely failed to display.
+// Dedupe by excerpt AND note text: several notes can share one passage, and
+// keying by excerpt alone would drop every sibling of a restored note.
+function pendingAnchorKey(a) {
+  return (a.exact || '') + '\u0000' + (a.note || '');
+}
+
 function mergePendingAnchors(sidecar) {
   if (!pendingAnchors.length) return;
-  const have = new Set(sidecar.annotations.map((a) => a.exact));
-  const kept = pendingAnchors.filter((a) => !have.has(a.exact));
+  const have = new Set(sidecar.annotations.map((a) => pendingAnchorKey(a)));
+  const kept = pendingAnchors.filter((a) => !have.has(pendingAnchorKey(a)));
   if (kept.length) {
     sidecar.annotations = [...sidecar.annotations, ...kept].sort((a, b) => a.start - b.start);
   }
@@ -414,6 +420,8 @@ async function syncToMembox() {
       // Explicit sync replaces stored notes, so it must carry every note we
       // know about — including ones that failed to re-anchor this load.
       mergePendingAnchors(annotations);
+      // Now that the set is complete, the client authorizes deletions itself.
+      annotations.replaceAnnotations = true;
     } catch (err) {
       console.warn('membox: could not pack annotation sidecar', err);
     }

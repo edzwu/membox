@@ -330,7 +330,9 @@ func (s *Server) handleSync(writer http.ResponseWriter, request *http.Request) {
 			http.Error(writer, "invalid annotation payload", http.StatusBadRequest)
 			return
 		}
-		annotationPayload.ReplaceAnnotations = true
+		// Replacement authority stays with the client: it knows whether the
+		// submitted set is complete (it merges unrestored anchors before sync).
+		// Forcing true here turned any incomplete submission into a wipe.
 		emptyEnvelope := len(annotationPayload.Annotations) == 0 && annotationPayload.Progress == nil
 		if _, err := s.reconcileAnnotationNotes(request.Context(), response.ID, annotationPayload); err != nil {
 			http.Error(writer, err.Error(), http.StatusInternalServerError)
