@@ -856,11 +856,12 @@ body.is-snippet .toc {
   z-index: 150;
   display: flex;
   align-items: center;
-  gap: 2px;
-  padding: 4px;
-  background: var(--ink);
-  border-radius: 8px;
-  box-shadow: 0 8px 24px var(--shadow);
+  gap: 3px;
+  padding: 5px;
+  background: var(--paper-raised);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px var(--shadow), 0 2px 5px color-mix(in srgb, var(--ink) 8%, transparent);
 }
 
 .annot-toolbar[hidden] {
@@ -871,49 +872,112 @@ body.is-snippet .toc {
   appearance: none;
   border: 0;
   background: transparent;
-  color: var(--paper);
+  color: var(--ink-soft);
   width: 30px;
   height: 30px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 6px;
+  border-radius: 7px;
   cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease;
+  transition: background 0.14s ease, color 0.14s ease, transform 0.14s ease;
 }
 
 .annot-toolbar button:hover {
-  background: rgba(255, 255, 255, 0.16);
-  color: #fff;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.annot-toolbar button:active {
+  transform: translateY(1px);
 }
 
 .annot-toolbar button.active {
   background: var(--accent);
-  color: #fff;
+  color: var(--paper);
 }
 
 .annot-toolbar button.annot-del:hover {
-  background: #b3402f;
-  color: #fff;
-}
-
-[data-theme="dark"] .annot-toolbar button:hover {
-  background: rgba(255, 255, 255, 0.10);
+  background: color-mix(in srgb, #b3402f 14%, var(--paper-raised));
+  color: #b3402f;
 }
 
 .annot-note-input {
   appearance: none;
-  border: 0;
+  border: 1px solid transparent;
   outline: none;
   background: transparent;
-  color: var(--paper);
+  color: var(--ink);
   font-family: var(--font-sans);
   font-size: 13px;
   padding: 5px 8px;
   width: 180px;
 }
 
-/* Notes are multiline: Enter saves, Shift+Enter inserts a newline. */
+.annot-toolbar .annot-note-input {
+  background: var(--paper);
+  border-color: var(--line);
+  border-radius: 7px;
+  box-shadow: inset 0 1px 2px color-mix(in srgb, var(--ink) 6%, transparent);
+}
+
+.annot-toolbar .annot-note-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.annot-note-compose {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 230px;
+}
+
+.annot-note-compose .annot-note-input {
+  width: 100%;
+  padding-right: 32px;
+}
+
+.annot-note-compose .annot-note-send {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 21px;
+  height: 21px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease, transform 0.14s ease;
+}
+
+.annot-note-compose .annot-note-send svg {
+  width: 15px;
+  height: 15px;
+}
+
+.annot-note-compose .annot-note-send:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.annot-note-compose .annot-note-send:active {
+  transform: translateY(1px);
+}
+
+.annot-note .annot-note-input {
+  background: var(--paper);
+  border-color: var(--line);
+  border-radius: 6px;
+}
+
+/* Notes are multiline: Enter inserts a newline, Command+Enter sends. */
 textarea.annot-note-input {
   display: block;
   resize: none;
@@ -926,7 +990,7 @@ textarea.annot-note-input {
 }
 
 .annot-note-input::placeholder {
-  color: color-mix(in srgb, var(--paper) 55%, transparent);
+  color: var(--muted);
 }
 
 /* Highlight (class-based so a passage can also carry other marks) */
@@ -980,15 +1044,17 @@ textarea.annot-note-input {
 .annot-note {
   position: relative;
   width: min(32em, 100%);
-  margin: 0.6em 0 0.9em auto;
-  padding: 0.55em 0.85em;
+  max-width: 100%;
+  box-sizing: border-box;
+  margin: 0.45em 0 0.65em auto;
+  padding: 0.4em 0.65em;
   background: var(--paper-raised);
   border: 1px solid var(--line);
   border-left: 3px solid var(--accent);
-  border-radius: 8px;
+  border-radius: 7px;
   font-family: var(--font-sans);
-  font-size: 12.5px;
-  line-height: 1.55;
+  font-size: 12px;
+  line-height: 1.4;
   color: var(--ink-soft);
   box-shadow: 0 1px 3px var(--shadow);
   cursor: pointer;
@@ -997,6 +1063,15 @@ textarea.annot-note-input {
 
 .annot-note:hover {
   border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+}
+
+.annot-note-body {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 0 5px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .annot-note .annot-note-input,
@@ -1008,8 +1083,48 @@ textarea.annot-note-input {
 /* Note text keeps the line breaks typed in the editor; long URLs break
    instead of overflowing the card. */
 .annot-note-text {
-  white-space: pre-wrap;
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   overflow-wrap: anywhere;
+}
+
+.annot-note-text > p {
+  margin: 0.15em 0;
+}
+
+.annot-note-text > p:first-child {
+  margin-top: 0;
+}
+
+.annot-note-text > p:last-child {
+  margin-bottom: 0;
+}
+
+.article .annot-note-text pre {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  margin: 0.35em 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.article .annot-note-text pre code {
+  display: block;
+  width: max-content;
+  min-width: 100%;
+  max-width: none;
+  padding: 0;
+  font-size: 11.5px;
+  line-height: 1.4;
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
 }
 
 .annot-note-link {
@@ -1199,27 +1314,32 @@ span.annot.anchor-active {
   font-size: 0.72em;
   font-weight: 600;
   line-height: 1;
-  margin-right: 0.25em;
-  transform: translateY(-0.5px);
+  margin-right: 0;
+  transform: translateY(1px);
 }
 
 /* Note card edit / delete buttons (stripped from exports). */
 .annot-note-edit,
 .annot-note-del {
   appearance: none;
+  position: absolute;
+  top: 3px;
+  z-index: 1;
   border: 0;
-  background: transparent;
+  background: var(--paper-raised);
   color: var(--muted);
   font-family: var(--font-sans);
   font-size: 11px;
   line-height: 1;
   padding: 3px 4px;
-  margin-left: 2px;
   border-radius: 4px;
   cursor: pointer;
   opacity: 0;
   transition: opacity 0.15s ease, color 0.15s ease, background 0.15s ease;
 }
+
+.annot-note-edit { right: 21px; }
+.annot-note-del { right: 3px; }
 
 .annot-note:hover .annot-note-edit,
 .annot-note:hover .annot-note-del,

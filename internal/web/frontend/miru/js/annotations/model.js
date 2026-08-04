@@ -55,14 +55,57 @@ function buildNoteLabel(id) {
   return label;
 }
 
-// URLs inside notes render as clickable links. The DOM is built node by node
-// (never innerHTML), so note text stays inert. Trailing punctuation is not
-// treated as part of the link.
+// Notes use the same safe Markdown path as the main reader. Keeping a small
+// fallback makes the annotation model resilient if a host loads it before the
+// vendor renderer is ready.
 const NOTE_URL_RE = /(?:https?:\/\/|www\.)[A-Za-z0-9._~:\/?#@!$&()*+,;=%-]+/gi;
+let noteMarkdown = null;
 
 function renderNoteText(el, note) {
   el.textContent = '';
-  el.append(' ');
+
+  if (typeof window.markdownit === 'function' && typeof window.DOMPurify === 'function') {
+    if (!noteMarkdown) {
+      noteMarkdown = window.markdownit({ html: false, linkify: true, typographer: true, breaks: true });
+    }
+    const clean = window.DOMPurify.sanitize(noteMarkdown.render(note), {
+      ADD_ATTR: ['target', 'rel'],
+    });
+    const fragment = document.createElement('div');
+    fragment.innerHTML = clean;
+    prepareNoteLinks(fragment);
+    highlightNoteCode(fragment);
+    while (fragment.firstChild) el.append(fragment.firstChild);
+    return;
+  }
+
+  renderPlainNoteText(el, note);
+}
+
+function prepareNoteLinks(root) {
+  root.querySelectorAll('a').forEach((link) => {
+    const href = link.getAttribute('href') || '';
+    if (/^www\./i.test(href)) link.href = 'https://' + href;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.classList.add('annot-note-link');
+    link.addEventListener('click', (e) => e.stopPropagation());
+  });
+}
+
+function highlightNoteCode(root) {
+  if (!window.hljs || typeof window.hljs.highlightElement !== 'function') return;
+  root.querySelectorAll('pre code').forEach((block) => {
+    try {
+      window.hljs.highlightElement(block);
+    } catch (err) {
+      console.warn('Could not highlight note code:', err);
+    }
+  });
+}
+
+// Safe fallback for hosts where markdown-it/DOMPurify is not ready yet.
+function renderPlainNoteText(el, note) {
   let lastIndex = 0;
   for (const match of note.matchAll(NOTE_URL_RE)) {
     let url = match[0];
@@ -70,15 +113,14 @@ function renderNoteText(el, note) {
     const trailing = trailingMatch ? trailingMatch[0] : '';
     if (trailing) url = url.slice(0, url.length - trailing.length);
     if (match.index > lastIndex) el.append(note.slice(lastIndex, match.index));
-    const a = document.createElement('a');
-    a.href = /^https?:\/\//i.test(url) ? url : 'https://' + url;
-    a.textContent = url;
-    a.target = '_blank';
-    a.rel = 'noopener noreferrer';
-    a.className = 'annot-note-link';
-    // Keep the card's click handler (focus/edit) from swallowing the link.
-    a.addEventListener('click', (e) => e.stopPropagation());
-    el.append(a);
+    const link = document.createElement('a');
+    link.href = /^https?:\/\//i.test(url) ? url : 'https://' + url;
+    link.textContent = url;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.className = 'annot-note-link';
+    link.addEventListener('click', (e) => e.stopPropagation());
+    el.append(link);
     lastIndex = match.index + url.length;
   }
   if (lastIndex < note.length) el.append(note.slice(lastIndex));
@@ -135,11 +177,13 @@ function insertNoteCard(id, noteText, refSpan) {
   const card = document.createElement('aside');
   card.className = 'annot-note';
   card.dataset.annotId = id;
-  card.appendChild(buildNoteLabel(id));
-  const text = document.createElement('span');
+  const body = document.createElement('div');
+  body.className = 'annot-note-body';
+  const text = document.createElement('div');
   text.className = 'annot-note-text';
   renderNoteText(text, noteText);
-  card.appendChild(text);
+  body.append(buildNoteLabel(id), text);
+  card.appendChild(body);
   card.appendChild(buildNoteBtn('edit'));
   card.appendChild(buildNoteBtn('del'));
   insertCardNaturally(card, refSpan);
@@ -221,7 +265,7 @@ export function startEditNoteCard(card, entry) {
   if (!textEl) return;
   const input = document.createElement('textarea');
   input.rows = 2;
-  input.title = 'Enter saves \u00b7 Shift+Enter inserts a new line';
+  input.title = 'Enter for a new line \u00b7 \u2318Enter to save';
   input.className = 'annot-note-input annot-note-edit-input';
   input.value = entry.note;
   textEl.replaceWith(input);
@@ -239,7 +283,7 @@ export function startEditNoteCard(card, entry) {
   scheduleNoteLayout();
 
   const restore = () => {
-    const t = document.createElement('span');
+    const t = document.createElement('div');
     t.className = 'annot-note-text';
     renderNoteText(t, entry.note);
     input.replaceWith(t);
@@ -258,7 +302,7 @@ export function startEditNoteCard(card, entry) {
     }
   };
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
       save();
     } else if (e.key === 'Escape') restore();

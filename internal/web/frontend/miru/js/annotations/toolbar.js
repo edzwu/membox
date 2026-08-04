@@ -79,22 +79,32 @@ function finishAnnotation() {
 }
 
 function openNoteInput() {
-  annotToolbar.innerHTML = '<textarea class="annot-note-input" rows="2" placeholder="Add a note\u2026" title="Enter saves \u00b7 Shift+Enter inserts a new line" aria-label="Add a note"></textarea>';
+  annotToolbar.innerHTML =
+    '<div class="annot-note-compose">' +
+      '<textarea class="annot-note-input" rows="2" placeholder="Add a note\u2026" title="Enter for a new line \u00b7 \u2318Enter to send" aria-label="Add a note"></textarea>' +
+      '<button type="button" class="annot-note-send" title="Send note (\u2318Enter)" aria-label="Send note">' +
+        '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3.4 4.2 21 12 3.4 19.8l2.1-6.3L15 12l-9.5-1.5L3.4 4.2z"/></svg>' +
+      '</button>' +
+    '</div>';
   const input = annotToolbar.querySelector('textarea');
+  const send = annotToolbar.querySelector('.annot-note-send');
   const entry = currentAnnotEl ? findAnnot(currentAnnotEl.dataset.annotId) : null;
   if (entry && entry.note) input.value = entry.note;
+  const sendNote = () => commitNoteInput(input.value.trim());
   input.focus();
   autosizeNoteInput(input);
   input.addEventListener('input', () => autosizeNoteInput(input));
   input.addEventListener('keydown', (e) => {
-    // Enter saves; Shift+Enter keeps the default newline behavior.
-    if (e.key === 'Enter' && !e.shiftKey) {
+    // Enter inserts a newline; Command+Enter sends. Ctrl+Enter is supported
+    // as a cross-platform fallback for terminals/browsers without Cmd.
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
-      commitNoteInput(input.value.trim());
+      sendNote();
     } else if (e.key === 'Escape') {
       hideAnnotToolbar();
     }
   });
+  send.addEventListener('click', sendNote);
   input.addEventListener('blur', () => commitNoteInput(input.value.trim()));
   // The textarea is wider than the icon row; re-center the toolbar so the
   // wider box stays inside the viewport.
