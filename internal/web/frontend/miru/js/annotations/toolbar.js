@@ -45,8 +45,10 @@ function positionAnnotToolbar(target) {
   const rect = target.getBoundingClientRect();
   const top = rect.top + window.scrollY - annotToolbar.offsetHeight - 8;
   const left = rect.left + window.scrollX + rect.width / 2 - annotToolbar.offsetWidth / 2;
+  // Keep the (possibly widened) toolbar inside the viewport on both sides.
+  const maxLeft = window.scrollX + document.documentElement.clientWidth - annotToolbar.offsetWidth - 8;
   annotToolbar.style.top = Math.max(8, top) + 'px';
-  annotToolbar.style.left = Math.max(8, left) + 'px';
+  annotToolbar.style.left = Math.max(8, Math.min(left, Math.max(8, maxLeft))) + 'px';
 }
 
 const MARK_FLAGS = {
@@ -94,6 +96,9 @@ function openNoteInput() {
     }
   });
   input.addEventListener('blur', () => commitNoteInput(input.value.trim()));
+  // The textarea is wider than the icon row; re-center the toolbar so the
+  // wider box stays inside the viewport.
+  positionAnnotToolbar(currentAnnotEl || currentRange);
 }
 
 function autosizeNoteInput(input) {

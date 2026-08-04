@@ -55,6 +55,35 @@ function buildNoteLabel(id) {
   return label;
 }
 
+// URLs inside notes render as clickable links. The DOM is built node by node
+// (never innerHTML), so note text stays inert. Trailing punctuation is not
+// treated as part of the link.
+const NOTE_URL_RE = /(?:https?:\/\/|www\.)[A-Za-z0-9._~:\/?#@!$&()*+,;=%-]+/gi;
+
+function renderNoteText(el, note) {
+  el.textContent = '';
+  el.append(' ');
+  let lastIndex = 0;
+  for (const match of note.matchAll(NOTE_URL_RE)) {
+    let url = match[0];
+    const trailingMatch = url.match(/[.,;:!?)\]}>]+$/);
+    const trailing = trailingMatch ? trailingMatch[0] : '';
+    if (trailing) url = url.slice(0, url.length - trailing.length);
+    if (match.index > lastIndex) el.append(note.slice(lastIndex, match.index));
+    const a = document.createElement('a');
+    a.href = /^https?:\/\//i.test(url) ? url : 'https://' + url;
+    a.textContent = url;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    a.className = 'annot-note-link';
+    // Keep the card's click handler (focus/edit) from swallowing the link.
+    a.addEventListener('click', (e) => e.stopPropagation());
+    el.append(a);
+    lastIndex = match.index + url.length;
+  }
+  if (lastIndex < note.length) el.append(note.slice(lastIndex));
+}
+
 function buildNoteBtn(kind) {
   const b = document.createElement('button');
   b.type = 'button';
@@ -109,7 +138,7 @@ function insertNoteCard(id, noteText, refSpan) {
   card.appendChild(buildNoteLabel(id));
   const text = document.createElement('span');
   text.className = 'annot-note-text';
-  text.textContent = ' ' + noteText;
+  renderNoteText(text, noteText);
   card.appendChild(text);
   card.appendChild(buildNoteBtn('edit'));
   card.appendChild(buildNoteBtn('del'));
@@ -164,7 +193,7 @@ export function setNoteOnPassage(entry, annotEl, text) {
     entry.note = text;
     const card = elements.article.querySelector(`.annot-note[data-annot-id="${entry.id}"]`);
     const textEl = card && card.querySelector('.annot-note-text');
-    if (textEl) textEl.textContent = ' ' + text;
+    if (textEl) renderNoteText(textEl, text);
   } else {
     entry.note = text;
     annotEl.classList.add('annot-note-ref');
@@ -212,7 +241,7 @@ export function startEditNoteCard(card, entry) {
   const restore = () => {
     const t = document.createElement('span');
     t.className = 'annot-note-text';
-    t.textContent = ' ' + entry.note;
+    renderNoteText(t, entry.note);
     input.replaceWith(t);
     scheduleNoteLayout();
   };

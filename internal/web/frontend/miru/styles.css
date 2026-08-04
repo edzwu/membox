@@ -920,6 +920,7 @@ textarea.annot-note-input {
   overflow-y: auto;
   line-height: 1.45;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
   width: 230px;
   min-height: 2.6em;
 }
@@ -1004,9 +1005,22 @@ textarea.annot-note-input {
   width: 100%;
 }
 
-/* Note text keeps the line breaks typed in the editor. */
+/* Note text keeps the line breaks typed in the editor; long URLs break
+   instead of overflowing the card. */
 .annot-note-text {
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.annot-note-link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.annot-note-link:hover {
+  color: color-mix(in srgb, var(--accent) 70%, var(--ink));
 }
 
 /* Table notes stay inside their originating cell. */
