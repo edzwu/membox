@@ -477,6 +477,7 @@ Extension 或 Miru 选区 Save
 - `GET /api/doc/:id/annotations` 读取时组合 Markdown + DB，并按当前 page Markdown 动态计算 `sourceHash/sourceLength`。
 - `POST /api/doc/:id/annotations` 把 Miru 新笔记物化成 `*-note.md`；编辑更新该文件；删除移除该文件与关系行。
 - 阅读进度独立存入 `document_read_state`，滚动不会重写笔记文件或 annotation JSON。
+- 被标注文档的“最后修改时间”会提升到其 annotation note 的最新活动时间（保存或笔记文件更新），newest 排序与日期过滤会把刚做过笔记的文档视为 modified。
 - 旧 `document_annotations` 仅作为迁移读取源；下次保存会物化成 Markdown 并清除旧 blob。
 - Extension ingest 直接建立关系；先有 selection、后有 page 时，在 page ingest 时 backfill。
 - Miru/bridge server 启动时自动发现尚未关联的存量 `*-note.md` 并建立关系；已迁移记录会被跳过，不需要用户命令。

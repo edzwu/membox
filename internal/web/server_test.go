@@ -10,7 +10,9 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
+	"membox/internal/application"
 	"membox/internal/bootstrap"
 	"membox/internal/web"
 )
@@ -710,4 +712,68 @@ Same prefix unique body two.
 			t.Fatalf("collision suffix used: %s", base)
 		}
 	}
+}
+
+func TestAnnotationNoteMarksTargetDocumentModified(t *testing.T) {
+	ctx := context.Background()
+	home, notesDir := t.TempDir(), t.TempDir()
+	page := filepath.Join(notesDir, "page.md")
+	if err := os.WriteFile(page, []byte("# Page\n\nA distinctive anchored sentence.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Backdate the page file: after note activity its effective modified time
+	// must come from the note, not the stale file mtime.
+	old := time.Now().Add(-72 * time.Hour)
+	if err := os.Chtimes(page, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	service, err := bootstrap.Open(filepath.Join(home, "membox.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = service.Close() }()
+	if _, err := service.AddPath(ctx, notesDir); err != nil {
+		t.Fatal(err)
+	}
+	records, err := service.ListDocuments(ctx, 10, false)
+	if err != nil || len(records) != 1 {
+		t.Fatalf("expected 1 document, got %d (err=%v)", len(records), err)
+	}
+	pageID := records[0].Document.ID
+	if since := time.Since(records[0].Document.Index.SourceUpdatedAt); since < 24*time.Hour {
+		t.Fatalf("page should look old before any note exists: updated %v ago", since)
+	}
+
+	note, err := service.CreateNote(ctx, application.CreateNoteOptions{
+		Title:    "A distinctive… — note",
+		Body:     "> A distinctive anchored sentence.\n\nMargin note.\n",
+		ClipMode: "selection",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.SaveAnnotationNote(ctx, application.SaveAnnotationNoteOptions{
+		TargetSelector: string(pageID),
+		NoteSelector:   string(note.Document.ID),
+		Start:          0,
+		Highlight:      true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	records, err = service.ListDocuments(ctx, 10, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range records {
+		if record.Document.ID != pageID {
+			continue
+		}
+		if since := time.Since(record.Document.Index.SourceUpdatedAt); since > time.Hour {
+			t.Fatalf("annotation note did not mark the target modified: updated %v ago", since)
+		}
+		return
+	}
+	t.Fatal("page document missing after note creation")
 }

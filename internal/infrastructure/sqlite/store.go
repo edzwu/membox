@@ -572,10 +572,20 @@ func (s *Store) DocumentsForPath(ctx context.Context, id catalog.IndexedPathID) 
 	return out, rows.Err()
 }
 
+// documentSelect is the shared read projection for documents. The reported
+// source_updated_at is the document's own source time raised to the latest
+// annotation-note activity targeting it: taking a note counts as working on
+// the annotated document, so newest-sort and date filters see it as modified.
+// Both annotation_notes.updated_at (app saves) and the note file's own source
+// time (external edits picked up by scans) participate.
 const documentSelect = `SELECT d.id,d.created_at,d.updated_at,d.pinned,l.path_id,l.relative_path,l.file_key,l.status,
 COALESCE(i.title,''),COALESCE(i.summary,''),COALESCE(i.mtime,0),COALESCE(i.size,0),COALESCE(i.sha256,''),i.indexed_at,
 COALESCE(i.source_created_at,CASE WHEN i.mtime>0 THEN i.mtime/1000000 ELSE d.created_at END),
-COALESCE(i.source_updated_at,CASE WHEN i.mtime>0 THEN i.mtime/1000000 ELSE d.updated_at END),p.root_path
+MAX(COALESCE(i.source_updated_at,CASE WHEN i.mtime>0 THEN i.mtime/1000000 ELSE d.updated_at END),
+    COALESCE((SELECT MAX(MAX(an.updated_at,COALESCE(ni.source_updated_at,0)))
+              FROM annotation_notes an
+              LEFT JOIN document_index ni ON ni.document_id=an.note_document_id
+              WHERE an.target_document_id=d.id),0)),p.root_path
 FROM documents d JOIN document_locations l ON l.document_id=d.id
 JOIN paths p ON p.id=l.path_id LEFT JOIN document_index i ON i.document_id=d.id`
 
