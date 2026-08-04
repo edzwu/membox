@@ -20,7 +20,10 @@ const annotContextRunes = 32
 // are non-fatal: the note document and graph link already exist. Returns
 // whether an annotation was actually projected.
 func (s *Server) upsertClipAnnotation(ctx context.Context, pageID, refID, excerpt, note string) (bool, error) {
-	excerpt = strings.TrimSpace(excerpt)
+	// Normalize the excerpt exactly like the page text is normalized: note
+	// bodies carry Turndown artifacts (****, backticks, \_ escapes) that must
+	// disappear both for matching here and for Miru's text-quote re-anchoring.
+	excerpt = strings.TrimSpace(cleanInlineMarkdown(excerpt))
 	if pageID == "" || excerpt == "" {
 		return false, nil
 	}
@@ -36,6 +39,10 @@ func (s *Server) upsertClipAnnotation(ctx context.Context, pageID, refID, excerp
 		return false, nil
 	}
 	runes := []rune(canonical)
+	// Store the page-side span as `exact` (rather than the note's excerpt):
+	// it reflects the page text Miru re-anchors against, so the annotation
+	// survives even when the note's blockquote carried different spacing.
+	excerpt = string(runes[start:end])
 	prefixStart := start - annotContextRunes
 	if prefixStart < 0 {
 		prefixStart = 0
@@ -171,10 +178,20 @@ var (
 	reImage      = regexp.MustCompile(`!\[[^\]]*\]\([^)]*\)`)
 	reLink       = regexp.MustCompile(`\[([^\]]*)\]\([^)]*\)`)
 	reBold       = regexp.MustCompile(`\*\*|__`)
-	reEmph       = regexp.MustCompile(`\*([^*\n]+)\*|_([^_\n]+)_`)
-	reCode       = regexp.MustCompile("`([^`\n]*)`")
-	reSpaces     = regexp.MustCompile(`[ \t\x{00a0}]+`)
+	// Star italics only: `_x_` is skipped on purpose — unescaping turns
+	// `\_` into `_` and stripping word-internal underscores would corrupt
+	// identifiers like tool_execution_start. Both sides of a match use the
+	// same transform, so consistency matters more than completeness.
+	reEmph   = regexp.MustCompile(`\*([^*\n]+)\*`)
+	reCode   = regexp.MustCompile("`([^`\n]*)`")
+	reSpaces = regexp.MustCompile(`[ \t\x{00a0}]+`)
+	// Markdown backslash escapes, as emitted by Turndown (\_ \* \[ ...).
+	reUnescape = regexp.MustCompile(`\\([\\` + "`" + `*_{}\[\]()#+\-.!~|])`)
 )
+
+func unescapeMarkdown(s string) string {
+	return reUnescape.ReplaceAllString(s, "$1")
+}
 
 // markdownToCanonicalText strips Markdown syntax, keeping block structure as
 // single newlines, approximating the text Miru extracts from the rendered
@@ -218,35 +235,34 @@ func stripFrontMatter(body string) string {
 	return body
 }
 
+// cleanInlineMarkdown strips inline Markdown markup from one line of text.
+// Unescape first, so Turndown artifacts like \_ and **** disappear the same
+// way on the page side and the excerpt side.
 func cleanInlineMarkdown(s string) string {
+	s = unescapeMarkdown(s)
 	s = reImage.ReplaceAllString(s, "")
 	s = reLink.ReplaceAllString(s, "$1")
 	s = reBold.ReplaceAllString(s, "")
-	s = reEmph.ReplaceAllString(s, "$1$2")
+	s = reEmph.ReplaceAllString(s, "$1")
 	s = reCode.ReplaceAllString(s, "$1")
 	s = reSpaces.ReplaceAllString(s, " ")
 	return s
 }
 
-// collapseRunes collapses whitespace runs to single spaces and records, for
-// each output rune, the rune index it came from in the input.
-func collapseRunes(s string) (string, []int) {
+// denseRunes removes ALL whitespace and records, for each output rune, the
+// rune index it came from in the input. Selections, Markdown sources, and
+// rendered text disagree about spacing around inline code / CJK punctuation,
+// so matching ignores whitespace entirely.
+func denseRunes(s string) (string, []int) {
 	runes := []rune(s)
 	var b strings.Builder
 	mapping := make([]int, 0, len(runes))
-	prevSpace := false
 	for i, r := range runes {
 		if r == '\n' || r == '\r' || r == '\t' || r == ' ' || r == '\u00a0' {
-			if !prevSpace && b.Len() > 0 {
-				b.WriteRune(' ')
-				mapping = append(mapping, i)
-			}
-			prevSpace = true
 			continue
 		}
 		b.WriteRune(r)
 		mapping = append(mapping, i)
-		prevSpace = false
 	}
 	return b.String(), mapping
 }
@@ -254,23 +270,22 @@ func collapseRunes(s string) (string, []int) {
 // findExcerptOffsets locates the excerpt in canonical text with flexible
 // whitespace, returning rune offsets into the un-collapsed canonical text.
 func findExcerptOffsets(canonical, excerpt string) (int, int, bool) {
-	normC, mapping := collapseRunes(canonical)
-	normE, _ := collapseRunes(excerpt)
-	normE = strings.TrimSpace(normE)
-	if normE == "" {
+	denseC, mapping := denseRunes(canonical)
+	denseE, _ := denseRunes(excerpt)
+	if denseE == "" {
 		return 0, 0, false
 	}
-	idx := strings.Index(normC, normE)
+	idx := strings.Index(denseC, denseE)
 	if idx < 0 {
 		return 0, 0, false
 	}
-	startNorm := len([]rune(normC[:idx]))
-	endNorm := startNorm + len([]rune(normE)) - 1
-	if startNorm >= len(mapping) || endNorm >= len(mapping) {
+	startRune := len([]rune(denseC[:idx]))
+	endRune := startRune + len([]rune(denseE)) - 1
+	if startRune >= len(mapping) || endRune >= len(mapping) {
 		return 0, 0, false
 	}
-	start := mapping[startNorm]
-	end := mapping[endNorm] + 1
+	start := mapping[startRune]
+	end := mapping[endRune] + 1
 	if end > len([]rune(canonical)) {
 		end = len([]rune(canonical))
 	}

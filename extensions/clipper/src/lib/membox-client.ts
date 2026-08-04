@@ -63,10 +63,11 @@ export async function ingestClip(
 export async function fetchClipsBySource(
   settings: BridgeSettings,
   sourceUrl: string,
+  mode: 'selection' | 'all' = 'selection',
 ): Promise<SourceClip[]> {
   const base = settings.baseUrl.replace(/\/$/, '');
   const normalized = normalizeSourceURL(sourceUrl) || sourceUrl;
-  const url = `${base}/api/bridge/clips?source_url=${encodeURIComponent(normalized)}`;
+  const url = `${base}/api/bridge/clips?source_url=${encodeURIComponent(normalized)}&mode=${mode}`;
   const response = await fetch(url, {
     method: 'GET',
     headers: headers(settings),

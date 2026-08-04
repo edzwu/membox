@@ -26,13 +26,14 @@ export default defineBackground(() => {
     if (area === 'local') void syncBadge();
   });
 
-  browser.runtime.onMessage.addListener((message) => {
+  browser.runtime.onMessage.addListener((message, sender) => {
     if (message?.type === 'membox.ingest-active-tab') {
       return ingestActiveTab();
     }
     if (message?.type === 'membox.ingest-payload') {
       return ingestPayload(message.payload as ClipPayload, {
         open: message.open !== false,
+        tabId: sender?.tab?.id,
       });
     }
     if (message?.type === 'membox.clips-for-url') {
@@ -57,13 +58,18 @@ async function clipsForUrl(
 
 async function ingestPayload(
   payload: ClipPayload,
-  opts: { open: boolean },
+  opts: { open: boolean; tabId?: number },
 ): Promise<IngestResponse> {
   try {
     if (!payload?.body?.trim()) {
       return { ok: false, error: 'Empty clip payload' };
     }
     const settings = await loadSettings();
+    // A selection note belongs to its page: make sure the page itself is in
+    // membox first, so the annotation has a document to be projected onto.
+    if (payload.clipMode === 'selection' && payload.sourceUrl && opts.tabId) {
+      await ensurePageClip(settings, opts.tabId, payload.sourceUrl);
+    }
     const result = await ingestClip(settings, payload);
     const shouldOpen = opts.open && settings.autoOpen && result.view_url;
     if (shouldOpen) {
@@ -72,6 +78,25 @@ async function ingestPayload(
     return { ok: true, result };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/**
+ * Make sure the current page is saved to membox as a page clip. Best-effort:
+ * if clipping the page fails, the selection note is still saved on its own.
+ */
+async function ensurePageClip(
+  settings: Awaited<ReturnType<typeof loadSettings>>,
+  tabId: number,
+  sourceUrl: string,
+): Promise<void> {
+  try {
+    const clips = await fetchClipsBySource(settings, sourceUrl, 'all');
+    if (clips.some((c) => c.clip_mode === 'page')) return; // already saved
+    const clip = await clipTab(tabId); // full-page clip (clip_mode: 'page')
+    await ingestClip(settings, clip);
+  } catch {
+    /* best effort — the note itself is saved regardless */
   }
 }
 

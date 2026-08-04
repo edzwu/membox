@@ -75,3 +75,38 @@ func TestShaHelperMatchesCrypto(t *testing.T) {
 		t.Fatalf("unexpected hash shape %q", want)
 	}
 }
+
+func TestFindExcerptOffsetsIgnoresWhitespaceAndArtifacts(t *testing.T) {
+	// The page body carries Turndown artifacts (****, \_, list markers, code
+	// fences); the excerpt (a browser selection or note blockquote) may
+	// disagree about whitespace. upsertClipAnnotation runs both sides through
+	// the same cleaning before matching, so they must line up.
+	body := "做 CreatorWeave 的时候： ****Agent 的核心循环到底是自己写？****\n\n2.  ****事件流设计**** — 每一步都有事件（message\\_start），完美适合做 UI\n\n`` `pi-coding-agent` ``\n\nCLI 界面、会话管理、主题"
+	canonical := markdownToCanonicalText(body)
+	cases := []string{
+		"Agent 的核心循环到底是自己写？",                     // **** stripped by cleaning
+		"事件流设计 — 每一步都有事件（message_start），完美适合做 UI", // \_ unescaped + list marker gone
+		"pi-coding-agent CLI 界面、会话管理、主题",           // newlines between blocks ignored
+		"做 CreatorWeave 的时候： Agent 的核心循环到底是自己写？",   // cleaned form
+	}
+	for _, exc := range cases {
+		if _, _, ok := findExcerptOffsets(canonical, cleanInlineMarkdown(exc)); !ok {
+			t.Fatalf("excerpt not matched: %q", exc)
+		}
+	}
+}
+
+func TestUpsertStoresPageSpanAsExact(t *testing.T) {
+	// exact comes from the page canonical span, not from the excerpt text, so
+	// spacing differences between note and page do not break Miru re-anchoring.
+	body := "对 Agent 来说，`` `read(\"src/main.ts\")` `` 跟在终端里一样自然"
+	canonical := markdownToCanonicalText(body)
+	start, end, ok := findExcerptOffsets(canonical, cleanInlineMarkdown("对 Agent 来说，read(\"src/main.ts\") 跟在终端里一样自然"))
+	if !ok {
+		t.Fatal("excerpt not matched")
+	}
+	span := string([]rune(canonical)[start:end])
+	if span == "" || !strings.Contains(span, "read(\"src/main.ts\")") {
+		t.Fatalf("unexpected page span: %q", span)
+	}
+}
