@@ -39,7 +39,8 @@ func helpSections() []helpSection {
 			{"ctrl+o", "settings panel"},
 			{":", "command palette"},
 			{"ctrl+k", "agent input"},
-			{"h / esc", "close this help"},
+			{"?", "open this help"},
+			{"esc", "close this help"},
 		}},
 		{title: "Browse (tree / board)", entries: []helpEntry{
 			{"↑ ↓ / j k", "move selection"},
@@ -53,7 +54,7 @@ func helpSections() []helpSection {
 			{"s", "sort: name ⇄ newest"},
 			{"p", "pin / unpin"},
 			{"d", "move to trash"},
-			{"t", "toggle *-note.md visibility"},
+			{"h", "toggle *-note.md visibility"},
 			{"q", "back / close panels"},
 		}},
 		{title: "Filter input", entries: []helpEntry{

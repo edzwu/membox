@@ -308,8 +308,9 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if m.helpVisible {
 			return m.updateHelp(msg)
 		}
-		// "h" opens help, except while walking a graph where h/l navigate.
-		if msg.String() == "h" && !m.configVisible && !m.inputActive && m.graphFocusID == "" {
+		// "?" opens help. Plain "h" toggles hidden notes, except while walking
+		// a graph where h/l navigate.
+		if msg.String() == "?" && !m.configVisible && !m.inputActive && m.graphFocusID == "" {
 			m.helpVisible, m.helpScroll = true, 0
 			return m, nil
 		}
@@ -1299,7 +1300,7 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if document, ok := m.selectedDocument(); ok {
 			commands = append(commands, openCmd(m.ctx, m.app, m.launcher, document.ID))
 		}
-	case "t":
+	case "h":
 		// Toggle selection-note (*-note.md) visibility; persisted as hide_notes.
 		m.hideNotes = !m.hideNotes
 		m.refreshFilter()
@@ -3053,7 +3054,7 @@ func (m Model) modeBadge() string {
 // hints keeps the status bar quiet: every binding lives in the centered help
 // modal (press h), which groups shortcuts by the surface they belong to.
 func (m Model) hints() string {
-	return "h help"
+	return "? help"
 }
 
 func searchResultItems(items []item, results []membox.SearchResult, dateFilters []dateFilter, nameQueries []string, hideNotes bool) []item {

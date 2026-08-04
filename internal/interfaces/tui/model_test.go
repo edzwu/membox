@@ -560,7 +560,7 @@ func TestModel_CtrlPCyclesInputModes(t *testing.T) {
 		}
 	}
 	status := model.statusBar()
-	if !strings.Contains(status, "h help") {
+	if !strings.Contains(status, "? help") {
 		t.Fatalf("status does not show the single help hint: %q", status)
 	}
 }
@@ -1349,7 +1349,7 @@ func TestModel_ResultsHaveUUIDInStatus(t *testing.T) {
 	if !strings.Contains(status, "dabf") {
 		t.Fatalf("status bar does not contain UUID: %q", status)
 	}
-	if !strings.HasPrefix(strings.TrimLeft(status, " "), "h help") {
+	if !strings.HasPrefix(strings.TrimLeft(status, " "), "? help") {
 		t.Fatalf("single help hint is not on the left: %q", status)
 	}
 }
@@ -1378,7 +1378,7 @@ func TestModel_ViewUsesTerminalHeightExactly(t *testing.T) {
 	if len(lines) != model.height {
 		t.Fatalf("view height=%d terminal height=%d lines=%q", len(lines), model.height, lines)
 	}
-	if !strings.Contains(lines[len(lines)-1], "h help") {
+	if !strings.Contains(lines[len(lines)-1], "? help") {
 		t.Fatalf("status bar is not bottom: %q", lines[len(lines)-1])
 	}
 	filter, err := parseDateFilter("+2026-07", time.Now())
@@ -1941,13 +1941,46 @@ func TestModel_HideNotesFiltersClippedNotes(t *testing.T) {
 	}
 }
 
-func TestModel_HelpModalTogglesWithH(t *testing.T) {
+func TestModel_HTogglesHiddenNotesAndPersists(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.width, model.height = 120, 24
+	model.items = documentItems([]membox.DocumentView{
+		{ID: "019-doc", Title: "Article", Path: "/tmp/article.md"},
+		{ID: "019-note", Title: "a note", Path: "/tmp/article-note.md"},
+	})
+	model.hideNotes = false
+	model.refreshFilter()
+
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	model = updated.(Model)
+	if !model.hideNotes || len(model.filtered) != 1 {
+		t.Fatalf("h did not hide notes: hideNotes=%v filtered=%d", model.hideNotes, len(model.filtered))
+	}
+	if command == nil {
+		t.Fatal("h did not persist the setting")
+	}
+	message := command()
+	if batch, ok := message.(tea.BatchMsg); ok {
+		message = batch[0]()
+	}
+	if saved, ok := message.(settingSavedMsg); !ok || saved.key != "hide_notes" || saved.value != "on" {
+		t.Fatalf("unexpected setting save: %+v", message)
+	}
+
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	model = updated.(Model)
+	if model.hideNotes || len(model.filtered) != 2 {
+		t.Fatalf("second h did not unhide notes: hideNotes=%v filtered=%d", model.hideNotes, len(model.filtered))
+	}
+}
+
+func TestModel_HelpModalTogglesWithQuestionMark(t *testing.T) {
 	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
 	model.width, model.height = 100, 70
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
 	model = updated.(Model)
 	if !model.helpVisible {
-		t.Fatal("h did not open the help modal")
+		t.Fatal("? did not open the help modal")
 	}
 	view := model.View()
 	if !strings.Contains(view, "Keyboard Help") {
@@ -1976,13 +2009,13 @@ func TestModel_HelpDoesNotOpenWhileTyping(t *testing.T) {
 	if !model.inputVisible {
 		t.Fatal("double space did not open the filter input")
 	}
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
 	model = updated.(Model)
 	if model.helpVisible {
-		t.Fatal("h opened help while the filter input was active")
+		t.Fatal("? opened help while the filter input was active")
 	}
-	if model.input.Value() != "h" {
-		t.Fatalf("h was not typed into the filter input: %q", model.input.Value())
+	if model.input.Value() != "?" {
+		t.Fatalf("? was not typed into the filter input: %q", model.input.Value())
 	}
 }
 
@@ -1993,7 +2026,7 @@ func TestModel_HelpModalKeepsUnderlyingContent(t *testing.T) {
 	model.refreshFilter()
 
 	base := model.View()
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
 	model = updated.(Model)
 	withHelp := model.View()
 
