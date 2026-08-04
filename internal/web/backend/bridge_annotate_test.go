@@ -84,10 +84,10 @@ func TestFindExcerptOffsetsIgnoresWhitespaceAndArtifacts(t *testing.T) {
 	body := "做 CreatorWeave 的时候： ****Agent 的核心循环到底是自己写？****\n\n2.  ****事件流设计**** — 每一步都有事件（message\\_start），完美适合做 UI\n\n`` `pi-coding-agent` ``\n\nCLI 界面、会话管理、主题"
 	canonical := markdownToCanonicalText(body)
 	cases := []string{
-		"Agent 的核心循环到底是自己写？",                     // **** stripped by cleaning
+		"Agent 的核心循环到底是自己写？",                      // **** stripped by cleaning
 		"事件流设计 — 每一步都有事件（message_start），完美适合做 UI", // \_ unescaped + list marker gone
-		"pi-coding-agent CLI 界面、会话管理、主题",           // newlines between blocks ignored
-		"做 CreatorWeave 的时候： Agent 的核心循环到底是自己写？",   // cleaned form
+		"pi-coding-agent CLI 界面、会话管理、主题",          // newlines between blocks ignored
+		"做 CreatorWeave 的时候： Agent 的核心循环到底是自己写？",  // cleaned form
 	}
 	for _, exc := range cases {
 		if _, _, ok := findExcerptOffsets(canonical, cleanInlineMarkdown(exc)); !ok {
@@ -108,5 +108,16 @@ func TestUpsertStoresPageSpanAsExact(t *testing.T) {
 	span := string([]rune(canonical)[start:end])
 	if span == "" || !strings.Contains(span, "read(\"src/main.ts\")") {
 		t.Fatalf("unexpected page span: %q", span)
+	}
+}
+
+func TestParseClipBodyKeepsMultilineNote(t *testing.T) {
+	body := "---\nclip_mode: \"selection\"\n---\n\n> An excerpt.\n\nfirst line\n\nsecond line after a blank\n\nSource: [Page](https://example.com)\n"
+	excerpt, note, mode := parseClipBody(body)
+	if mode != "selection" || excerpt != "An excerpt." {
+		t.Fatalf("excerpt/mode = %q / %q", excerpt, mode)
+	}
+	if note != "first line\n\nsecond line after a blank" {
+		t.Fatalf("multiline note lost blank lines: %q", note)
 	}
 }

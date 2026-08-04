@@ -190,13 +190,23 @@ export function deleteAnnotation(id) {
 export function startEditNoteCard(card, entry) {
   const textEl = card.querySelector('.annot-note-text');
   if (!textEl) return;
-  const input = document.createElement('input');
-  input.type = 'text';
+  const input = document.createElement('textarea');
+  input.rows = 2;
+  input.title = 'Enter saves \u00b7 Shift+Enter inserts a new line';
   input.className = 'annot-note-input annot-note-edit-input';
   input.value = entry.note;
   textEl.replaceWith(input);
   input.focus();
   input.select();
+  const autosize = () => {
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 240) + 'px';
+  };
+  autosize();
+  input.addEventListener('input', () => {
+    autosize();
+    scheduleNoteLayout();
+  });
   scheduleNoteLayout();
 
   const restore = () => {
@@ -219,8 +229,10 @@ export function startEditNoteCard(card, entry) {
     }
   };
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') save();
-    else if (e.key === 'Escape') restore();
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      save();
+    } else if (e.key === 'Escape') restore();
   });
   input.addEventListener('blur', save);
 }

@@ -77,19 +77,28 @@ function finishAnnotation() {
 }
 
 function openNoteInput() {
-  annotToolbar.innerHTML = '<input type="text" class="annot-note-input" placeholder="Add a note\u2026" aria-label="Add a note" />';
-  const input = annotToolbar.querySelector('input');
+  annotToolbar.innerHTML = '<textarea class="annot-note-input" rows="2" placeholder="Add a note\u2026" title="Enter saves \u00b7 Shift+Enter inserts a new line" aria-label="Add a note"></textarea>';
+  const input = annotToolbar.querySelector('textarea');
   const entry = currentAnnotEl ? findAnnot(currentAnnotEl.dataset.annotId) : null;
   if (entry && entry.note) input.value = entry.note;
   input.focus();
+  autosizeNoteInput(input);
+  input.addEventListener('input', () => autosizeNoteInput(input));
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
+    // Enter saves; Shift+Enter keeps the default newline behavior.
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
       commitNoteInput(input.value.trim());
     } else if (e.key === 'Escape') {
       hideAnnotToolbar();
     }
   });
   input.addEventListener('blur', () => commitNoteInput(input.value.trim()));
+}
+
+function autosizeNoteInput(input) {
+  input.style.height = 'auto';
+  input.style.height = Math.min(input.scrollHeight, 180) + 'px';
 }
 
 function commitNoteInput(text) {

@@ -913,6 +913,17 @@ body.is-snippet .toc {
   width: 180px;
 }
 
+/* Notes are multiline: Enter saves, Shift+Enter inserts a newline. */
+textarea.annot-note-input {
+  display: block;
+  resize: none;
+  overflow-y: auto;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  width: 230px;
+  min-height: 2.6em;
+}
+
 .annot-note-input::placeholder {
   color: color-mix(in srgb, var(--paper) 55%, transparent);
 }
@@ -990,6 +1001,12 @@ body.is-snippet .toc {
 .annot-note .annot-note-input,
 .annot-note .annot-note-edit-input {
   cursor: text;
+  width: 100%;
+}
+
+/* Note text keeps the line breaks typed in the editor. */
+.annot-note-text {
+  white-space: pre-wrap;
 }
 
 /* Table notes stay inside their originating cell. */

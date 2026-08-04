@@ -362,8 +362,15 @@ func parseClipBody(body string) (excerpt, note, mode string) {
 			continue
 		}
 		if trim == "" {
-			if len(excerptLines) > 0 {
-				inExcerpt = false
+			if inExcerpt {
+				if len(excerptLines) > 0 {
+					inExcerpt = false
+				}
+				continue
+			}
+			// Blank lines inside the note body are meaningful (multiline notes).
+			if len(noteLines) > 0 {
+				noteLines = append(noteLines, "")
 			}
 			continue
 		}
