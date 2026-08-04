@@ -34,7 +34,6 @@ type helpSection struct {
 func helpSections() []helpSection {
 	return []helpSection{
 		{title: "Browse", entries: []helpEntry{
-			{"j k", "move selection"},
 			{"enter / tab", "open document / tree ⇄ board"},
 			{"space", "details · ×2 opens filter input"},
 			{"e / o / d", "edit / open app / move to trash"},
@@ -45,10 +44,6 @@ func helpSections() []helpSection {
 			{":", "palette: note new, rename, link list/graph …"},
 			{"tab", "in input: name ⇄ full-text search"},
 			{"ctrl+k", "agent input"},
-		}},
-		{title: "Link graph", entries: []helpEntry{
-			{"h l / j k", "switch columns / move within · enter opens"},
-			{"q", "back to tree"},
 		}},
 		{title: "General", entries: []helpEntry{
 			{"ctrl+o / ctrl+d", "settings / quit"},

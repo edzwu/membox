@@ -1986,7 +1986,7 @@ func TestModel_HelpModalTogglesWithQuestionMark(t *testing.T) {
 	if !strings.Contains(view, "Keyboard Help") {
 		t.Fatalf("help modal missing title")
 	}
-	for _, category := range []string{"Browse", "Filter & commands", "Link graph", "General"} {
+	for _, category := range []string{"Browse", "Filter & commands", "General"} {
 		if !strings.Contains(view, category) {
 			t.Fatalf("help modal missing category %q", category)
 		}
