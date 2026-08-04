@@ -777,3 +777,73 @@ func TestAnnotationNoteMarksTargetDocumentModified(t *testing.T) {
 	}
 	t.Fatal("page document missing after note creation")
 }
+
+func TestServerRelatedCreatesLinkedPlainDocument(t *testing.T) {
+	baseURL, docID, notesDir := startServer(t)
+
+	payload := `{"title":"Related Idea","body":"# Related Idea\n\nSome related content."}`
+	resp, err := http.Post(baseURL+"/api/doc/"+docID+"/related", "application/json", strings.NewReader(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("create related failed: status=%d body=%q", resp.StatusCode, body)
+	}
+	var created struct {
+		ID   string `json:"id"`
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(body, &created); err != nil || created.ID == "" {
+		t.Fatalf("unexpected create response: %q", body)
+	}
+	// A plain Markdown document, not a selection note.
+	base := filepath.Base(created.Path)
+	if strings.HasSuffix(base, "-note.md") {
+		t.Fatalf("related document uses note naming: %s", base)
+	}
+	if _, err := os.Stat(filepath.Join(notesDir, base)); err != nil {
+		t.Fatalf("related file missing: %v", err)
+	}
+
+	// The source document lists it as an incoming backlink.
+	listResp, err := http.Get(baseURL + "/api/doc/" + docID + "/related")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listBody, _ := io.ReadAll(listResp.Body)
+	listResp.Body.Close()
+	var listed struct {
+		Related []struct {
+			ID        string `json:"id"`
+			Direction string `json:"direction"`
+		} `json:"related"`
+	}
+	if err := json.Unmarshal(listBody, &listed); err != nil {
+		t.Fatalf("invalid related list: %q", listBody)
+	}
+	found := false
+	for _, item := range listed.Related {
+		if item.ID == created.ID {
+			found = true
+			if item.Direction != "in" {
+				t.Fatalf("related direction = %q, want in", item.Direction)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("created document missing from related list: %q", listBody)
+	}
+
+	// And the new document sees the source as an outgoing link.
+	backResp, err := http.Get(baseURL + "/api/doc/" + created.ID + "/related")
+	if err != nil {
+		t.Fatal(err)
+	}
+	backBody, _ := io.ReadAll(backResp.Body)
+	backResp.Body.Close()
+	if !strings.Contains(string(backBody), `"`+docID+`"`) || !strings.Contains(string(backBody), `"out"`) {
+		t.Fatalf("backlink missing from the new document's related list: %q", backBody)
+	}
+}

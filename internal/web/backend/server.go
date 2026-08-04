@@ -11,12 +11,14 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 
 	"membox/internal/application"
+	"membox/internal/domain/catalog"
 )
 
 const integrationScript = `<script type="module" src="/membox/integration.js"></script>`
@@ -149,6 +151,10 @@ func (s *Server) handleDocument(writer http.ResponseWriter, request *http.Reques
 		s.handleAnnotations(writer, request, strings.TrimSuffix(selector, "/annotations"))
 		return
 	}
+	if strings.HasSuffix(selector, "/related") {
+		s.handleRelated(writer, request, strings.TrimSuffix(selector, "/related"))
+		return
+	}
 	if selector == "" {
 		http.Error(writer, "missing document selector", http.StatusBadRequest)
 		return
@@ -172,6 +178,103 @@ func (s *Server) handleDocument(writer http.ResponseWriter, request *http.Reques
 	writer.Header().Set("X-Membox-Filename", filepath.Base(document.Location.RelativePath))
 	writer.Header().Set("X-Membox-Path", absolute)
 	_, _ = writer.Write(body)
+}
+
+// handleRelated exposes the one-hop neighborhood of a document (GET) and
+// creates a new plain Markdown document linked back to it (POST). The new
+// document is a regular file, not a *-note.md selection note.
+func (s *Server) handleRelated(writer http.ResponseWriter, request *http.Request, selector string) {
+	if selector == "" {
+		http.Error(writer, "missing document selector", http.StatusBadRequest)
+		return
+	}
+	ctx := request.Context()
+	switch request.Method {
+	case http.MethodGet:
+		focus, graph, err := s.service.GetDocumentGraph(ctx, selector)
+		if err != nil {
+			http.Error(writer, err.Error(), http.StatusNotFound)
+			return
+		}
+		type relatedView struct {
+			ID        string `json:"id"`
+			Title     string `json:"title"`
+			Path      string `json:"path"`
+			Direction string `json:"direction"`
+		}
+		related := make([]relatedView, 0, len(graph.Outgoing)+len(graph.Incoming))
+		appendLink := func(link catalog.DocumentLink, direction string) {
+			if link.Document == nil {
+				return
+			}
+			title := link.Document.Index.Title
+			if strings.TrimSpace(title) == "" {
+				title = path.Base(link.Document.Location.RelativePath)
+			}
+			related = append(related, relatedView{
+				ID:        string(link.Document.ID),
+				Title:     title,
+				Path:      link.Document.Location.RelativePath,
+				Direction: direction,
+			})
+		}
+		for _, link := range graph.Outgoing {
+			appendLink(link, "out")
+		}
+		for _, link := range graph.Incoming {
+			appendLink(link, "in")
+		}
+		writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+		writer.Header().Set("Cache-Control", "no-store")
+		_ = json.NewEncoder(writer).Encode(map[string]any{
+			"focus":   map[string]string{"id": string(focus.ID), "title": focus.Index.Title},
+			"related": related,
+		})
+	case http.MethodPost, http.MethodPut:
+		body, err := io.ReadAll(io.LimitReader(request.Body, 8<<20))
+		if err != nil {
+			http.Error(writer, "reading related document body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		var payload struct {
+			Title string `json:"title"`
+			Body  string `json:"body"`
+		}
+		if err := json.Unmarshal(body, &payload); err != nil {
+			http.Error(writer, "invalid related document payload", http.StatusBadRequest)
+			return
+		}
+		current, _, err := s.service.ResolveDocument(ctx, selector)
+		if err != nil {
+			http.Error(writer, err.Error(), http.StatusNotFound)
+			return
+		}
+		title := strings.TrimSpace(payload.Title)
+		if title == "" {
+			http.Error(writer, "related document title is required", http.StatusBadRequest)
+			return
+		}
+		result, err := s.service.CreateNote(ctx, application.CreateNoteOptions{Title: title, Body: payload.Body})
+		if err != nil {
+			http.Error(writer, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		// The new document points back at the document it was created from, so
+		// the source sees it as a backlink.
+		if _, err := s.service.LinkDocuments(ctx, string(result.Document.ID), string(current.ID)); err != nil {
+			http.Error(writer, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_ = json.NewEncoder(writer).Encode(map[string]any{
+			"id":       string(result.Document.ID),
+			"title":    result.Document.Index.Title,
+			"path":     result.Path,
+			"view_url": s.ViewURL(string(result.Document.ID)),
+		})
+	default:
+		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 // handleAnnotations preserves Miru's portable sidecar wire format without

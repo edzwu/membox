@@ -72,14 +72,21 @@
   to { transform: translateY(3px); }
 }
 
-/* Bottom-left document status: visible only while connected. Green dot +
-   UUID suffix means the current document lives in membox; a muted dot means
-   it is still an unsynced paste. */
-.membox-doc-status {
+/* Bottom-left document status cluster: visible only while connected. Green
+   dot + UUID suffix means the current document lives in membox; a muted dot
+   means it is still an unsynced paste. The + button creates a new related
+   document. */
+.membox-status-cluster {
   position: fixed;
   left: 24px;
   bottom: 24px;
   z-index: 70;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.membox-doc-status {
   display: inline-flex;
   align-items: center;
   gap: 7px;
@@ -121,10 +128,238 @@
 }
 
 @media (max-width: 768px) {
-  .membox-doc-status {
+  .membox-status-cluster {
     left: 12px;
     bottom: 12px;
   }
+}
+
+/* + button: new related document. */
+.membox-add-related {
+  appearance: none;
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--paper-raised);
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: 17px;
+  line-height: 1;
+  box-shadow: 0 4px 16px var(--shadow);
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+}
+
+.membox-add-related:hover {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
+  background: color-mix(in srgb, var(--accent-soft) 62%, var(--paper-raised));
+  transform: translateY(-1px);
+}
+
+/* Related-documents grid under the TOC. */
+.membox-related {
+  padding: 20px 16px 8px;
+  border-top: 1px solid var(--line);
+  margin-top: 16px;
+}
+
+.membox-related-title {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 10px;
+}
+
+.membox-related-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(78px, 1fr));
+  gap: 6px;
+}
+
+.membox-related-tile {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 46px;
+  padding: 6px 7px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper-raised);
+  text-decoration: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.membox-related-tile:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  box-shadow: 0 3px 10px var(--shadow);
+  transform: translateY(-1px);
+  z-index: 60;
+}
+
+.membox-related-label {
+  font-family: var(--font-sans);
+  font-size: 10.5px;
+  line-height: 1.3;
+  color: var(--muted);
+  text-align: center;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  transition: color 0.15s ease;
+}
+
+.membox-related-tile:hover .membox-related-label {
+  color: var(--ink-soft);
+}
+
+/* Hover tooltip: title + full UUID. */
+.membox-related-tile::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 7px);
+  left: 50%;
+  transform: translateX(-50%) translateY(2px);
+  white-space: pre-line;
+  width: max-content;
+  max-width: 220px;
+  padding: 6px 10px;
+  border-radius: 7px;
+  background: var(--ink);
+  color: var(--paper);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1.45;
+  text-align: center;
+  box-shadow: 0 6px 18px var(--shadow);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  z-index: 80;
+}
+
+.membox-related-tile:hover::after {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+.toc.is-collapsed .membox-related {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* New-related-document modal. */
+.membox-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 250;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--ink) 32%, transparent);
+}
+
+.membox-modal {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(600px, calc(100vw - 48px));
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--paper-raised);
+  box-shadow: 0 24px 64px var(--shadow);
+}
+
+.membox-modal-title {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.membox-modal-input,
+.membox-modal-body {
+  appearance: none;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  padding: 8px 10px;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.membox-modal-input:focus,
+.membox-modal-body:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.membox-modal-body {
+  min-height: 200px;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.membox-modal-hint {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.membox-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.membox-modal-btn {
+  appearance: none;
+  border-radius: 8px;
+  padding: 7px 14px;
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.membox-modal-cancel {
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+}
+
+.membox-modal-cancel:hover {
+  color: var(--ink-soft);
+  border-color: var(--muted);
+}
+
+.membox-modal-save {
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--paper);
+}
+
+.membox-modal-save:hover {
+  background: color-mix(in srgb, var(--accent) 84%, var(--ink));
+}
+
+.membox-modal-save:disabled {
+  opacity: 0.55;
+  cursor: default;
 }
 
 @media (prefers-reduced-motion: reduce) {

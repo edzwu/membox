@@ -56,8 +56,18 @@ function createConnectionButton() {
 
 const connectionButton = createConnectionButton();
 
-// Bottom-left status pill: while connected, tells whether the current document
-// already has a membox identity and shows the UUID suffix that identifies it.
+// Bottom-left cluster: status pill plus the “new related document” button.
+// The pill tells whether the current document already has a membox identity
+// and shows the UUID suffix that identifies it.
+function createStatusCluster() {
+  const cluster = document.createElement('div');
+  cluster.className = 'membox-status-cluster';
+  document.body.appendChild(cluster);
+  return cluster;
+}
+
+const statusCluster = createStatusCluster();
+
 function createStatusBadge() {
   const badge = document.createElement('button');
   badge.type = 'button';
@@ -65,7 +75,7 @@ function createStatusBadge() {
   badge.className = 'membox-doc-status';
   badge.hidden = true;
   badge.innerHTML = '<span class="membox-status-dot" aria-hidden="true"></span><span class="membox-status-text"></span>';
-  document.body.appendChild(badge);
+  statusCluster.appendChild(badge);
   badge.addEventListener('click', () => {
     if (!documentID || !navigator.clipboard) return;
     navigator.clipboard.writeText(documentID)
@@ -77,9 +87,27 @@ function createStatusBadge() {
 
 const statusBadge = createStatusBadge();
 
+function createAddRelatedButton() {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.id = 'membox-add-related';
+  button.className = 'membox-add-related';
+  button.hidden = true;
+  button.textContent = '+';
+  button.title = 'New related document';
+  button.setAttribute('aria-label', 'New related document');
+  statusCluster.appendChild(button);
+  button.addEventListener('click', openRelatedModal);
+  return button;
+}
+
+const addRelatedButton = createAddRelatedButton();
+
 function renderDocStatus() {
   if (!connected) {
     statusBadge.hidden = true;
+    addRelatedButton.hidden = true;
+    hideRelatedPanel();
     return;
   }
   const text = statusBadge.querySelector('.membox-status-text');
@@ -88,10 +116,166 @@ function renderDocStatus() {
     statusBadge.dataset.saved = 'true';
     text.textContent = `membox \u00b7 ${String(documentID).slice(-5)}`;
     statusBadge.title = `Saved in membox \u00b7 ${documentID} (click to copy UUID)`;
+    addRelatedButton.hidden = false;
+    void loadRelated();
   } else {
     statusBadge.dataset.saved = 'false';
     text.textContent = 'membox \u00b7 unsaved';
     statusBadge.title = 'Connected to membox \u2014 this document has not been saved yet';
+    addRelatedButton.hidden = true;
+    hideRelatedPanel();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Related documents: a tile grid under the TOC showing the one-hop
+// neighborhood of the current document, plus a “+” flow that creates a new
+// plain Markdown document linked back to it.
+// ---------------------------------------------------------------------------
+function createRelatedPanel() {
+  const panel = document.createElement('div');
+  panel.className = 'membox-related';
+  panel.hidden = true;
+  panel.innerHTML = '<div class="membox-related-title">Related</div><div class="membox-related-grid"></div>';
+  elements.toc.appendChild(panel);
+  return panel;
+}
+
+const relatedPanel = createRelatedPanel();
+const relatedGrid = relatedPanel.querySelector('.membox-related-grid');
+
+function hideRelatedPanel() {
+  relatedPanel.hidden = true;
+  relatedGrid.textContent = '';
+}
+
+async function loadRelated() {
+  if (!connected || !documentID) {
+    hideRelatedPanel();
+    return;
+  }
+  try {
+    const response = await fetch(`/api/doc/${encodeURIComponent(documentID)}/related`, { cache: 'no-store' });
+    if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
+    const data = await response.json();
+    renderRelatedGrid(Array.isArray(data.related) ? data.related : []);
+  } catch (err) {
+    console.warn('membox: could not load related documents', err);
+    hideRelatedPanel();
+  }
+}
+
+function renderRelatedGrid(items) {
+  relatedGrid.textContent = '';
+  if (!items.length) {
+    relatedPanel.hidden = true;
+    return;
+  }
+  relatedPanel.hidden = false;
+  for (const item of items) {
+    const filename = String(item.path || '').split(/[\\/]/).pop();
+    const label = String(item.title || filename || item.id).trim() || filename;
+    const tile = document.createElement('a');
+    tile.className = 'membox-related-tile';
+    tile.href = `/?id=${encodeURIComponent(item.id)}`;
+    tile.dataset.direction = item.direction === 'in' ? 'in' : 'out';
+    tile.dataset.tip = `${label}\n${item.id}`;
+    tile.setAttribute('aria-label', `${label} (${item.id})`);
+    const span = document.createElement('span');
+    span.className = 'membox-related-label';
+    span.textContent = label;
+    tile.appendChild(span);
+    relatedGrid.appendChild(tile);
+  }
+}
+
+// Modal for creating a related document.
+function createRelatedModal() {
+  const backdrop = document.createElement('div');
+  backdrop.className = 'membox-modal-backdrop';
+  backdrop.hidden = true;
+  backdrop.innerHTML = `
+    <div class="membox-modal" role="dialog" aria-modal="true" aria-label="New related document">
+      <div class="membox-modal-title">New related document</div>
+      <input class="membox-modal-input" type="text" placeholder="Title" maxlength="200" spellcheck="false">
+      <textarea class="membox-modal-body" placeholder="Paste related content (Markdown)\u2026" spellcheck="false"></textarea>
+      <div class="membox-modal-hint">Saves as a new Markdown document linked back to the current one \u00b7 \u2318Enter to save</div>
+      <div class="membox-modal-actions">
+        <button type="button" class="membox-modal-btn membox-modal-cancel">Cancel</button>
+        <button type="button" class="membox-modal-btn membox-modal-save">Create</button>
+      </div>
+    </div>`;
+  document.body.appendChild(backdrop);
+  backdrop.addEventListener('mousedown', (event) => {
+    if (event.target === backdrop) closeRelatedModal();
+  });
+  const modal = backdrop.querySelector('.membox-modal');
+  const titleInput = backdrop.querySelector('.membox-modal-input');
+  const bodyInput = backdrop.querySelector('.membox-modal-body');
+  backdrop.querySelector('.membox-modal-cancel').addEventListener('click', closeRelatedModal);
+  backdrop.querySelector('.membox-modal-save').addEventListener('click', () => void saveRelated());
+  const onKeydown = (event) => {
+    if (event.key === 'Escape') {
+      event.stopPropagation();
+      closeRelatedModal();
+    } else if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      void saveRelated();
+    }
+  };
+  modal.addEventListener('keydown', onKeydown);
+  return { backdrop, titleInput, bodyInput };
+}
+
+const relatedModal = createRelatedModal();
+let relatedSaving = false;
+
+function openRelatedModal() {
+  if (!connected || !documentID) return;
+  relatedModal.titleInput.value = '';
+  relatedModal.bodyInput.value = '';
+  relatedModal.backdrop.hidden = false;
+  relatedModal.titleInput.focus();
+}
+
+function closeRelatedModal() {
+  relatedModal.backdrop.hidden = true;
+}
+
+async function saveRelated() {
+  if (relatedSaving) return;
+  const title = relatedModal.titleInput.value.trim();
+  const body = relatedModal.bodyInput.value;
+  if (!title) {
+    showToast('Give the related document a title');
+    relatedModal.titleInput.focus();
+    return;
+  }
+  if (!body.trim()) {
+    showToast('Paste some content first');
+    relatedModal.bodyInput.focus();
+    return;
+  }
+  relatedSaving = true;
+  const saveButton = relatedModal.backdrop.querySelector('.membox-modal-save');
+  saveButton.disabled = true;
+  try {
+    const response = await fetch(`/api/doc/${encodeURIComponent(documentID)}/related`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, body }),
+    });
+    if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
+    const result = await response.json();
+    closeRelatedModal();
+    showToast(`Created related document: ${String(result.id).slice(0, 8)}`);
+    void loadRelated();
+  } catch (err) {
+    console.error('membox: creating related document failed', err);
+    showToast(`Could not create related document: ${err.message}`);
+  } finally {
+    relatedSaving = false;
+    saveButton.disabled = false;
   }
 }
 
