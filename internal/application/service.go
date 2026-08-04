@@ -2,6 +2,8 @@ package application
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
@@ -703,6 +705,58 @@ func (s *Service) DeleteDocumentFile(ctx context.Context, selector string) (cata
 	return *document, absolute, nil
 }
 
+type RenameDocumentResult struct {
+	DocumentID catalog.DocumentID
+	Path       string
+}
+
+// RenameDocument moves an active source file to a new filename in the same
+// directory and re-points the existing Document at the new location. The
+// stable UUID, graph links, source URLs, and annotation relations survive
+// untouched because only the location changes.
+func (s *Service) RenameDocument(ctx context.Context, selector, newFilename string) (RenameDocumentResult, error) {
+	document, absolute, err := s.ResolveDocument(ctx, selector)
+	if err != nil {
+		return RenameDocumentResult{}, err
+	}
+	if document.Status != catalog.DocumentActive {
+		return RenameDocumentResult{}, fmt.Errorf("document %s is %s at %s", document.ID, document.Status, absolute)
+	}
+	newFilename = strings.TrimSpace(newFilename)
+	if newFilename == "" || newFilename == "." || newFilename == ".." ||
+		strings.ContainsAny(newFilename, "/\\") || strings.HasPrefix(newFilename, ".") {
+		return RenameDocumentResult{}, fmt.Errorf("invalid filename %q", newFilename)
+	}
+	if ext := strings.ToLower(filepath.Ext(newFilename)); ext != ".md" && ext != ".markdown" {
+		return RenameDocumentResult{}, errors.New("renamed files must stay Markdown (.md or .markdown)")
+	}
+	if filepath.Base(absolute) == newFilename {
+		return RenameDocumentResult{DocumentID: document.ID, Path: absolute}, nil
+	}
+	target := filepath.Join(filepath.Dir(absolute), newFilename)
+	if _, err := os.Stat(target); err == nil {
+		return RenameDocumentResult{}, fmt.Errorf("%s already exists", target)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return RenameDocumentResult{}, err
+	}
+	if err := s.writer.Move(ctx, absolute, target); err != nil {
+		return RenameDocumentResult{}, err
+	}
+	relative := filepath.ToSlash(filepath.Join(filepath.Dir(filepath.FromSlash(document.Location.RelativePath)), newFilename))
+	document.Location.RelativePath = relative
+	observation, err := s.scanner.ObserveFile(ctx, document.Location, target)
+	if err != nil {
+		return RenameDocumentResult{}, err
+	}
+	if err := document.Observe(observation, s.clock.Now()); err != nil {
+		return RenameDocumentResult{}, err
+	}
+	if err := s.store.SaveDocument(ctx, port.ScanSave{Document: document, Body: observation.Body, Reindex: true}); err != nil {
+		return RenameDocumentResult{}, err
+	}
+	return RenameDocumentResult{DocumentID: document.ID, Path: target}, nil
+}
+
 func (s *Service) ListTopics(ctx context.Context) ([]port.DocumentRecord, error) {
 	return s.store.ListTopics(ctx)
 }
@@ -755,12 +809,14 @@ func (s *Service) CreateNote(ctx context.Context, opts CreateNoteOptions) (Creat
 			return CreateNoteResult{Document: existing, Path: absolute}, nil
 		}
 	} else if strings.EqualFold(strings.TrimSpace(opts.ClipMode), "selection") {
-		// Selection excerpts always use the *-note.md convention.
+		// Selection excerpts always use the *-note.md convention. A content
+		// hash keeps names unique when two excerpts share the same slug
+		// prefix, so the -2 collision suffix effectively never triggers.
 		slug = strings.TrimSuffix(slug, "-note")
 		if slug == "" {
 			slug = "selection"
 		}
-		filename = slug + "-note.md"
+		filename = slug + "-" + contentNameFragment(opts.Body, 10) + "-note.md"
 	}
 	absolute, err := s.availableNotePath(indexedPath.Root, filename)
 	if err != nil {
@@ -909,6 +965,21 @@ func noteSlug(title string) string {
 		}
 	}
 	return strings.Trim(builder.String(), "-")
+}
+
+// contentNameFragment derives a short fragment from the note body so
+// selection notes sharing a slug prefix still get distinct filenames. It is
+// deliberately alphabetic, never hex: document IDs are UUIDv7 hex strings, so
+// a hex fragment in filenames would pollute UUID / short-ID searches.
+func contentNameFragment(body string, length int) string {
+	sum := sha256.Sum256([]byte(body))
+	value := binary.BigEndian.Uint64(sum[:8])
+	fragment := make([]byte, length)
+	for i := length - 1; i >= 0; i-- {
+		fragment[i] = "abcdefghijklmnopqrstuvwxyz"[value%26]
+		value /= 26
+	}
+	return string(fragment)
 }
 
 func (s *Service) AddDocumentTopic(ctx context.Context, documentSelector, topicSelector string) (bool, error) {

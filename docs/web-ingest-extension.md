@@ -472,6 +472,7 @@ Extension 或 Miru 选区 Save
 实现要点：
 
 - `*-note.md` 只保存用户可读内容；不复制 `annotates`、anchor、style 等机器 metadata 到 front matter。
+- 文件名 = `slug(摘录前缀)-base26(sha256(正文))[:10]-note.md`：内容 hash 区分同前缀摘录；片段只用字母（不用 hex），避免与 UUIDv7 hex ID 在 FTS/名称搜索中互相误命中；重名 `-2` 后缀只作为极端兜底。
 - `annotation_notes` 以 note document UUID 为主键，保存 target UUID、start、prefix/suffix 和样式。
 - `GET /api/doc/:id/annotations` 读取时组合 Markdown + DB，并按当前 page Markdown 动态计算 `sourceHash/sourceLength`。
 - `POST /api/doc/:id/annotations` 把 Miru 新笔记物化成 `*-note.md`；编辑更新该文件；删除移除该文件与关系行。

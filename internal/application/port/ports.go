@@ -28,6 +28,7 @@ type ContentWriter interface {
 	WriteNew(ctx context.Context, absolutePath string, body []byte) error
 	Write(ctx context.Context, absolutePath string, body []byte) error
 	Remove(ctx context.Context, absolutePath string) error
+	Move(ctx context.Context, fromPath, toPath string) error
 }
 
 type ContentReader interface {

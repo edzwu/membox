@@ -192,6 +192,16 @@ func (Writer) Remove(ctx context.Context, absolutePath string) error {
 	return nil
 }
 
+func (Writer) Move(ctx context.Context, fromPath, toPath string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := os.Rename(fromPath, toPath); err != nil {
+		return fmt.Errorf("renaming document %q: %w", fromPath, err)
+	}
+	return nil
+}
+
 func isMarkdown(name string) bool {
 	switch strings.ToLower(filepath.Ext(name)) {
 	case ".md", ".markdown":

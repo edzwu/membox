@@ -582,6 +582,26 @@ func (b *Box) DeleteDocument(ctx context.Context, command DeleteDocumentCommand)
 	return DeleteDocumentResult{DocumentID: string(document.ID), Path: path}, err
 }
 
+type RenameDocumentCommand struct {
+	Selector    string
+	NewFilename string
+}
+type RenameDocumentResult struct {
+	DocumentID string `json:"document_id"`
+	Path       string `json:"path"`
+}
+
+// RenameDocument moves a document's Markdown file to a new filename in the
+// same directory without changing its stable UUID. Links, source URLs, and
+// annotation relations are preserved.
+func (b *Box) RenameDocument(ctx context.Context, command RenameDocumentCommand) (RenameDocumentResult, error) {
+	result, err := b.service.RenameDocument(ctx, command.Selector, command.NewFilename)
+	if err != nil {
+		return RenameDocumentResult{}, err
+	}
+	return RenameDocumentResult{DocumentID: string(result.DocumentID), Path: result.Path}, nil
+}
+
 type ReindexDocumentCommand struct{ Selector string }
 
 func (b *Box) ReindexDocument(ctx context.Context, command ReindexDocumentCommand) error {

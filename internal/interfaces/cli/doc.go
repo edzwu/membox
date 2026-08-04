@@ -13,7 +13,7 @@ import (
 
 func newDocCommand(runtime *runtime) *cobra.Command {
 	doc := parentCommand("doc", "Find and operate on documents", "a doc command is required")
-	doc.AddCommand(newDocListCommand(runtime), newDocSearchCommand(runtime), newDocShowCommand(runtime), newDocCatCommand(runtime), newDocEditCommand(runtime), newDocOpenCommand(runtime))
+	doc.AddCommand(newDocListCommand(runtime), newDocSearchCommand(runtime), newDocShowCommand(runtime), newDocCatCommand(runtime), newDocEditCommand(runtime), newDocOpenCommand(runtime), newDocRenameCommand(runtime))
 	return doc
 }
 
@@ -194,3 +194,32 @@ func displayName(title, path string) string {
 }
 
 func shortID(id string) string { return host.ShortDocumentID(id) }
+
+func newDocRenameCommand(runtime *runtime) *cobra.Command {
+	var jsonOutput bool
+	command := &cobra.Command{
+		Use:   "rename <document-id> <new-filename>",
+		Short: "Rename the Markdown file without changing the document UUID",
+		Long: `Move the document's Markdown file to a new filename in the same
+directory. The stable UUID, graph links, source URLs, and annotation
+relations are preserved. The new name must stay a Markdown file.`,
+		Args: exactArgs(2, "document ID and new filename"),
+	}
+	command.Flags().BoolVar(&jsonOutput, "json", false, "output JSON")
+	command.RunE = func(cmd *cobra.Command, args []string) error {
+		box, err := runtime.get()
+		if err != nil {
+			return err
+		}
+		result, err := box.RenameDocument(cmd.Context(), membox.RenameDocumentCommand{Selector: args[0], NewFilename: args[1]})
+		if err != nil {
+			return err
+		}
+		if jsonOutput {
+			return writeJSON(cmd, result)
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "Renamed document %s: %s\n", result.DocumentID, result.Path)
+		return nil
+	}
+	return command
+}

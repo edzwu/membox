@@ -46,6 +46,7 @@ type App interface {
 	ResolveDocumentLocation(context.Context, membox.ResolveLocationQuery) (membox.LocationView, error)
 	ReindexDocument(context.Context, membox.ReindexDocumentCommand) error
 	DeleteDocument(context.Context, membox.DeleteDocumentCommand) (membox.DeleteDocumentResult, error)
+	RenameDocument(context.Context, membox.RenameDocumentCommand) (membox.RenameDocumentResult, error)
 	CreateNote(context.Context, membox.CreateNoteCommand) (membox.CreateNoteResult, error)
 	CreateTopic(context.Context, membox.CreateTopicCommand) (membox.CreateTopicResult, error)
 	ListTopics(context.Context, membox.ListTopicsQuery) ([]membox.TopicView, error)
@@ -244,6 +245,11 @@ type noteCreatedMsg struct {
 }
 type topicCreatedMsg struct{ topic membox.TopicView }
 type deleteResultMsg struct {
+	documentID string
+	path       string
+	err        error
+}
+type renamedMsg struct {
 	documentID string
 	path       string
 	err        error
@@ -533,6 +539,13 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading, m.err = false, msg.err
 		if msg.err == nil {
 			m.statusMessage = msg.text
+		}
+		m.clearExecutedCommand()
+	case renamedMsg:
+		m.loading, m.err = false, msg.err
+		if msg.err == nil {
+			m.statusMessage = "Renamed " + filepath.Base(msg.path)
+			commands = append(commands, listDocumentsCmd(m.ctx, m.app, m.listSequence))
 		}
 		m.clearExecutedCommand()
 	case spaceTimeoutMsg:
@@ -825,6 +838,7 @@ func (m Model) commandSuggestions() []commandSuggestion {
 			{Value: "note", Display: "note", Description: "Create and manage notes"},
 			{Value: "topic", Display: "topic", Description: "Manage topic documents"},
 			{Value: "link", Display: "link", Description: "Manage document links"},
+			{Value: "rename", Display: "rename", Description: "Rename selected file (keeps UUID)"},
 		}, partial)
 	}
 	if index == 1 {
@@ -1093,6 +1107,23 @@ func (m Model) commandAction(tokens []string) (func() tea.Msg, string, error) {
 			}
 			return graphFocusCmd(m.ctx, m.app, selector(tokens[2])), "link list <document-id>", nil
 		}
+	case "rename":
+		// Rename operates on the highlighted document so the command stays a
+		// single argument: `rename new-name.md`.
+		if len(tokens) < 2 {
+			return nil, "rename <new-filename>", fmt.Errorf("new filename is required")
+		}
+		if selected == "" {
+			return nil, "rename <new-filename>", fmt.Errorf("no document is selected")
+		}
+		name := strings.Join(tokens[1:], " ")
+		return func() tea.Msg {
+			result, err := m.app.RenameDocument(m.ctx, membox.RenameDocumentCommand{Selector: selected, NewFilename: name})
+			if err != nil {
+				return renamedMsg{err: err}
+			}
+			return renamedMsg{documentID: result.DocumentID, path: result.Path}
+		}, "rename <new-filename>", nil
 	}
 	return nil, strings.Join(tokens, " "), fmt.Errorf("unknown command %q", tokens[0])
 }

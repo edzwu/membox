@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -660,4 +661,53 @@ type testIngestResp struct {
 	Created bool   `json:"created"`
 	ViewURL string `json:"view_url"`
 	Linked  string `json:"linked"`
+}
+
+func TestSelectionNotesWithSameSlugPrefixUseContentHash(t *testing.T) {
+	baseURL, _, notesDir := startServer(t)
+
+	page := `---
+title: "Hash Page"
+source_url: "https://example.com/hash"
+clipper: membox-clipper
+clip_mode: "page"
+---
+
+# Hash Page
+
+Same prefix unique body one.
+
+Same prefix unique body two.
+`
+	postJSON(t, baseURL+"/api/ingest", map[string]any{
+		"title": "Hash Page", "body": page,
+		"source_url": "https://example.com/hash", "clip_mode": "page",
+	})
+
+	// Two selection notes whose titles produce the same slug must not collide
+	// into a "-2" suffix; the content hash disambiguates them.
+	for _, excerpt := range []string{"Same prefix unique body one.", "Same prefix unique body two."} {
+		sel := "---\ntitle: \"Same prefix… — note\"\nsource_url: \"https://example.com/hash\"\nclipper: membox-clipper\nclip_mode: \"selection\"\n---\n\n> " + excerpt + "\n\nNote about: " + excerpt + "\n"
+		postJSON(t, baseURL+"/api/ingest", map[string]any{
+			"title": "Same prefix… — note", "body": sel,
+			"source_url": "https://example.com/hash", "clip_mode": "selection",
+			"excerpt_raw": excerpt,
+		})
+	}
+
+	files, err := filepath.Glob(filepath.Join(notesDir, "*-note.md"))
+	if err != nil || len(files) != 2 {
+		t.Fatalf("expected 2 selection notes, got %v (err=%v)", files, err)
+	}
+	for _, file := range files {
+		base := filepath.Base(file)
+		// The exact slug-hash-note shape rules out a "-2" collision suffix
+		// (which would appear as ...-note-2.md).
+		if !regexp.MustCompile(`^same-prefix-[a-z]{10}-note\.md$`).MatchString(base) {
+			t.Fatalf("unexpected selection note filename: %s", base)
+		}
+		if strings.HasSuffix(base, "-2-note.md") {
+			t.Fatalf("collision suffix used: %s", base)
+		}
+	}
 }

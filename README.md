@@ -29,6 +29,7 @@ go build -o mm ./cmd/mm
 ./mm doc show <document-id>
 ./mm doc cat <document-id>
 ./mm doc edit <document-id>
+./mm doc rename <document-id> <new-filename>
 ./mm note new "Online Softmax Intuition" --from <document-id>
 ./mm topic create attention
 ./mm topic add <topic-id> <document-id>

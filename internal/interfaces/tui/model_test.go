@@ -39,6 +39,7 @@ type fakeApp struct {
 	scanCount     int
 	graph         membox.DocumentGraphView
 	searchResults []membox.SearchResult
+	renamedTo     string
 }
 
 func (f *fakeApp) AddPath(context.Context, membox.AddPathCommand) (membox.AddPathResult, error) {
@@ -63,6 +64,10 @@ func (f *fakeApp) ResolveDocumentLocation(context.Context, membox.ResolveLocatio
 func (f *fakeApp) ReindexDocument(context.Context, membox.ReindexDocumentCommand) error { return nil }
 func (f *fakeApp) DeleteDocument(_ context.Context, command membox.DeleteDocumentCommand) (membox.DeleteDocumentResult, error) {
 	return membox.DeleteDocumentResult{DocumentID: command.Selector, Path: "/tmp/deleted.md"}, nil
+}
+func (f *fakeApp) RenameDocument(_ context.Context, command membox.RenameDocumentCommand) (membox.RenameDocumentResult, error) {
+	f.renamedTo = command.NewFilename
+	return membox.RenameDocumentResult{DocumentID: command.Selector, Path: "/tmp/renamed.md"}, nil
 }
 func (f *fakeApp) CreateNote(_ context.Context, command membox.CreateNoteCommand) (membox.CreateNoteResult, error) {
 	document := membox.DocumentView{ID: "new-note", Title: command.Title, Path: "/tmp/new-note.md", RelativePath: "new-note.md", Status: "active"}
@@ -2068,5 +2073,51 @@ func TestModel_ThreadViewFullModeFiltersByBody(t *testing.T) {
 	}
 	if model.graphSelected > len(model.visibleGraphIndices())-1 {
 		t.Fatalf("selection escaped the filtered thread: %d", model.graphSelected)
+	}
+}
+
+func TestModel_RenameCommandKeepsUUIDAndRefreshes(t *testing.T) {
+	app := &fakeApp{}
+	model := New(context.Background(), app, fakeLauncher{})
+	model.width, model.height = 100, 30
+	model.items = documentItems([]membox.DocumentView{{ID: "019-alpha", Title: "Alpha", Path: "/tmp/alpha.md", RelativePath: "alpha.md"}})
+	model.refreshFilter()
+	model.inputVisible = true
+	model.inputActive = true
+	model.inputMode = inputModeCmd
+	model.input.SetValue("rename better-name.md")
+
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	message := command()
+	if batch, ok := message.(tea.BatchMsg); ok {
+		message = batch[1]()
+	}
+	renamed, ok := message.(renamedMsg)
+	if !ok {
+		t.Fatalf("expected renamedMsg, got %T", message)
+	}
+	if renamed.documentID != "019-alpha" {
+		t.Fatalf("rename ran against %q, want the selected document", renamed.documentID)
+	}
+	if app.renamedTo != "better-name.md" {
+		t.Fatalf("rename did not pass the new filename: %q", app.renamedTo)
+	}
+	updated, _ = model.Update(renamed)
+	model = updated.(Model)
+	if model.statusMessage != "Renamed renamed.md" {
+		t.Fatalf("status after rename = %q", model.statusMessage)
+	}
+
+	// Usage errors: no selection and no filename.
+	model.inputVisible = true
+	model.inputActive = true
+	model.inputMode = inputModeCmd
+	model.selected = 99
+	model.input.SetValue("rename other.md")
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if model.filterErr == nil {
+		t.Fatal("rename without a selectable document should report a usage error")
 	}
 }

@@ -319,3 +319,57 @@ Source: [Legacy Page](https://example.com/legacy)
 		t.Fatalf("expected exactly 1 annotation after re-scan, got %d", got)
 	}
 }
+
+func TestRenameDocumentKeepsUUID(t *testing.T) {
+	ctx := context.Background()
+	home, notes := t.TempDir(), t.TempDir()
+	original := filepath.Join(notes, "original.md")
+	if err := os.WriteFile(original, []byte("# Original\n\ncontent\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	box, err := membox.Open(membox.Config{Home: home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer box.Close()
+	if _, err := box.AddPath(ctx, membox.AddPathCommand{Directory: notes}); err != nil {
+		t.Fatal(err)
+	}
+	docs, err := box.ListDocuments(ctx, membox.ListDocumentsQuery{Limit: 10})
+	if err != nil || len(docs) != 1 {
+		t.Fatalf("expected one document, got %d (err=%v)", len(docs), err)
+	}
+	id := docs[0].ID
+
+	result, err := box.RenameDocument(ctx, membox.RenameDocumentCommand{Selector: id, NewFilename: "renamed.md"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.DocumentID != id {
+		t.Fatalf("UUID changed: %s -> %s", id, result.DocumentID)
+	}
+	if _, err := os.Stat(filepath.Join(notes, "renamed.md")); err != nil {
+		t.Fatalf("renamed file missing: %v", err)
+	}
+	if _, err := os.Stat(original); !os.IsNotExist(err) {
+		t.Fatal("old file still exists after rename")
+	}
+
+	// The same UUID now resolves to the new location.
+	doc, err := box.GetDocument(ctx, membox.GetDocumentQuery{Selector: id})
+	if err != nil || doc.RelativePath != "renamed.md" {
+		t.Fatalf("document location not updated: %+v err=%v", doc, err)
+	}
+
+	// Renaming onto an existing file is rejected.
+	if err := os.WriteFile(filepath.Join(notes, "taken.md"), []byte("# Taken\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := box.RenameDocument(ctx, membox.RenameDocumentCommand{Selector: id, NewFilename: "taken.md"}); err == nil {
+		t.Fatal("rename onto an existing file should fail")
+	}
+	// Non-Markdown names are rejected.
+	if _, err := box.RenameDocument(ctx, membox.RenameDocumentCommand{Selector: id, NewFilename: "renamed.txt"}); err == nil {
+		t.Fatal("rename to a non-Markdown extension should fail")
+	}
+}
