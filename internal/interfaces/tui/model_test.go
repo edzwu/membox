@@ -1850,3 +1850,38 @@ func TestModel_ThreadTreeWalkKeepsRootAfterOpen(t *testing.T) {
 		t.Fatal("viewer exit should not schedule a graph re-focus")
 	}
 }
+
+func TestModel_HideNotesFiltersClippedNotes(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.width, model.height = 120, 24
+	model.items = documentItems([]membox.DocumentView{
+		{ID: "019-doc", Title: "Article", Path: "/tmp/article.md"},
+		{ID: "019-note", Title: "a note", Path: "/tmp/article-note.md"},
+		{ID: "019-doc2", Title: "Other", Path: "/tmp/other.md"},
+	})
+
+	model.hideNotes = true
+	model.refreshFilter()
+	if len(model.filtered) != 2 {
+		t.Fatalf("hide_notes=on kept %d items, want 2", len(model.filtered))
+	}
+	for _, it := range model.filtered {
+		if strings.HasSuffix(it.filename, "-note.md") {
+			t.Fatalf("note file not hidden: %s", it.filename)
+		}
+	}
+
+	model.hideNotes = false
+	model.refreshFilter()
+	if len(model.filtered) != 3 {
+		t.Fatalf("hide_notes=off kept %d items, want 3", len(model.filtered))
+	}
+
+	// Search results honor the same setting.
+	results := []membox.SearchResult{{DocumentID: "019-note"}, {DocumentID: "019-doc"}}
+	model.hideNotes = true
+	got := searchResultItems(model.items, results, nil, nil, model.hideNotes)
+	if len(got) != 1 || got[0].document.ID != "019-doc" {
+		t.Fatalf("search with hide_notes leaked notes: %+v", got)
+	}
+}

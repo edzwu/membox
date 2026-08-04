@@ -868,12 +868,14 @@ var settingSpecs = []Setting{
 	{Key: "viewer", Label: "viewer", Value: "leaf", Options: []string{"leaf", "web"}},
 	{Key: "model", Label: "model", Value: "k3", Options: []string{"k3", "grok-4.5"}},
 	{Key: SettingMainPath, Label: "main path", Value: "", Options: nil},
+	{Key: SettingHideNotes, Label: "hide notes", Value: "on", Options: []string{"on", "off"}},
 }
 
 const (
 	ViewerLeaf      = "leaf"
 	ViewerWeb       = "web"
 	SettingMainPath = "main_path"
+	SettingHideNotes = "hide_notes"
 )
 
 // GetViewer returns the configured viewer mode, defaulting to leaf.

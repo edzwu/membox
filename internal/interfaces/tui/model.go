@@ -153,6 +153,7 @@ type Model struct {
 	viewMode       string
 	sortMode       string
 	viewerMode     string
+	hideNotes      bool
 	configVisible  bool
 	configSelected int
 	settings       []membox.SettingView
@@ -317,7 +318,11 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				if setting.Key == "viewer" {
 					m.viewerMode = setting.Value
 				}
+				if setting.Key == "hide_notes" {
+					m.hideNotes = setting.Value == "on"
+				}
 			}
+			m.refreshFilter()
 		}
 	case settingSavedMsg:
 		m.loading, m.err = false, msg.err
@@ -329,6 +334,10 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if msg.key == "viewer" {
 				m.viewerMode = msg.value
+			}
+			if msg.key == "hide_notes" {
+				m.hideNotes = msg.value == "on"
+				m.refreshFilter()
 			}
 			m.statusMessage = msg.key + ": " + msg.value
 		}
@@ -347,7 +356,7 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if m.fullTextFilterQuery() == msg.query {
 			m.loading, m.err = false, msg.err
 			if msg.err == nil {
-				m.filtered = searchResultItems(m.items, msg.results, m.dateFilters, m.nameTextFilterQueries())
+				m.filtered = searchResultItems(m.items, msg.results, m.dateFilters, m.nameTextFilterQueries(), m.hideNotes)
 				m.sortFiltered()
 				m.selected = 0
 				m.keepSelectionVisible()
@@ -1603,6 +1612,9 @@ func (m *Model) refreshFilter() {
 	nameQueries := m.nameTextFilterQueries()
 	m.filtered = m.filtered[:0]
 	for _, candidate := range m.items {
+		if m.hideNotes && isClippedNote(candidate.filename) {
+			continue
+		}
 		if matchesTextFilters(candidate.match, nameQueries) && matchesDateFilters(candidate.document, m.dateFilters) {
 			m.filtered = append(m.filtered, candidate)
 		}
@@ -2673,18 +2685,27 @@ func (m Model) hints() string {
 	return "s sort:" + sortLabel + " • v " + m.viewerMode + " • p pin • d del • space×2 input • ctrl+o cfg • ctrl+r scan • enter open • ctrl+d quit"
 }
 
-func searchResultItems(items []item, results []membox.SearchResult, dateFilters []dateFilter, nameQueries []string) []item {
+func searchResultItems(items []item, results []membox.SearchResult, dateFilters []dateFilter, nameQueries []string, hideNotes bool) []item {
 	allowed := make(map[string]bool, len(results))
 	for _, result := range results {
 		allowed[result.DocumentID] = true
 	}
 	filtered := make([]item, 0, len(results))
 	for _, candidate := range items {
+		if hideNotes && isClippedNote(candidate.filename) {
+			continue
+		}
 		if allowed[candidate.document.ID] && matchesDateFilters(candidate.document, dateFilters) && matchesTextFilters(candidate.match, nameQueries) {
 			filtered = append(filtered, candidate)
 		}
 	}
 	return filtered
+}
+
+// Clipped selection notes (*-note.md) stay out of the tree/board when
+// hide_notes is on; they remain reachable via the viewer and link threads.
+func isClippedNote(filename string) bool {
+	return strings.HasSuffix(filename, "-note.md")
 }
 
 func documentItems(documents []membox.DocumentView) []item {
