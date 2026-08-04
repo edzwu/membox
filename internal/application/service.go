@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	"membox/internal/application/port"
@@ -233,6 +234,11 @@ func (s *Service) scanOne(ctx context.Context, indexedPath *catalog.IndexedPath)
 	var alreadyMissing []*catalog.Document
 	for _, document := range existing {
 		if seen[document.Location.RelativePath] {
+			continue
+		}
+		if catalog.IsTrashedPath(document.Location.RelativePath) {
+			// Trashed documents live in the skipped trash directory; scans must
+			// never mark them missing or reconcile them away.
 			continue
 		}
 		if document.Status == catalog.DocumentActive {
@@ -603,14 +609,12 @@ func (s *Service) DeleteAnnotationNote(ctx context.Context, targetSelector, note
 	if !ok || record.TargetDocumentID != target.ID {
 		return fmt.Errorf("document %s is not an annotation note for %s", note.ID, target.ID)
 	}
-	if _, _, err := s.DeleteDocumentFile(ctx, string(note.ID)); err != nil {
+	if _, _, err := s.TrashDocumentFile(ctx, string(note.ID)); err != nil {
 		return err
 	}
-	if err := s.store.DeleteAnnotationNote(ctx, note.ID); err != nil {
-		return err
-	}
-	_, err = s.store.RemoveEdge(ctx, target.ID, note.ID, catalog.EdgeManual)
-	return err
+	// Soft delete: the UUID relation and graph edge survive (hidden by the
+	// trash filter), so restoring the note revives the annotation unchanged.
+	return nil
 }
 
 func (s *Service) SaveDocumentReadState(ctx context.Context, selector string, progressY int, progressAt string) error {
@@ -704,6 +708,155 @@ func (s *Service) DeleteDocumentFile(ctx context.Context, selector string) (cata
 		return *document, absolute, err
 	}
 	return *document, absolute, nil
+}
+
+// TrashDocumentFile soft-deletes a document: the Markdown file moves into the
+// path root's hidden trash directory and a trash record hides the document
+// from listings, search, graphs, and annotation DTOs. UUID, relations, index,
+// and FTS entries stay intact so RestoreDocument is a plain move back.
+func (s *Service) TrashDocumentFile(ctx context.Context, selector string) (catalog.Document, string, error) {
+	document, absolute, err := s.ResolveDocument(ctx, selector)
+	if err != nil {
+		return catalog.Document{}, "", err
+	}
+	if document.Status != catalog.DocumentActive {
+		return catalog.Document{}, "", fmt.Errorf("document %s is %s at %s", document.ID, document.Status, absolute)
+	}
+	if _, trashed, trashErr := s.store.GetTrashedDocument(ctx, document.ID); trashErr != nil {
+		return catalog.Document{}, "", trashErr
+	} else if trashed {
+		return catalog.Document{}, "", fmt.Errorf("document %s is already in the trash", document.ID)
+	}
+	indexedPath, err := s.store.ResolvePath(ctx, strconv.FormatInt(int64(document.Location.PathID), 10), false)
+	if err != nil {
+		return catalog.Document{}, "", err
+	}
+	trashDir := filepath.Join(indexedPath.Root, catalog.TrashDir)
+	if err := os.MkdirAll(trashDir, 0o755); err != nil {
+		return catalog.Document{}, "", fmt.Errorf("creating trash directory: %w", err)
+	}
+	dest := filepath.Base(absolute)
+	ext := filepath.Ext(dest)
+	stem := strings.TrimSuffix(dest, ext)
+	for i := 2; fileExists(filepath.Join(trashDir, dest)); i++ {
+		dest = fmt.Sprintf("%s-%d%s", stem, i, ext)
+	}
+	trashAbs := filepath.Join(trashDir, dest)
+	if err := s.writer.Move(ctx, absolute, trashAbs); err != nil {
+		return catalog.Document{}, "", err
+	}
+	origin := document.Location.RelativePath
+	if err := s.store.SetDocumentRelativePath(ctx, document.ID, catalog.TrashDir+"/"+filepath.ToSlash(dest)); err != nil {
+		return catalog.Document{}, "", err
+	}
+	if err := s.store.TrashDocument(ctx, document.ID, origin, s.clock.Now()); err != nil {
+		return catalog.Document{}, "", err
+	}
+	return *document, trashAbs, nil
+}
+
+// RestoreDocument moves a trashed document back to its original location and
+// unhides it. Fails when the origin path is occupied again.
+func (s *Service) RestoreDocument(ctx context.Context, selector string) (catalog.Document, string, error) {
+	document, absolute, err := s.ResolveDocument(ctx, selector)
+	if err != nil {
+		return catalog.Document{}, "", err
+	}
+	trash, ok, err := s.store.GetTrashedDocument(ctx, document.ID)
+	if err != nil {
+		return catalog.Document{}, "", err
+	}
+	if !ok {
+		return catalog.Document{}, "", fmt.Errorf("document %s is not in the trash", document.ID)
+	}
+	indexedPath, err := s.store.ResolvePath(ctx, strconv.FormatInt(int64(document.Location.PathID), 10), false)
+	if err != nil {
+		return catalog.Document{}, "", err
+	}
+	originAbs := filepath.Join(indexedPath.Root, filepath.FromSlash(trash.OriginRelativePath))
+	if fileExists(originAbs) {
+		return catalog.Document{}, "", fmt.Errorf("cannot restore %s: %s already exists", document.ID, trash.OriginRelativePath)
+	}
+	if err := os.MkdirAll(filepath.Dir(originAbs), 0o755); err != nil {
+		return catalog.Document{}, "", fmt.Errorf("preparing restore directory: %w", err)
+	}
+	if err := s.writer.Move(ctx, absolute, originAbs); err != nil {
+		return catalog.Document{}, "", err
+	}
+	if err := s.store.SetDocumentRelativePath(ctx, document.ID, trash.OriginRelativePath); err != nil {
+		return catalog.Document{}, "", err
+	}
+	if err := s.store.DeleteTrashRecord(ctx, document.ID); err != nil {
+		return catalog.Document{}, "", err
+	}
+	return *document, originAbs, nil
+}
+
+// PurgeTrashedDocuments physically deletes trashed documents. A zero
+// olderThan purges everything; otherwise only items trashed strictly before
+// it. Returns how many documents were removed and how many bytes were freed.
+func (s *Service) PurgeTrashedDocuments(ctx context.Context, olderThan time.Time) (int, int64, error) {
+	records, trashRecords, err := s.store.ListTrashedDocuments(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	byID := make(map[catalog.DocumentID]port.TrashRecord, len(trashRecords))
+	for _, record := range trashRecords {
+		byID[record.DocumentID] = record
+	}
+	var removed int
+	var freed int64
+	roots := map[catalog.IndexedPathID]string{}
+	for _, record := range records {
+		trash, ok := byID[record.Document.ID]
+		if !ok {
+			continue
+		}
+		if !olderThan.IsZero() && !trash.TrashedAt.Before(olderThan) {
+			continue
+		}
+		if fileExists(record.AbsolutePath) {
+			if err := s.writer.Remove(ctx, record.AbsolutePath); err != nil {
+				return removed, freed, err
+			}
+		}
+		if err := s.store.PurgeDocument(ctx, record.Document.ID); err != nil {
+			return removed, freed, err
+		}
+		if indexedPath, pathErr := s.store.ResolvePath(ctx, strconv.FormatInt(int64(record.Document.Location.PathID), 10), false); pathErr == nil {
+			roots[indexedPath.ID] = indexedPath.Root
+		}
+		removed++
+		freed += record.Document.Index.Size
+	}
+	for _, root := range roots {
+		// Best effort: the directory only disappears when it is empty.
+		_ = os.Remove(filepath.Join(root, catalog.TrashDir))
+	}
+	return removed, freed, nil
+}
+
+// TrashSummary reports how many documents are trashed and their total size.
+func (s *Service) TrashSummary(ctx context.Context) (int, int64, error) {
+	records, _, err := s.store.ListTrashedDocuments(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	var size int64
+	for _, record := range records {
+		size += record.Document.Index.Size
+	}
+	return len(records), size, nil
+}
+
+// ListTrashedDocuments returns trashed documents with their trash records.
+func (s *Service) ListTrashedDocuments(ctx context.Context) ([]port.DocumentRecord, []port.TrashRecord, error) {
+	return s.store.ListTrashedDocuments(ctx)
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 type RenameDocumentResult struct {

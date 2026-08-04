@@ -13,7 +13,7 @@ import (
 
 func newDocCommand(runtime *runtime) *cobra.Command {
 	doc := parentCommand("doc", "Find and operate on documents", "a doc command is required")
-	doc.AddCommand(newDocListCommand(runtime), newDocSearchCommand(runtime), newDocShowCommand(runtime), newDocCatCommand(runtime), newDocEditCommand(runtime), newDocOpenCommand(runtime), newDocRenameCommand(runtime))
+	doc.AddCommand(newDocListCommand(runtime), newDocSearchCommand(runtime), newDocShowCommand(runtime), newDocCatCommand(runtime), newDocEditCommand(runtime), newDocOpenCommand(runtime), newDocRenameCommand(runtime), newDocDeleteCommand(runtime))
 	return doc
 }
 
@@ -194,6 +194,35 @@ func displayName(title, path string) string {
 }
 
 func shortID(id string) string { return host.ShortDocumentID(id) }
+
+func newDocDeleteCommand(runtime *runtime) *cobra.Command {
+	var jsonOutput bool
+	command := &cobra.Command{
+		Use:   "delete <document-id>",
+		Short: "Move a document to the trash (soft delete)",
+		Long: `Move the document's Markdown file into the path's trash directory.
+The document keeps its UUID, links, and annotations; restore it with
+'mm trash restore <document-id>' or empty the trash with 'mm trash purge'.`,
+		Args: exactArgs(1, "document ID"),
+	}
+	command.Flags().BoolVar(&jsonOutput, "json", false, "output JSON")
+	command.RunE = func(cmd *cobra.Command, args []string) error {
+		box, err := runtime.get()
+		if err != nil {
+			return err
+		}
+		result, err := box.DeleteDocument(cmd.Context(), membox.DeleteDocumentCommand{Selector: args[0]})
+		if err != nil {
+			return err
+		}
+		if jsonOutput {
+			return writeJSON(cmd, result)
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "Moved %s to trash: %s\n", result.DocumentID, result.Path)
+		return nil
+	}
+	return command
+}
 
 func newDocRenameCommand(runtime *runtime) *cobra.Command {
 	var jsonOutput bool

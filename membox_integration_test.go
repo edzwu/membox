@@ -114,10 +114,15 @@ func TestMVP_PathAddSearchEditRenameAndRestoreIdentity(t *testing.T) {
 	}
 }
 
-func TestDocumentDeleteFileRemovesFileAndMarksMissingAfterScan(t *testing.T) {
+func TestDocumentDeleteMovesToTrashAndRestoresOrPurges(t *testing.T) {
 	ctx := context.Background()
 	home, notes := t.TempDir(), t.TempDir()
 	path := filepath.Join(notes, "delete.md")
+	wantPath, err := filepath.EvalSymlinks(notes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPath = filepath.Join(wantPath, "delete.md")
 	if err := os.WriteFile(path, []byte("# Delete\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -137,18 +142,52 @@ func TestDocumentDeleteFileRemovesFileAndMarksMissingAfterScan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.DocumentID != documents[0].ID || result.Path != documents[0].Path {
+	if result.DocumentID != documents[0].ID || !result.Trashed {
 		t.Fatalf("unexpected delete result: %+v", result)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatalf("file still exists: %v", err)
+		t.Fatalf("file still at original path: %v", err)
 	}
-	document, err := box.GetDocument(ctx, membox.GetDocumentQuery{Selector: documents[0].ID})
+	if _, err := os.Stat(filepath.Join(notes, ".membox-trash", "delete.md")); err != nil {
+		t.Fatalf("file not in trash: %v", err)
+	}
+	// Trashed documents disappear from listings and search but keep their UUID.
+	visible, err := box.ListDocuments(ctx, membox.ListDocumentsQuery{Limit: 10, All: true})
+	if err != nil || len(visible) != 0 {
+		t.Fatalf("trashed document still listed: count=%d err=%v", len(visible), err)
+	}
+	trash, err := box.ListTrash(ctx)
+	if err != nil || len(trash) != 1 || trash[0].ID != documents[0].ID || trash[0].OriginRelativePath != "delete.md" {
+		t.Fatalf("unexpected trash listing: %+v err=%v", trash, err)
+	}
+	// Restore moves the file back and unhides it.
+	restored, err := box.RestoreTrashedDocument(ctx, membox.RestoreDocumentCommand{Selector: documents[0].ID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if document.Status != "missing" {
-		t.Fatalf("deleted document status=%s", document.Status)
+	if restored.Path != wantPath {
+		t.Fatalf("unexpected restore path: %s (want %s)", restored.Path, wantPath)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("restored file missing: %v", err)
+	}
+	visible, err = box.ListDocuments(ctx, membox.ListDocumentsQuery{Limit: 10})
+	if err != nil || len(visible) != 1 || visible[0].ID != documents[0].ID {
+		t.Fatalf("restored document not listed: count=%d err=%v", len(visible), err)
+	}
+	// Purge finally removes file and rows.
+	if _, err := box.DeleteDocument(ctx, membox.DeleteDocumentCommand{Selector: documents[0].ID}); err != nil {
+		t.Fatal(err)
+	}
+	purge, err := box.PurgeTrash(ctx, membox.PurgeTrashCommand{All: true})
+	if err != nil || purge.Removed != 1 {
+		t.Fatalf("unexpected purge result: %+v err=%v", purge, err)
+	}
+	if _, err := os.Stat(filepath.Join(notes, ".membox-trash", "delete.md")); !os.IsNotExist(err) {
+		t.Fatalf("purged file still exists: %v", err)
+	}
+	if _, err := box.GetDocument(ctx, membox.GetDocumentQuery{Selector: documents[0].ID}); err == nil {
+		t.Fatal("purged document still resolves")
 	}
 }
 

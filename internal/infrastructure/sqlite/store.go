@@ -326,13 +326,24 @@ CREATE INDEX IF NOT EXISTS document_sources_mode ON document_sources(clip_mode);
 	if err != nil {
 		return fmt.Errorf("migrating document_sources: %w", err)
 	}
+	// Soft-delete registry: trashed documents keep their rows and relations;
+	// queries hide them and scans skip the trash directory until purge.
+	if _, err := s.db.Exec(`
+CREATE TABLE IF NOT EXISTS document_trash (
+    document_id TEXT PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
+    origin_relative_path TEXT NOT NULL,
+    trashed_at INTEGER NOT NULL
+);
+`); err != nil {
+		return fmt.Errorf("migrating document_trash: %w", err)
+	}
 	return nil
 }
 
 func (s *Store) ListDocumentSources(ctx context.Context, clipMode string) ([]port.DocumentSourceRecord, error) {
 	query := documentSelect + `
 JOIN document_sources ds ON ds.document_id = d.id
-WHERE l.status='active'
+WHERE l.status='active' AND ` + notTrashedClause + `
 `
 	var args []any
 	if clipMode != "" {
@@ -572,6 +583,10 @@ func (s *Store) DocumentsForPath(ctx context.Context, id catalog.IndexedPathID) 
 	return out, rows.Err()
 }
 
+// notTrashedClause hides soft-deleted documents from listings while keeping
+// their rows intact for restore.
+const notTrashedClause = `d.id NOT IN (SELECT document_id FROM document_trash)`
+
 // documentSelect is the shared read projection for documents. The reported
 // source_updated_at is the document's own source time raised to the latest
 // annotation-note activity targeting it: taking a note counts as working on
@@ -585,7 +600,8 @@ MAX(COALESCE(i.source_updated_at,CASE WHEN i.mtime>0 THEN i.mtime/1000000 ELSE d
     COALESCE((SELECT MAX(MAX(an.updated_at,COALESCE(ni.source_updated_at,0)))
               FROM annotation_notes an
               LEFT JOIN document_index ni ON ni.document_id=an.note_document_id
-              WHERE an.target_document_id=d.id),0)),p.root_path
+              WHERE an.target_document_id=d.id
+                AND an.note_document_id NOT IN (SELECT document_id FROM document_trash)),0)),p.root_path
 FROM documents d JOIN document_locations l ON l.document_id=d.id
 JOIN paths p ON p.id=l.path_id LEFT JOIN document_index i ON i.document_id=d.id`
 
@@ -753,6 +769,7 @@ a.highlight,a.underline,a.strikethrough,a.created_at,a.updated_at
 FROM annotation_notes a
 JOIN document_locations l ON l.document_id=a.note_document_id
 WHERE a.target_document_id=? AND l.status='active'
+  AND a.note_document_id NOT IN (SELECT document_id FROM document_trash)
 ORDER BY a.anchor_start,a.created_at,a.note_document_id`, targetDocumentID)
 	if err != nil {
 		return nil, fmt.Errorf("listing annotation notes for %s: %w", targetDocumentID, err)
@@ -838,7 +855,7 @@ func (s *Store) ResolveTopic(ctx context.Context, selector string) (*catalog.Doc
 	if selector == "" {
 		return nil, "", errors.New("topic selector is required")
 	}
-	records, err := s.topicDocumentRecords(ctx, ` WHERE l.relative_path LIKE 'topic-%.md' AND l.status != 'untracked' AND (d.id=? OR lower(l.relative_path)=lower(?) OR lower(COALESCE(i.title,''))=lower(?) OR lower(REPLACE(COALESCE(i.title,''),' ','-'))=lower(?))`, selector, "topic-"+topicFileSlug(selector)+".md", selector, selector)
+	records, err := s.topicDocumentRecords(ctx, ` WHERE l.relative_path LIKE 'topic-%.md' AND l.status != 'untracked' AND `+notTrashedClause+` AND (d.id=? OR lower(l.relative_path)=lower(?) OR lower(COALESCE(i.title,''))=lower(?) OR lower(REPLACE(COALESCE(i.title,''),' ','-'))=lower(?))`, selector, "topic-"+topicFileSlug(selector)+".md", selector, selector)
 	if err != nil {
 		return nil, "", err
 	}
@@ -852,7 +869,7 @@ func (s *Store) ResolveTopic(ctx context.Context, selector string) (*catalog.Doc
 }
 
 func (s *Store) ListTopics(ctx context.Context) ([]port.DocumentRecord, error) {
-	return s.topicDocumentRecords(ctx, ` WHERE l.relative_path LIKE 'topic-%.md' AND l.status != 'untracked'`)
+	return s.topicDocumentRecords(ctx, ` WHERE l.relative_path LIKE 'topic-%.md' AND l.status != 'untracked' AND `+notTrashedClause)
 }
 
 func (s *Store) topicDocumentRecords(ctx context.Context, where string, arguments ...any) ([]port.DocumentRecord, error) {
@@ -952,8 +969,15 @@ func (s *Store) documentsByIDs(ctx context.Context, query string, argument any) 
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
+	trashed, err := s.trashedDocumentSet(ctx)
+	if err != nil {
+		return nil, err
+	}
 	records := make([]port.DocumentRecord, 0, len(ids))
 	for _, id := range ids {
+		if trashed[id] {
+			continue
+		}
 		document, absolutePath, err := s.ResolveDocument(ctx, id)
 		if err != nil {
 			return nil, err
@@ -965,6 +989,122 @@ func (s *Store) documentsByIDs(ctx context.Context, query string, argument any) 
 
 func (s *Store) ListTopicDocuments(ctx context.Context, topicDocumentID catalog.DocumentID) ([]port.DocumentRecord, error) {
 	return s.documentsByIDs(ctx, `SELECT e.from_document_id FROM graph_edges e WHERE e.to_document_id=? AND e.kind='member' ORDER BY e.created_at, e.from_document_id`, topicDocumentID)
+}
+
+func (s *Store) trashedDocumentSet(ctx context.Context) (map[string]bool, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT document_id FROM document_trash`)
+	if err != nil {
+		return nil, fmt.Errorf("listing trashed documents: %w", err)
+	}
+	defer rows.Close()
+	set := make(map[string]bool)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		set[id] = true
+	}
+	return set, rows.Err()
+}
+
+// TrashDocument records a document as soft-deleted. The caller has already
+// moved the file into the path's trash directory and re-pointed its location.
+func (s *Store) TrashDocument(ctx context.Context, documentID catalog.DocumentID, originRelativePath string, trashedAt time.Time) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO document_trash(document_id,origin_relative_path,trashed_at) VALUES(?,?,?)
+ON CONFLICT(document_id) DO UPDATE SET origin_relative_path=excluded.origin_relative_path,trashed_at=excluded.trashed_at`,
+		documentID, originRelativePath, millis(trashedAt))
+	if err != nil {
+		return fmt.Errorf("recording trashed document %s: %w", documentID, err)
+	}
+	return nil
+}
+
+// GetTrashedDocument returns the trash record for a document, if any.
+func (s *Store) GetTrashedDocument(ctx context.Context, documentID catalog.DocumentID) (port.TrashRecord, bool, error) {
+	var record port.TrashRecord
+	var trashedAt int64
+	err := s.db.QueryRowContext(ctx, `SELECT document_id,origin_relative_path,trashed_at FROM document_trash WHERE document_id=?`, documentID).
+		Scan(&record.DocumentID, &record.OriginRelativePath, &trashedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return port.TrashRecord{}, false, nil
+	}
+	if err != nil {
+		return port.TrashRecord{}, false, fmt.Errorf("reading trash record %s: %w", documentID, err)
+	}
+	record.TrashedAt = fromMillis(trashedAt)
+	return record, true, nil
+}
+
+// DeleteTrashRecord forgets a trash entry (used on restore and purge).
+func (s *Store) DeleteTrashRecord(ctx context.Context, documentID catalog.DocumentID) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM document_trash WHERE document_id=?`, documentID); err != nil {
+		return fmt.Errorf("clearing trash record %s: %w", documentID, err)
+	}
+	return nil
+}
+
+// SetDocumentRelativePath re-points a document's location within its path
+// (trash move / restore) without touching index state.
+func (s *Store) SetDocumentRelativePath(ctx context.Context, documentID catalog.DocumentID, relativePath string) error {
+	if _, err := s.db.ExecContext(ctx, `UPDATE document_locations SET relative_path=? WHERE document_id=?`, relativePath, documentID); err != nil {
+		return fmt.Errorf("relocating document %s: %w", documentID, err)
+	}
+	return nil
+}
+
+// PurgeDocument removes a document and every child row, including its FTS
+// entry. The caller has already deleted the file on disk.
+func (s *Store) PurgeDocument(ctx context.Context, documentID catalog.DocumentID) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM document_fts WHERE document_id=?`, documentID); err != nil {
+		return fmt.Errorf("purging FTS entry %s: %w", documentID, err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM documents WHERE id=?`, documentID); err != nil {
+		return fmt.Errorf("purging document %s: %w", documentID, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing purge of %s: %w", documentID, err)
+	}
+	return nil
+}
+
+// ListTrashedDocuments returns every soft-deleted document with its current
+// (trash) location and index state.
+func (s *Store) ListTrashedDocuments(ctx context.Context) ([]port.DocumentRecord, []port.TrashRecord, error) {
+	rows, err := s.db.QueryContext(ctx, documentSelect+` WHERE `+`d.id IN (SELECT document_id FROM document_trash)`+
+		` ORDER BY (SELECT trashed_at FROM document_trash t WHERE t.document_id=d.id), d.id`)
+	if err != nil {
+		return nil, nil, fmt.Errorf("listing trashed documents: %w", err)
+	}
+	defer rows.Close()
+	var records []port.DocumentRecord
+	for rows.Next() {
+		document, absolutePath, err := scanDocument(rows)
+		if err != nil {
+			return nil, nil, err
+		}
+		records = append(records, port.DocumentRecord{Document: document, AbsolutePath: absolutePath})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	trashRows := make([]port.TrashRecord, 0, len(records))
+	for _, record := range records {
+		trash, ok, err := s.GetTrashedDocument(ctx, record.Document.ID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !ok {
+			continue
+		}
+		trashRows = append(trashRows, trash)
+	}
+	return records, trashRows, nil
 }
 
 func savePath(ctx context.Context, tx *sql.Tx, path *catalog.IndexedPath) error {
@@ -1106,6 +1246,7 @@ func (s *Store) Search(ctx context.Context, query string, limit int) ([]port.Sea
 	rows, err := s.db.QueryContext(ctx, `SELECT f.document_id,f.title,f.path,snippet(document_fts,3,'','','…',24)
 FROM document_fts f JOIN document_locations l ON l.document_id=f.document_id
 WHERE document_fts MATCH ? AND l.status='active'
+  AND f.document_id NOT IN (SELECT document_id FROM document_trash)
 ORDER BY bm25(document_fts,5.0,2.0,1.0) LIMIT ?`, ftsQuery, limit)
 	if err != nil {
 		return nil, fmt.Errorf("searching documents: %w", err)
@@ -1135,9 +1276,9 @@ func plainFTSQuery(query string) string {
 }
 
 func (s *Store) ListDocuments(ctx context.Context, limit int, includeUnavailable bool) ([]port.DocumentRecord, error) {
-	where := "WHERE l.status='active'"
+	where := "WHERE l.status='active' AND " + notTrashedClause
 	if includeUnavailable {
-		where = ""
+		where = "WHERE " + notTrashedClause
 	}
 	rows, err := s.db.QueryContext(ctx, documentSelect+` `+where+` ORDER BY lower(COALESCE(i.title,'')), lower(l.relative_path), d.id LIMIT ?`, limit)
 	if err != nil {

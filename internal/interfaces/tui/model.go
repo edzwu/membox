@@ -46,6 +46,7 @@ type App interface {
 	ResolveDocumentLocation(context.Context, membox.ResolveLocationQuery) (membox.LocationView, error)
 	ReindexDocument(context.Context, membox.ReindexDocumentCommand) error
 	DeleteDocument(context.Context, membox.DeleteDocumentCommand) (membox.DeleteDocumentResult, error)
+	TrashSummary(context.Context) (membox.TrashSummaryResult, error)
 	RenameDocument(context.Context, membox.RenameDocumentCommand) (membox.RenameDocumentResult, error)
 	CreateNote(context.Context, membox.CreateNoteCommand) (membox.CreateNoteResult, error)
 	CreateTopic(context.Context, membox.CreateTopicCommand) (membox.CreateTopicResult, error)
@@ -253,6 +254,8 @@ type topicCreatedMsg struct{ topic membox.TopicView }
 type deleteResultMsg struct {
 	documentID string
 	path       string
+	trashCount int
+	trashBytes int64
 	err        error
 }
 type renamedMsg struct {
@@ -505,7 +508,10 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading, m.err = false, msg.err
 		if msg.err == nil {
 			m.deleteConfirm, m.deleteSelector, m.deletePath = false, "", ""
-			m.statusMessage = "Deleted " + filepath.Base(msg.path)
+			m.statusMessage = "Moved " + filepath.Base(msg.path) + " to trash • restore: mm trash restore " + shortID(msg.documentID)
+			if msg.trashBytes >= 256<<20 || msg.trashCount >= 200 {
+				m.statusMessage += fmt.Sprintf(" • trash holds %d items (%s) — mm trash purge", msg.trashCount, formatBytesTUI(msg.trashBytes))
+			}
 			commands = append(commands, listDocumentsCmd(m.ctx, m.app, m.listSequence))
 		}
 		m.clearExecutedCommand()
@@ -2048,8 +2054,8 @@ func (m Model) deleteConfirmView() string {
 	width := max(10, m.width-2)
 	border := lipgloss.NewStyle().Width(width).MaxWidth(width).Border(lipgloss.NormalBorder(), true, false, false, false).BorderForeground(colors.Error)
 	name := filepath.Base(m.deletePath)
-	question := "Delete " + name + "?"
-	hint := "y confirm • n/esc cancel"
+	question := "Move " + name + " to trash?"
+	hint := "y confirm • n/esc cancel • restore later with mm trash restore"
 	content := fitWidth(errorStyle.Render(question), width) + "\n" + fitWidth(dimStyle.Render(hint), width)
 	return border.Render(content)
 }
@@ -3206,8 +3212,28 @@ func togglePinCmd(ctx context.Context, app App, selector string) tea.Cmd {
 func deleteDocumentCmd(ctx context.Context, app App, selector string) tea.Cmd {
 	return func() tea.Msg {
 		result, err := app.DeleteDocument(ctx, membox.DeleteDocumentCommand{Selector: selector})
-		return deleteResultMsg{documentID: result.DocumentID, path: result.Path, err: err}
+		msg := deleteResultMsg{documentID: result.DocumentID, path: result.Path, err: err}
+		if err == nil {
+			if summary, summaryErr := app.TrashSummary(ctx); summaryErr == nil {
+				msg.trashCount, msg.trashBytes = summary.Count, summary.Bytes
+			}
+		}
+		return msg
 	}
+}
+
+// formatBytesTUI renders a byte count for status-line hints.
+func formatBytesTUI(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for m := n / unit; m >= unit; m /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
 }
 func viewerModeCmd(ctx context.Context, app App) tea.Cmd {
 	return func() tea.Msg {

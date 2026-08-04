@@ -82,6 +82,11 @@ func (s *Scanner) Scan(ctx context.Context, indexedPath catalog.IndexedPath) (po
 			return nil
 		}
 		if entry.IsDir() {
+			if entry.Name() == catalog.TrashDir {
+				// The trash directory holds soft-deleted Markdown; it is never
+				// indexed, so trashed documents stay hidden until purged.
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		if entry.Type()&os.ModeSymlink != 0 {

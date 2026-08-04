@@ -107,6 +107,23 @@ type DocumentReadState struct {
 	ProgressAt string
 }
 
+// TrashRecord marks a document as soft-deleted. Rows and relations survive;
+// the file sits in the path's trash directory until restore or purge.
+type TrashRecord struct {
+	DocumentID         catalog.DocumentID
+	OriginRelativePath string
+	TrashedAt          time.Time
+}
+
+type TrashStore interface {
+	TrashDocument(ctx context.Context, documentID catalog.DocumentID, originRelativePath string, trashedAt time.Time) error
+	GetTrashedDocument(ctx context.Context, documentID catalog.DocumentID) (TrashRecord, bool, error)
+	DeleteTrashRecord(ctx context.Context, documentID catalog.DocumentID) error
+	ListTrashedDocuments(ctx context.Context) ([]DocumentRecord, []TrashRecord, error)
+	SetDocumentRelativePath(ctx context.Context, documentID catalog.DocumentID, relativePath string) error
+	PurgeDocument(ctx context.Context, documentID catalog.DocumentID) error
+}
+
 // CatalogStore is an outbound persistence/read-model port. SaveScan must save
 // all aggregate and FTS changes atomically.
 type CatalogStore interface {
@@ -140,6 +157,7 @@ type CatalogStore interface {
 	// filtered by clip mode ("page" | "selection" | "" for all).
 	ListDocumentSources(ctx context.Context, clipMode string) ([]DocumentSourceRecord, error)
 	GraphStore
+	TrashStore
 	Status(ctx context.Context) (StatusSnapshot, error)
 	GetSetting(ctx context.Context, key string) (string, error)
 	SetSetting(ctx context.Context, key, value string) error

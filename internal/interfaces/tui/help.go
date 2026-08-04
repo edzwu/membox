@@ -52,7 +52,7 @@ func helpSections() []helpSection {
 			{"space / space×2", "details / filter input"},
 			{"s", "sort: name ⇄ newest"},
 			{"p", "pin / unpin"},
-			{"d", "delete"},
+			{"d", "move to trash"},
 			{"q", "back / close panels"},
 		}},
 		{title: "Filter input", entries: []helpEntry{

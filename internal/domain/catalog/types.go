@@ -13,6 +13,17 @@ type IndexedPathID int64
 
 type DocumentStatus string
 
+// TrashDir is the per-path-root directory holding soft-deleted Markdown.
+// Scanners skip it and queries hide its members; documents keep their UUID,
+// relations, and index entries until purged, so a restore is a file move.
+const TrashDir = ".membox-trash"
+
+// IsTrashedPath reports whether a relative location path points inside the
+// trash directory of its path root.
+func IsTrashedPath(relativePath string) bool {
+	return strings.HasPrefix(strings.ReplaceAll(relativePath, "\\", "/"), TrashDir+"/")
+}
+
 const (
 	DocumentActive    DocumentStatus = "active"
 	DocumentMissing   DocumentStatus = "missing"

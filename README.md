@@ -36,6 +36,9 @@ go build -o mm ./cmd/mm
 ./mm link add <from-id> <to-id>
 ./mm link list <document-id>
 ./mm link graph <document-id>
+./mm trash list
+./mm trash restore <document-id>
+./mm trash purge --all
 ./mm path scan
 ./mm path scan --timestamp=git
 ./mm index status
@@ -89,7 +92,7 @@ The TUI opens in modified-time order: the newest documents come first, and docum
 
 Press `p` to toggle the selected document's pinned state. Pinned documents stay visible in a marked, sticky section at the top regardless of scrolling, details height, or the active sort mode, and pins persist across TUI restarts.
 
-Press `d` to delete the focused Markdown file after a `y/n` confirmation. This is a real filesystem delete; membox immediately rescans the containing path and preserves the document UUID in `missing` status so links, pins, and history remain recoverable if the file is restored.
+Press `d` to move the focused Markdown file to the trash after a `y/n` confirmation. This is a soft delete: the file moves into the path's hidden `.membox-trash/` directory and the document keeps its UUID, links, topics, and annotations but disappears from listings, search, graphs, and the Miru annotation DTO. Restore it with `mm trash restore <document-id>`; empty the trash with `mm trash purge` (by default only items older than 30 days, `--all` for everything).
 
 ### Command palette and agent input
 

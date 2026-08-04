@@ -619,11 +619,87 @@ type DeleteDocumentCommand struct{ Selector string }
 type DeleteDocumentResult struct {
 	DocumentID string `json:"document_id"`
 	Path       string `json:"path"`
+	Trashed    bool   `json:"trashed"`
 }
 
+// DeleteDocument soft-deletes: the Markdown file moves to the path's trash
+// directory and the document keeps its UUID, links, and annotations until
+// purged. Restore with RestoreTrashedDocument.
 func (b *Box) DeleteDocument(ctx context.Context, command DeleteDocumentCommand) (DeleteDocumentResult, error) {
-	document, path, err := b.service.DeleteDocumentFile(ctx, command.Selector)
-	return DeleteDocumentResult{DocumentID: string(document.ID), Path: path}, err
+	document, path, err := b.service.TrashDocumentFile(ctx, command.Selector)
+	return DeleteDocumentResult{DocumentID: string(document.ID), Path: path, Trashed: true}, err
+}
+
+type TrashItemView struct {
+	DocumentView
+	OriginRelativePath string    `json:"origin_relative_path"`
+	TrashedAt          time.Time `json:"trashed_at"`
+}
+
+func (b *Box) ListTrash(ctx context.Context) ([]TrashItemView, error) {
+	records, trashRecords, err := b.service.ListTrashedDocuments(ctx)
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[string]port.TrashRecord, len(trashRecords))
+	for _, record := range trashRecords {
+		byID[string(record.DocumentID)] = record
+	}
+	views := make([]TrashItemView, 0, len(records))
+	for _, record := range records {
+		trash := byID[string(record.Document.ID)]
+		views = append(views, TrashItemView{
+			DocumentView:       documentView(record.Document, record.AbsolutePath),
+			OriginRelativePath: trash.OriginRelativePath,
+			TrashedAt:          trash.TrashedAt,
+		})
+	}
+	return views, nil
+}
+
+type RestoreDocumentCommand struct{ Selector string }
+type RestoreDocumentResult struct {
+	DocumentID string `json:"document_id"`
+	Path       string `json:"path"`
+}
+
+func (b *Box) RestoreTrashedDocument(ctx context.Context, command RestoreDocumentCommand) (RestoreDocumentResult, error) {
+	document, path, err := b.service.RestoreDocument(ctx, command.Selector)
+	return RestoreDocumentResult{DocumentID: string(document.ID), Path: path}, err
+}
+
+type PurgeTrashCommand struct {
+	All           bool
+	OlderThanDays int
+}
+type PurgeTrashResult struct {
+	Removed    int   `json:"removed"`
+	BytesFreed int64 `json:"bytes_freed"`
+}
+
+// PurgeTrash physically deletes trashed documents. Without --all, only items
+// older than OlderThanDays (default 30) are removed.
+func (b *Box) PurgeTrash(ctx context.Context, command PurgeTrashCommand) (PurgeTrashResult, error) {
+	var olderThan time.Time
+	if !command.All {
+		days := command.OlderThanDays
+		if days <= 0 {
+			days = 30
+		}
+		olderThan = time.Now().Add(-time.Duration(days) * 24 * time.Hour)
+	}
+	removed, freed, err := b.service.PurgeTrashedDocuments(ctx, olderThan)
+	return PurgeTrashResult{Removed: removed, BytesFreed: freed}, err
+}
+
+type TrashSummaryResult struct {
+	Count int   `json:"count"`
+	Bytes int64 `json:"bytes"`
+}
+
+func (b *Box) TrashSummary(ctx context.Context) (TrashSummaryResult, error) {
+	count, bytes, err := b.service.TrashSummary(ctx)
+	return TrashSummaryResult{Count: count, Bytes: bytes}, err
 }
 
 type RenameDocumentCommand struct {

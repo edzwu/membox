@@ -63,7 +63,10 @@ func (f *fakeApp) ResolveDocumentLocation(context.Context, membox.ResolveLocatio
 }
 func (f *fakeApp) ReindexDocument(context.Context, membox.ReindexDocumentCommand) error { return nil }
 func (f *fakeApp) DeleteDocument(_ context.Context, command membox.DeleteDocumentCommand) (membox.DeleteDocumentResult, error) {
-	return membox.DeleteDocumentResult{DocumentID: command.Selector, Path: "/tmp/deleted.md"}, nil
+	return membox.DeleteDocumentResult{DocumentID: command.Selector, Path: "/tmp/deleted.md", Trashed: true}, nil
+}
+func (f *fakeApp) TrashSummary(_ context.Context) (membox.TrashSummaryResult, error) {
+	return membox.TrashSummaryResult{Count: 1, Bytes: 128}, nil
 }
 func (f *fakeApp) RenameDocument(_ context.Context, command membox.RenameDocumentCommand) (membox.RenameDocumentResult, error) {
 	f.renamedTo = command.NewFilename
@@ -501,7 +504,7 @@ func TestModel_DeleteConfirmationDeletesFocusedFile(t *testing.T) {
 	model.refreshFilter()
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
 	model = updated.(Model)
-	if !model.deleteConfirm || !strings.Contains(model.View(), "Delete alpha.md?") {
+	if !model.deleteConfirm || !strings.Contains(model.View(), "Move alpha.md to trash?") {
 		t.Fatalf("delete confirmation missing: %q", model.View())
 	}
 	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
@@ -515,7 +518,7 @@ func TestModel_DeleteConfirmationDeletesFocusedFile(t *testing.T) {
 	}
 	updated, _ = model.Update(message)
 	model = updated.(Model)
-	if model.deleteConfirm || model.statusMessage != "Deleted deleted.md" {
+	if model.deleteConfirm || !strings.HasPrefix(model.statusMessage, "Moved deleted.md to trash • restore: mm trash restore") {
 		t.Fatalf("delete did not complete: confirm=%v status=%q", model.deleteConfirm, model.statusMessage)
 	}
 }
