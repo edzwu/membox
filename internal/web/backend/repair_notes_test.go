@@ -137,6 +137,10 @@ func TestRepairDuplicateNotes(t *testing.T) {
 			if openErr != nil {
 				t.Fatalf("opening raw sqlite handle: %v", openErr)
 			}
+			// Cascade document deletions into locations/index/sources/edges.
+			if _, pragmaErr := opened.ExecContext(ctx, `PRAGMA foreign_keys=ON`); pragmaErr != nil {
+				t.Fatalf("enabling foreign keys: %v", pragmaErr)
+			}
 			db = opened
 		}
 		return db
