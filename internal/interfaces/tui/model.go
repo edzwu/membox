@@ -1299,6 +1299,17 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if document, ok := m.selectedDocument(); ok {
 			commands = append(commands, openCmd(m.ctx, m.app, m.launcher, document.ID))
 		}
+	case "t":
+		// Toggle selection-note (*-note.md) visibility; persisted as hide_notes.
+		m.hideNotes = !m.hideNotes
+		m.refreshFilter()
+		m.keepSelectionVisible()
+		value := "off"
+		if m.hideNotes {
+			value = "on"
+		}
+		m.statusMessage = "hide notes: " + value
+		commands = append(commands, setSettingCmd(m.ctx, m.app, "hide_notes", value))
 	default:
 		m.spaceSequence = 0
 		m.lastKeyAt = time.Time{}

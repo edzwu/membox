@@ -53,6 +53,7 @@ func helpSections() []helpSection {
 			{"s", "sort: name ⇄ newest"},
 			{"p", "pin / unpin"},
 			{"d", "move to trash"},
+			{"t", "toggle *-note.md visibility"},
 			{"q", "back / close panels"},
 		}},
 		{title: "Filter input", entries: []helpEntry{
