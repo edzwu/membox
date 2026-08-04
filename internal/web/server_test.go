@@ -151,6 +151,90 @@ func TestServerAnnotationSidecarPersistsByDocumentUUID(t *testing.T) {
 	}
 }
 
+func TestMiruAnnotationsMaterializeAsMarkdownNoteDocuments(t *testing.T) {
+	baseURL, docID, notesDir := startServer(t)
+	payload := map[string]any{
+		"format": "miru-annotations", "version": 2,
+		"replaceAnnotations": true,
+		"annotations": []map[string]any{{
+			"start": 16, "exact": "body", "prefix": "Flash Attention ", "suffix": "",
+			"highlight": true, "underline": false, "strikethrough": false,
+			"note": "Remember this passage.",
+		}},
+		"progress": map[string]any{"y": 12, "at": "2026-08-04T00:00:00Z"},
+	}
+	postJSON(t, baseURL+"/api/doc/"+docID+"/annotations", payload)
+	// A second save before reload still has no client-side ref. It must update
+	// the same note rather than creating a duplicate file.
+	postJSON(t, baseURL+"/api/doc/"+docID+"/annotations", payload)
+
+	files, err := filepath.Glob(filepath.Join(notesDir, "*-note.md"))
+	if err != nil || len(files) != 1 {
+		t.Fatalf("annotation note files=%v err=%v", files, err)
+	}
+	noteBody, err := os.ReadFile(files[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(noteBody), "> body") || !strings.Contains(string(noteBody), "Remember this passage.") {
+		t.Fatalf("unexpected annotation Markdown: %q", noteBody)
+	}
+
+	resp, err := http.Get(baseURL + "/api/doc/" + docID + "/annotations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var live struct {
+		Annotations []struct {
+			Exact string `json:"exact"`
+			Note  string `json:"note"`
+			Ref   string `json:"ref"`
+		} `json:"annotations"`
+		Progress struct {
+			Y int `json:"y"`
+		} `json:"progress"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&live); err != nil {
+		t.Fatal(err)
+	}
+	if len(live.Annotations) != 1 || live.Annotations[0].Ref == "" || live.Annotations[0].Note != "Remember this passage." || live.Progress.Y != 12 {
+		t.Fatalf("live annotation view=%+v", live)
+	}
+
+	// Markdown is the note-content authority: an external edit is visible on
+	// the next read without rebuilding a page-side projection.
+	if err := os.WriteFile(files[0], []byte("> body\n\nEdited outside Miru.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resp2, err := http.Get(baseURL + "/api/doc/" + docID + "/annotations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var edited struct {
+		Annotations []struct {
+			Note string `json:"note"`
+		} `json:"annotations"`
+	}
+	if err := json.NewDecoder(resp2.Body).Decode(&edited); err != nil {
+		resp2.Body.Close()
+		t.Fatal(err)
+	}
+	resp2.Body.Close()
+	if len(edited.Annotations) != 1 || edited.Annotations[0].Note != "Edited outside Miru." {
+		t.Fatalf("external Markdown edit not reflected: %+v", edited)
+	}
+
+	postJSON(t, baseURL+"/api/doc/"+docID+"/annotations", map[string]any{
+		"format": "miru-annotations", "version": 2, "replaceAnnotations": true,
+		"annotations": []any{}, "progress": map[string]any{"y": 13, "at": "2026-08-04T00:01:00Z"},
+	})
+	files, err = filepath.Glob(filepath.Join(notesDir, "*-note.md"))
+	if err != nil || len(files) != 0 {
+		t.Fatalf("deleted annotation note files=%v err=%v", files, err)
+	}
+}
+
 func TestServerSyncUpdatesMarkdownAndAnnotationsTogether(t *testing.T) {
 	baseURL, docID, notesDir := startServer(t)
 
@@ -535,12 +619,12 @@ func assertAnnotationSidecar(t *testing.T, body []byte, noteID, wantNote, wantEx
 		SourceHash   string `json:"sourceHash"`
 		SourceLength int    `json:"sourceLength"`
 		Annotations  []struct {
-			Start   int    `json:"start"`
-			End     int    `json:"end"`
-			Exact   string `json:"exact"`
-			Note    string `json:"note"`
-			Ref     string `json:"ref"`
-			Highlight bool `json:"highlight"`
+			Start     int    `json:"start"`
+			End       int    `json:"end"`
+			Exact     string `json:"exact"`
+			Note      string `json:"note"`
+			Ref       string `json:"ref"`
+			Highlight bool   `json:"highlight"`
 		} `json:"annotations"`
 	}
 	if err := json.Unmarshal(body, &sidecar); err != nil {

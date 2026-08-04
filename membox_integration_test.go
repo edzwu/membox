@@ -221,7 +221,7 @@ func TestMVP_DoesNotCreateMarkdownCopiesOrBlobs(t *testing.T) {
 	}
 }
 
-func TestScanAutoProjectsExistingClipNotes(t *testing.T) {
+func TestWebServerAutomaticallyMigratesExistingClipNotes(t *testing.T) {
 	ctx := context.Background()
 	home, notes := t.TempDir(), t.TempDir()
 
@@ -265,18 +265,8 @@ Source: [Legacy Page](https://example.com/legacy)
 	if _, err := box.AddPath(ctx, membox.AddPathCommand{Directory: notes}); err != nil {
 		t.Fatal(err)
 	}
-	// Scan triggers the auto-repair projection pass (same path as Ctrl+R).
-	if _, err := box.ScanPaths(ctx, membox.ScanPathsCommand{}); err != nil {
-		t.Fatal(err)
-	}
-	pages, projected, err := box.ProjectClipAnnotations(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if pages != 1 || projected != 1 {
-		t.Fatalf("projection stats = %d pages / %d projected, want 1/1", pages, projected)
-	}
-
+	// Starting Miru automatically discovers old selection-note files and creates
+	// normalized UUID/anchor relations before serving the first request.
 	server := box.WebServer()
 	baseURL, err := server.Start(ctx, 0)
 	if err != nil {
@@ -309,19 +299,16 @@ Source: [Legacy Page](https://example.com/legacy)
 	body, _ := io.ReadAll(resp.Body)
 	text := string(body)
 	if !strings.Contains(text, "Legacy margin note.") {
-		t.Fatalf("projection missing note text: %s", text)
+		t.Fatalf("migrated relation missing note text: %s", text)
 	}
 	if !strings.Contains(text, "predates the projection feature") {
-		t.Fatalf("projection missing excerpt: %s", text)
+		t.Fatalf("migrated relation missing excerpt: %s", text)
 	}
 	if !strings.Contains(text, `"ref"`) {
-		t.Fatalf("projection missing ref join key: %s", text)
+		t.Fatalf("migrated relation missing ref join key: %s", text)
 	}
 
-	// Idempotent: scanning again must not duplicate the annotation.
-	if _, err := box.ScanPaths(ctx, membox.ScanPathsCommand{}); err != nil {
-		t.Fatal(err)
-	}
+	// Re-reading the generated view must not duplicate the annotation.
 	resp2, err := http.Get(baseURL + "/api/doc/" + pageID + "/annotations")
 	if err != nil {
 		t.Fatal(err)

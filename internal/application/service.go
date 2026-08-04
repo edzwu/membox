@@ -440,8 +440,8 @@ func (s *Service) ToggleDocumentPin(ctx context.Context, selector string) (Toggl
 	return ToggleDocumentPinResult{DocumentID: document.ID, Pinned: document.Pinned}, nil
 }
 
-// SaveAnnotations persists the Miru annotation sidecar for the document
-// resolved by selector. An empty sidecar clears stored annotations.
+// SaveAnnotations is the legacy-sidecar migration adapter. New note content
+// must use SaveAnnotationNote; an empty value clears the compatibility blob.
 func (s *Service) SaveAnnotations(ctx context.Context, selector string, sidecar string) (catalog.DocumentID, error) {
 	document, _, err := s.ResolveDocument(ctx, selector)
 	if err != nil {
@@ -453,8 +453,8 @@ func (s *Service) SaveAnnotations(ctx context.Context, selector string, sidecar 
 	return document.ID, nil
 }
 
-// GetAnnotations returns the stored annotation sidecar for the document
-// resolved by selector, or "" when none are stored.
+// GetAnnotations returns the legacy stored annotation sidecar. It is retained
+// only so existing databases can be migrated to Markdown annotation notes.
 func (s *Service) GetAnnotations(ctx context.Context, selector string) (string, error) {
 	document, _, err := s.ResolveDocument(ctx, selector)
 	if err != nil {
@@ -463,14 +463,181 @@ func (s *Service) GetAnnotations(ctx context.Context, selector string) (string, 
 	return s.store.GetAnnotations(ctx, document.ID)
 }
 
+type SaveAnnotationNoteOptions struct {
+	TargetSelector string
+	NoteSelector   string // empty creates a new *-note.md document
+	Title          string
+	Body           string // empty leaves an existing note document unchanged
+	Start          int
+	Prefix         string
+	Suffix         string
+	Highlight      bool
+	Underline      bool
+	Strikethrough  bool
+}
+
+type SaveAnnotationNoteResult struct {
+	Record port.AnnotationNoteRecord
+	Note   *catalog.Document
+	Path   string
+}
+
+// SaveAnnotationNote creates or updates the Markdown document that contains a
+// selection note, then stores only its target/anchor metadata in SQLite.
+func (s *Service) SaveAnnotationNote(ctx context.Context, opts SaveAnnotationNoteOptions) (SaveAnnotationNoteResult, error) {
+	target, _, err := s.ResolveDocument(ctx, opts.TargetSelector)
+	if err != nil {
+		return SaveAnnotationNoteResult{}, err
+	}
+	if opts.Start < 0 {
+		return SaveAnnotationNoteResult{}, errors.New("annotation start must not be negative")
+	}
+
+	var note *catalog.Document
+	var absolute string
+	contentChanged := false
+	if strings.TrimSpace(opts.NoteSelector) == "" {
+		if strings.TrimSpace(opts.Body) == "" {
+			return SaveAnnotationNoteResult{}, errors.New("annotation note Markdown is required")
+		}
+		title := strings.TrimSpace(opts.Title)
+		if title == "" {
+			title = "Selection note"
+		}
+		created, createErr := s.CreateNote(ctx, CreateNoteOptions{Title: title, Body: opts.Body, ClipMode: "selection"})
+		if createErr != nil {
+			return SaveAnnotationNoteResult{}, createErr
+		}
+		note, absolute = created.Document, created.Path
+		contentChanged = true
+	} else {
+		note, absolute, err = s.ResolveDocument(ctx, opts.NoteSelector)
+		if err != nil {
+			return SaveAnnotationNoteResult{}, err
+		}
+		if strings.TrimSpace(opts.Body) != "" {
+			current, readErr := s.reader.Read(ctx, absolute)
+			if readErr != nil {
+				return SaveAnnotationNoteResult{}, readErr
+			}
+			if string(current) != opts.Body {
+				if _, syncErr := s.SyncDocument(ctx, string(note.ID), opts.Body); syncErr != nil {
+					return SaveAnnotationNoteResult{}, syncErr
+				}
+				note, absolute, err = s.ResolveDocument(ctx, string(note.ID))
+				if err != nil {
+					return SaveAnnotationNoteResult{}, err
+				}
+				contentChanged = true
+			}
+		}
+	}
+	if note.ID == target.ID {
+		return SaveAnnotationNoteResult{}, errors.New("a document cannot annotate itself")
+	}
+	now := s.clock.Now()
+	// Keep annotation notes visible through the existing UUID link/backlink
+	// graph. This edge is an identity relation, not a content projection.
+	edge, edgeErr := catalog.NewGraphEdge(target.ID, note.ID, catalog.EdgeManual, now)
+	if edgeErr != nil {
+		return SaveAnnotationNoteResult{}, edgeErr
+	}
+	if _, edgeErr = s.store.AddEdge(ctx, edge); edgeErr != nil {
+		return SaveAnnotationNoteResult{}, edgeErr
+	}
+	record := port.AnnotationNoteRecord{
+		NoteDocumentID: note.ID, TargetDocumentID: target.ID, Start: opts.Start,
+		Prefix: opts.Prefix, Suffix: opts.Suffix, Highlight: opts.Highlight,
+		Underline: opts.Underline, Strikethrough: opts.Strikethrough,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if existing, ok, getErr := s.store.GetAnnotationNote(ctx, note.ID); getErr != nil {
+		return SaveAnnotationNoteResult{}, getErr
+	} else if ok {
+		record.CreatedAt = existing.CreatedAt
+		if !contentChanged && existing.TargetDocumentID == record.TargetDocumentID &&
+			existing.Start == record.Start && existing.Prefix == record.Prefix && existing.Suffix == record.Suffix &&
+			existing.Highlight == record.Highlight && existing.Underline == record.Underline && existing.Strikethrough == record.Strikethrough {
+			return SaveAnnotationNoteResult{Record: existing, Note: note, Path: absolute}, nil
+		}
+	}
+	if err := s.store.UpsertAnnotationNote(ctx, record); err != nil {
+		return SaveAnnotationNoteResult{}, err
+	}
+	return SaveAnnotationNoteResult{Record: record, Note: note, Path: absolute}, nil
+}
+
+func (s *Service) ListAnnotationNotes(ctx context.Context, targetSelector string) (*catalog.Document, []port.AnnotationNoteRecord, error) {
+	target, _, err := s.ResolveDocument(ctx, targetSelector)
+	if err != nil {
+		return nil, nil, err
+	}
+	records, err := s.store.ListAnnotationNotes(ctx, target.ID)
+	return target, records, err
+}
+
+func (s *Service) GetAnnotationNote(ctx context.Context, noteSelector string) (port.AnnotationNoteRecord, bool, error) {
+	note, _, err := s.ResolveDocument(ctx, noteSelector)
+	if err != nil {
+		return port.AnnotationNoteRecord{}, false, err
+	}
+	return s.store.GetAnnotationNote(ctx, note.ID)
+}
+
+func (s *Service) DeleteAnnotationNote(ctx context.Context, targetSelector, noteSelector string) error {
+	target, _, err := s.ResolveDocument(ctx, targetSelector)
+	if err != nil {
+		return err
+	}
+	note, _, err := s.ResolveDocument(ctx, noteSelector)
+	if err != nil {
+		return err
+	}
+	record, ok, err := s.store.GetAnnotationNote(ctx, note.ID)
+	if err != nil {
+		return err
+	}
+	if !ok || record.TargetDocumentID != target.ID {
+		return fmt.Errorf("document %s is not an annotation note for %s", note.ID, target.ID)
+	}
+	if _, _, err := s.DeleteDocumentFile(ctx, string(note.ID)); err != nil {
+		return err
+	}
+	if err := s.store.DeleteAnnotationNote(ctx, note.ID); err != nil {
+		return err
+	}
+	_, err = s.store.RemoveEdge(ctx, target.ID, note.ID, catalog.EdgeManual)
+	return err
+}
+
+func (s *Service) SaveDocumentReadState(ctx context.Context, selector string, progressY int, progressAt string) error {
+	document, _, err := s.ResolveDocument(ctx, selector)
+	if err != nil {
+		return err
+	}
+	if progressY < 0 {
+		progressY = 0
+	}
+	return s.store.SaveDocumentReadState(ctx, port.DocumentReadState{DocumentID: document.ID, ProgressY: progressY, ProgressAt: progressAt})
+}
+
+func (s *Service) GetDocumentReadState(ctx context.Context, selector string) (port.DocumentReadState, bool, error) {
+	document, _, err := s.ResolveDocument(ctx, selector)
+	if err != nil {
+		return port.DocumentReadState{}, false, err
+	}
+	return s.store.GetDocumentReadState(ctx, document.ID)
+}
+
 type SyncDocumentResult struct {
 	DocumentID catalog.DocumentID
 	Path       string
 }
 
-// SyncDocument writes Markdown back to an existing active source file,
-// refreshes its catalog/FTS observation, and stores the matching Miru notes.
-func (s *Service) SyncDocument(ctx context.Context, selector, body, annotations string) (SyncDocumentResult, error) {
+// SyncDocument writes Markdown back to an existing active source file and
+// refreshes its catalog/FTS observation. Annotation notes are separate Markdown
+// documents and are reconciled by the annotation application flow.
+func (s *Service) SyncDocument(ctx context.Context, selector, body string) (SyncDocumentResult, error) {
 	document, absolute, err := s.ResolveDocument(ctx, selector)
 	if err != nil {
 		return SyncDocumentResult{}, err
@@ -492,9 +659,6 @@ func (s *Service) SyncDocument(ctx context.Context, selector, body, annotations 
 		return SyncDocumentResult{}, err
 	}
 	if err := s.store.SaveDocument(ctx, port.ScanSave{Document: document, Body: observation.Body, Reindex: true}); err != nil {
-		return SyncDocumentResult{}, err
-	}
-	if err := s.store.SaveAnnotations(ctx, document.ID, annotations); err != nil {
 		return SyncDocumentResult{}, err
 	}
 	return SyncDocumentResult{DocumentID: document.ID, Path: absolute}, nil
@@ -872,9 +1036,9 @@ var settingSpecs = []Setting{
 }
 
 const (
-	ViewerLeaf      = "leaf"
-	ViewerWeb       = "web"
-	SettingMainPath = "main_path"
+	ViewerLeaf       = "leaf"
+	ViewerWeb        = "web"
+	SettingMainPath  = "main_path"
 	SettingHideNotes = "hide_notes"
 )
 

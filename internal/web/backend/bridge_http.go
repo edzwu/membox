@@ -486,14 +486,14 @@ func (s *Server) handleIngest(writer http.ResponseWriter, request *http.Request)
 		if linked == "" && result.Link != nil && pageID != "" {
 			linked = pageID
 		}
-		// Annotation projection: mirror this note onto the page clip so Miru
-		// renders it natively (highlight + margin note). Best-effort.
+		// Store the normalized note UUID + anchor relation. Miru derives its
+		// transient rendering DTO from this relation and the note Markdown.
 		if pageID != "" && pageID != id {
-			excerpt, note, _ := parseClipBody(body)
+			excerpt, _, _ := parseClipBody(body)
 			if strings.TrimSpace(payload.ExcerptRaw) != "" {
 				excerpt = payload.ExcerptRaw
 			}
-			_, _ = s.upsertClipAnnotation(ctx, pageID, id, excerpt, note)
+			_, _ = s.upsertClipAnnotationRelation(ctx, pageID, id, excerpt)
 		}
 	}
 	if clipMode == "page" && sourceURL != "" {
@@ -506,8 +506,8 @@ func (s *Server) handleIngest(writer http.ResponseWriter, request *http.Request)
 				linked = id // mark that linking ran from this page
 			}
 		}
-		// Annotation projection backfill: notes saved before this page clip
-		// arrived get mirrored onto the fresh page document.
+		// Notes saved before this page clip arrived get their UUID/anchor
+		// relation once the target document exists.
 		s.backfillPageAnnotations(ctx, id, sourceURL)
 	}
 

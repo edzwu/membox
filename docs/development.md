@@ -897,7 +897,28 @@ CREATE TABLE graph_edges (
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (from_document_id, to_document_id, kind)
 );
+
+CREATE TABLE annotation_notes (
+    note_document_id TEXT PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
+    target_document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    anchor_start INTEGER NOT NULL,
+    anchor_prefix TEXT NOT NULL DEFAULT '',
+    anchor_suffix TEXT NOT NULL DEFAULT '',
+    highlight INTEGER NOT NULL DEFAULT 0,
+    underline INTEGER NOT NULL DEFAULT 0,
+    strikethrough INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE document_read_state (
+    document_id TEXT PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
+    progress_y INTEGER NOT NULL DEFAULT 0,
+    progress_at TEXT NOT NULL DEFAULT ''
+);
 ```
+
+Annotation note 的摘录和笔记正文保存在 `*-note.md`，`annotation_notes` 只保存 note UUID → target UUID、锚点提示和显示属性。Miru sidecar 是读取时临时生成的 DTO，不是持久化内容副本。阅读进度是 `document_read_state` 中的 UI state，不与笔记内容混存。
 
 Graph projection 的语义最小集合：`document -> document` 使用 `manual`，`document -> topic document` 使用 `member`。Topic 是根目录 `topic-*.md` 的普通 Document；文档可以有多个 topic，topic 可以包含多个文档。Markdown 内容不会被关系功能改写。
 

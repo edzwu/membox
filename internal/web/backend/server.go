@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 
 	"membox/internal/application"
 )
@@ -28,6 +29,7 @@ type Server struct {
 	httpServer    *http.Server
 	baseURL       string
 	token         string // empty = auth disabled (same-origin Miru / tests)
+	annotationMu  sync.Mutex
 }
 
 // NewServer receives frontend files from the composition root rather than
@@ -52,6 +54,12 @@ func (s *Server) Start(ctx context.Context, port int) (string, error) {
 	if _, err := fs.Stat(s.miruFS, "index.html"); err != nil {
 		return "", fmt.Errorf("loading Miru frontend: %w", err)
 	}
+	// Upgrade old Extension-created *-note.md files before serving Miru. The
+	// pass skips normalized rows, so subsequent starts only perform cheap index
+	// lookups and also pick up old notes imported after the upgrade.
+	if err := s.migrateExistingAnnotationNotes(ctx); err != nil {
+		return "", fmt.Errorf("migrating annotation notes: %w", err)
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/status", s.handleStatus)
@@ -61,7 +69,7 @@ func (s *Server) Start(ctx context.Context, port int) (string, error) {
 	mux.HandleFunc("/api/doc/", s.handleDocument)
 	mux.HandleFunc("/api/save", s.handleSave)
 	mux.HandleFunc("/api/sync", s.handleSync)
-	mux.Handle("/membox/", http.StripPrefix("/membox/", http.FileServer(http.FS(s.integrationFS))))
+	mux.Handle("/membox/", noStore{http.StripPrefix("/membox/", http.FileServer(http.FS(s.integrationFS)))})
 	mux.HandleFunc("/", s.handleFrontend)
 
 	listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
@@ -88,11 +96,22 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return s.httpServer.Shutdown(ctx)
 }
 
+// noStore wraps a file handler so browsers never serve stale frontend assets:
+// a cached old Miru/integration script against a new backend already cost us
+// saved annotations once (stale restore logic overwrote a sidecar).
+type noStore struct{ next http.Handler }
+
+func (h noStore) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	writer.Header().Set("Cache-Control", "no-store")
+	h.next.ServeHTTP(writer, request)
+}
+
 // handleFrontend keeps the vendored Miru tree untouched. Only the served
 // index response receives the membox adapter script; all other files are
 // served byte-for-byte from frontend/miru.
 func (s *Server) handleFrontend(writer http.ResponseWriter, request *http.Request) {
 	if request.URL.Path != "/" && request.URL.Path != "/index.html" {
+		writer.Header().Set("Cache-Control", "no-store")
 		http.FileServer(http.FS(s.miruFS)).ServeHTTP(writer, request)
 		return
 	}
@@ -155,9 +174,10 @@ func (s *Server) handleDocument(writer http.ResponseWriter, request *http.Reques
 	_, _ = writer.Write(body)
 }
 
-// handleAnnotations serves or persists the Miru annotation sidecar for one
-// stable document UUID. This endpoint remains useful for loading old notes;
-// explicit sync writes Markdown and annotations together through /api/sync.
+// handleAnnotations preserves Miru's portable sidecar wire format without
+// making that JSON a second content store. GET assembles a transient view from
+// Markdown note documents + normalized DB anchors; POST reconciles that view
+// back to individual *-note.md files and stores reading progress separately.
 func (s *Server) handleAnnotations(writer http.ResponseWriter, request *http.Request, selector string) {
 	if selector == "" {
 		http.Error(writer, "missing document selector", http.StatusBadRequest)
@@ -165,30 +185,57 @@ func (s *Server) handleAnnotations(writer http.ResponseWriter, request *http.Req
 	}
 	switch request.Method {
 	case http.MethodGet:
-		sidecar, err := s.service.GetAnnotations(request.Context(), selector)
+		sidecar, present, err := s.liveAnnotationSidecar(request.Context(), selector)
 		if err != nil {
 			http.Error(writer, err.Error(), http.StatusNotFound)
 			return
 		}
 		writer.Header().Set("Content-Type", "application/json; charset=utf-8")
 		writer.Header().Set("Cache-Control", "no-store")
-		if sidecar == "" {
+		if !present {
+			// Compatibility for clients that explicitly saved an empty portable
+			// envelope. It contains no note content; normalized notes never use it.
+			if legacy, legacyErr := s.service.GetAnnotations(request.Context(), selector); legacyErr == nil && legacyEmptyAnnotationEnvelope(legacy) {
+				_, _ = writer.Write([]byte(legacy))
+				return
+			}
 			writer.WriteHeader(http.StatusNoContent)
 			return
 		}
-		_, _ = writer.Write([]byte(sidecar))
+		_ = json.NewEncoder(writer).Encode(sidecar)
 	case http.MethodPost, http.MethodPut:
 		body, err := io.ReadAll(io.LimitReader(request.Body, 8<<20))
 		if err != nil {
 			http.Error(writer, "reading annotation body: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		if _, err := s.service.SaveAnnotations(request.Context(), selector, string(body)); err != nil {
-			http.Error(writer, err.Error(), http.StatusNotFound)
+		originalBody := string(body)
+		clearing := strings.TrimSpace(originalBody) == ""
+		if clearing {
+			body = []byte(`{"format":"miru-annotations","version":2,"annotations":[],"replaceAnnotations":true}`)
+		}
+		var payload annotationWritePayload
+		if err := json.Unmarshal(body, &payload); err != nil || payload.Format != "miru-annotations" || payload.Version != 2 {
+			http.Error(writer, "invalid Miru annotation payload", http.StatusBadRequest)
 			return
 		}
+		emptyEnvelope := !clearing && len(payload.Annotations) == 0 && payload.Progress == nil
+		if clearing {
+			// Zero progress with an empty timestamp deletes document_read_state.
+			payload.Progress = &annotationProgressPayload{}
+		}
+		annotations, err := s.reconcileAnnotationNotes(request.Context(), selector, payload)
+		if err != nil {
+			http.Error(writer, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if emptyEnvelope {
+			// Preserve only this content-free compatibility marker. Any real note
+			// is always a Markdown document plus annotation_notes row.
+			_, _ = s.service.SaveAnnotations(request.Context(), selector, originalBody)
+		}
 		writer.Header().Set("Content-Type", "application/json; charset=utf-8")
-		_, _ = writer.Write([]byte(`{"saved":true}`))
+		_ = json.NewEncoder(writer).Encode(map[string]any{"saved": true, "annotations": annotations})
 	default:
 		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -235,8 +282,8 @@ func annotationPayload(raw json.RawMessage) (string, error) {
 }
 
 // handleSync updates an existing source file when id is present, or creates a
-// new indexed Markdown note otherwise. In both cases its annotation sidecar is
-// stored under the resulting stable UUID.
+// new indexed Markdown document otherwise. Its transient annotation payload is
+// reconciled into separate *-note.md documents under the resulting UUID.
 func (s *Server) handleSync(writer http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodPost {
 		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
@@ -266,21 +313,51 @@ func (s *Server) handleSync(writer http.ResponseWriter, request *http.Request) {
 			http.Error(writer, createErr.Error(), http.StatusInternalServerError)
 			return
 		}
-		if _, saveErr := s.service.SaveAnnotations(request.Context(), string(result.Document.ID), annotations); saveErr != nil {
-			http.Error(writer, saveErr.Error(), http.StatusInternalServerError)
-			return
-		}
 		response = saveResponse{ID: string(result.Document.ID), Path: result.Path, Created: true}
 	} else {
-		result, syncErr := s.service.SyncDocument(request.Context(), payload.ID, payload.Body, annotations)
+		// The source Markdown and its selection-note documents have independent
+		// authorities. Sync the source here, then reconcile annotation notes.
+		result, syncErr := s.service.SyncDocument(request.Context(), payload.ID, payload.Body)
 		if syncErr != nil {
 			http.Error(writer, syncErr.Error(), http.StatusNotFound)
 			return
 		}
 		response = saveResponse{ID: string(result.DocumentID), Path: result.Path, Created: false}
 	}
+	if annotations != "" {
+		var annotationPayload annotationWritePayload
+		if err := json.Unmarshal([]byte(annotations), &annotationPayload); err != nil || annotationPayload.Format != "miru-annotations" || annotationPayload.Version != 2 {
+			http.Error(writer, "invalid annotation payload", http.StatusBadRequest)
+			return
+		}
+		annotationPayload.ReplaceAnnotations = true
+		emptyEnvelope := len(annotationPayload.Annotations) == 0 && annotationPayload.Progress == nil
+		if _, err := s.reconcileAnnotationNotes(request.Context(), response.ID, annotationPayload); err != nil {
+			http.Error(writer, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if emptyEnvelope {
+			_, _ = s.service.SaveAnnotations(request.Context(), response.ID, annotations)
+		}
+	}
 	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
 	_ = json.NewEncoder(writer).Encode(response)
+}
+
+func legacyEmptyAnnotationEnvelope(raw string) bool {
+	if strings.TrimSpace(raw) == "" {
+		return false
+	}
+	var value struct {
+		Format      string            `json:"format"`
+		Version     int               `json:"version"`
+		Annotations []json.RawMessage `json:"annotations"`
+		Progress    json.RawMessage   `json:"progress"`
+	}
+	if json.Unmarshal([]byte(raw), &value) != nil {
+		return false
+	}
+	return value.Format == "miru-annotations" && value.Version == 2 && len(value.Annotations) == 0 && len(value.Progress) == 0
 }
 
 // handleSave is retained for API compatibility; new frontend code uses

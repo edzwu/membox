@@ -127,6 +127,27 @@ CREATE TABLE IF NOT EXISTS document_annotations (
     sidecar TEXT NOT NULL,
     updated_at INTEGER NOT NULL
 );
+-- A normalized annotation relation. The selected excerpt and note prose live
+-- in note_document_id's Markdown file; SQLite owns UUID relationships and
+-- anchoring metadata.
+CREATE TABLE IF NOT EXISTS annotation_notes (
+    note_document_id TEXT PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
+    target_document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    anchor_start INTEGER NOT NULL DEFAULT 0,
+    anchor_prefix TEXT NOT NULL DEFAULT '',
+    anchor_suffix TEXT NOT NULL DEFAULT '',
+    highlight INTEGER NOT NULL DEFAULT 0,
+    underline INTEGER NOT NULL DEFAULT 0,
+    strikethrough INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS annotation_notes_target ON annotation_notes(target_document_id);
+CREATE TABLE IF NOT EXISTS document_read_state (
+    document_id TEXT PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
+    progress_y INTEGER NOT NULL DEFAULT 0,
+    progress_at TEXT NOT NULL DEFAULT ''
+);
 `
 	if _, err := s.db.Exec(schema); err != nil {
 		return fmt.Errorf("migrating SQLite: %w", err)
@@ -656,8 +677,8 @@ func (s *Store) SavePinned(ctx context.Context, documentID catalog.DocumentID, p
 	return nil
 }
 
-// SaveAnnotations upserts the Miru annotation sidecar for a document. An
-// empty sidecar clears any stored annotations.
+// SaveAnnotations retains legacy Miru sidecars during migration. New note
+// content is stored in Markdown and annotation_notes; empty clears the blob.
 func (s *Store) SaveAnnotations(ctx context.Context, documentID catalog.DocumentID, sidecar string) error {
 	if strings.TrimSpace(sidecar) == "" {
 		if _, err := s.db.ExecContext(ctx, `DELETE FROM document_annotations WHERE document_id=?`, documentID); err != nil {
@@ -674,7 +695,7 @@ ON CONFLICT(document_id) DO UPDATE SET sidecar=excluded.sidecar,updated_at=exclu
 	return nil
 }
 
-// GetAnnotations returns the stored annotation sidecar, or "" if none.
+// GetAnnotations returns a legacy annotation sidecar, or "" if none.
 func (s *Store) GetAnnotations(ctx context.Context, documentID catalog.DocumentID) (string, error) {
 	var sidecar string
 	err := s.db.QueryRowContext(ctx, `SELECT sidecar FROM document_annotations WHERE document_id=?`, documentID).Scan(&sidecar)
@@ -685,6 +706,121 @@ func (s *Store) GetAnnotations(ctx context.Context, documentID catalog.DocumentI
 		return "", fmt.Errorf("reading annotations for document %s: %w", documentID, err)
 	}
 	return sidecar, nil
+}
+
+func (s *Store) UpsertAnnotationNote(ctx context.Context, record port.AnnotationNoteRecord) error {
+	createdAt := record.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = time.Now().UTC()
+	}
+	updatedAt := record.UpdatedAt
+	if updatedAt.IsZero() {
+		updatedAt = createdAt
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO annotation_notes(
+note_document_id,target_document_id,anchor_start,anchor_prefix,anchor_suffix,
+highlight,underline,strikethrough,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)
+ON CONFLICT(note_document_id) DO UPDATE SET
+ target_document_id=excluded.target_document_id,
+ anchor_start=excluded.anchor_start,
+ anchor_prefix=excluded.anchor_prefix,
+ anchor_suffix=excluded.anchor_suffix,
+ highlight=excluded.highlight,
+ underline=excluded.underline,
+ strikethrough=excluded.strikethrough,
+ updated_at=excluded.updated_at`,
+		record.NoteDocumentID, record.TargetDocumentID, record.Start, record.Prefix, record.Suffix,
+		record.Highlight, record.Underline, record.Strikethrough, millis(createdAt), millis(updatedAt))
+	if err != nil {
+		return fmt.Errorf("saving annotation note %s: %w", record.NoteDocumentID, err)
+	}
+	return nil
+}
+
+func (s *Store) ListAnnotationNotes(ctx context.Context, targetDocumentID catalog.DocumentID) ([]port.AnnotationNoteRecord, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT a.note_document_id,a.target_document_id,a.anchor_start,a.anchor_prefix,a.anchor_suffix,
+a.highlight,a.underline,a.strikethrough,a.created_at,a.updated_at
+FROM annotation_notes a
+JOIN document_locations l ON l.document_id=a.note_document_id
+WHERE a.target_document_id=? AND l.status='active'
+ORDER BY a.anchor_start,a.created_at,a.note_document_id`, targetDocumentID)
+	if err != nil {
+		return nil, fmt.Errorf("listing annotation notes for %s: %w", targetDocumentID, err)
+	}
+	defer rows.Close()
+	var records []port.AnnotationNoteRecord
+	for rows.Next() {
+		var record port.AnnotationNoteRecord
+		var highlight, underline, strikethrough int
+		var createdAt, updatedAt int64
+		if err := rows.Scan(&record.NoteDocumentID, &record.TargetDocumentID, &record.Start, &record.Prefix, &record.Suffix,
+			&highlight, &underline, &strikethrough, &createdAt, &updatedAt); err != nil {
+			return nil, err
+		}
+		record.Highlight = highlight != 0
+		record.Underline = underline != 0
+		record.Strikethrough = strikethrough != 0
+		record.CreatedAt = time.UnixMilli(createdAt).UTC()
+		record.UpdatedAt = time.UnixMilli(updatedAt).UTC()
+		records = append(records, record)
+	}
+	return records, rows.Err()
+}
+
+func (s *Store) GetAnnotationNote(ctx context.Context, noteDocumentID catalog.DocumentID) (port.AnnotationNoteRecord, bool, error) {
+	var record port.AnnotationNoteRecord
+	var highlight, underline, strikethrough int
+	var createdAt, updatedAt int64
+	err := s.db.QueryRowContext(ctx, `SELECT note_document_id,target_document_id,anchor_start,anchor_prefix,anchor_suffix,
+highlight,underline,strikethrough,created_at,updated_at FROM annotation_notes WHERE note_document_id=?`, noteDocumentID).
+		Scan(&record.NoteDocumentID, &record.TargetDocumentID, &record.Start, &record.Prefix, &record.Suffix,
+			&highlight, &underline, &strikethrough, &createdAt, &updatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return port.AnnotationNoteRecord{}, false, nil
+	}
+	if err != nil {
+		return port.AnnotationNoteRecord{}, false, fmt.Errorf("reading annotation note %s: %w", noteDocumentID, err)
+	}
+	record.Highlight = highlight != 0
+	record.Underline = underline != 0
+	record.Strikethrough = strikethrough != 0
+	record.CreatedAt = time.UnixMilli(createdAt).UTC()
+	record.UpdatedAt = time.UnixMilli(updatedAt).UTC()
+	return record, true, nil
+}
+
+func (s *Store) DeleteAnnotationNote(ctx context.Context, noteDocumentID catalog.DocumentID) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM annotation_notes WHERE note_document_id=?`, noteDocumentID); err != nil {
+		return fmt.Errorf("deleting annotation note %s: %w", noteDocumentID, err)
+	}
+	return nil
+}
+
+func (s *Store) SaveDocumentReadState(ctx context.Context, state port.DocumentReadState) error {
+	if state.ProgressY <= 0 && strings.TrimSpace(state.ProgressAt) == "" {
+		_, err := s.db.ExecContext(ctx, `DELETE FROM document_read_state WHERE document_id=?`, state.DocumentID)
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO document_read_state(document_id,progress_y,progress_at) VALUES(?,?,?)
+ON CONFLICT(document_id) DO UPDATE SET progress_y=excluded.progress_y,progress_at=excluded.progress_at`,
+		state.DocumentID, state.ProgressY, state.ProgressAt)
+	if err != nil {
+		return fmt.Errorf("saving read state for document %s: %w", state.DocumentID, err)
+	}
+	return nil
+}
+
+func (s *Store) GetDocumentReadState(ctx context.Context, documentID catalog.DocumentID) (port.DocumentReadState, bool, error) {
+	state := port.DocumentReadState{DocumentID: documentID}
+	err := s.db.QueryRowContext(ctx, `SELECT progress_y,progress_at FROM document_read_state WHERE document_id=?`, documentID).
+		Scan(&state.ProgressY, &state.ProgressAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return port.DocumentReadState{}, false, nil
+	}
+	if err != nil {
+		return port.DocumentReadState{}, false, fmt.Errorf("reading read state for document %s: %w", documentID, err)
+	}
+	return state, true, nil
 }
 
 func (s *Store) ResolveTopic(ctx context.Context, selector string) (*catalog.Document, string, error) {

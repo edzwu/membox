@@ -26,6 +26,11 @@ let connecting = true;
 let syncing = false;
 let documentID = new URLSearchParams(window.location.search).get('id') || '';
 let loadedMarkdown = '';
+// Wipe protection: when a sidecar loaded with annotations but none survived
+// restoration and the user did not delete any, never overwrite the stored
+// notes with an empty set (keep the saved ones, update progress only).
+let loadedAnnotationCount = 0;
+let annotationsMutated = false;
 // Anchors that failed to re-anchor on load. Kept so the next save merges
 // them back into the sidecar instead of silently dropping them.
 let pendingAnchors = [];
@@ -110,11 +115,10 @@ function replaceDocumentID(id) {
 }
 
 // ---------------------------------------------------------------------------
-// Reading state: progress is a bookmark, and bookmarks belong with the notes.
-// Both live in the annotation sidecar stored under the document's stable UUID
-// in the membox database, so the reading position and the notes survive
-// re-openings (and browsers) together. The Markdown source itself is only
-// ever written by an explicit sync.
+// Reading state and annotations share Miru's sidecar-shaped wire DTO, but not
+// a persistence model: progress is DB UI state, while every annotation is an
+// individual *-note.md document plus a normalized UUID/anchor relation. The
+// source Markdown itself is only written by an explicit sync.
 // ---------------------------------------------------------------------------
 let restoring = false;
 let sidecarSaveTimer = null;
@@ -131,6 +135,9 @@ async function persistReadingState(keepalive) {
   if (!documentID || !state.currentMarkdown) return;
   try {
     const sidecar = await buildAnnotationSidecar(sidecarFilename(), state.currentMarkdown, currentProgress());
+    // Only an actual annotation mutation makes the submitted set authoritative
+    // for deletions. Scroll/progress saves must never delete note documents.
+    sidecar.replaceAnnotations = annotationsMutated;
     if (pendingAnchors.length) {
       // Merge back annotations that could not be re-anchored this load so a
       // save never destroys notes it merely failed to display.
@@ -138,6 +145,21 @@ async function persistReadingState(keepalive) {
       const kept = pendingAnchors.filter((a) => !have.has(a.exact));
       if (kept.length) {
         sidecar.annotations = [...sidecar.annotations, ...kept].sort((a, b) => a.start - b.start);
+      }
+    }
+    // Wipe protection: annotations loaded, none survived, and the user never
+    // deleted any → keep the stored annotations, only refresh progress.
+    if (sidecar.annotations.length === 0 && loadedAnnotationCount > 0 && !annotationsMutated) {
+      try {
+        const resp = await fetch(`/api/doc/${encodeURIComponent(documentID)}/annotations`, { cache: 'no-store' });
+        if (resp.ok && resp.status !== 204) {
+          const existing = await resp.json();
+          if (existing && Array.isArray(existing.annotations) && existing.annotations.length) {
+            sidecar.annotations = existing.annotations;
+          }
+        }
+      } catch (err) {
+        /* keep whatever we have */
       }
     }
     const response = await fetch(`/api/doc/${encodeURIComponent(documentID)}/annotations`, {
@@ -192,6 +214,7 @@ window.addEventListener('pagehide', flushReadingStateSave);
 window.addEventListener('load', applyProgressScroll);
 window.addEventListener('miru-annotations-changed', () => {
   if (restoring) return;
+  annotationsMutated = true;
   if (!documentID) {
     void autoCreateForAnnotations();
     return;
@@ -206,6 +229,8 @@ function unbindDocument() {
   replaceDocumentID('');
   loadedMarkdown = '';
   pendingAnchors = [];
+  loadedAnnotationCount = 0;
+  annotationsMutated = false;
 }
 
 async function restoreReadingState(id, markdown) {
@@ -219,8 +244,8 @@ async function restoreReadingState(id, markdown) {
     try {
       await verifyAnnotationSource(data, markdown);
     } catch (verifyErr) {
-      // The Markdown changed since the sidecar was written (e.g. a synced
-      // edit). Re-anchor by text anyway; whatever still fails is kept as a
+      // The page Markdown changed since this on-read DTO was assembled (e.g.
+      // a concurrent edit). Re-anchor by text anyway; whatever still fails is kept as a
       // pending anchor so the next save does not discard it.
       console.warn('membox: sidecar source mismatch — re-anchoring by text', verifyErr);
     }
@@ -230,6 +255,8 @@ async function restoreReadingState(id, markdown) {
     } finally {
       restoring = false;
     }
+    loadedAnnotationCount = Array.isArray(data.annotations) ? data.annotations.length : 0;
+    annotationsMutated = false;
     if (Array.isArray(data.unrestored) && data.unrestored.length) {
       pendingAnchors = data.unrestored;
     }
@@ -316,8 +343,8 @@ async function syncToMembox() {
   syncing = true;
   setDownloadMeaning();
   try {
-    // The sidecar always rides along: it carries both the notes and the
-    // current reading progress, so an explicit sync refreshes both.
+    // A sidecar-shaped DTO rides along so the backend can reconcile separate
+    // Markdown note documents and refresh reading progress in one request.
     let annotations = null;
     try {
       const markdownFile = sanitizeFilename(title) + '.md';

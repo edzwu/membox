@@ -84,6 +84,28 @@ type ScanSave struct {
 	Reindex  bool
 }
 
+// AnnotationNoteRecord links one Markdown note document to the document
+// passage it annotates. User-authored excerpt/note text stays in Markdown;
+// this row only stores identity, anchoring hints, and presentation metadata.
+type AnnotationNoteRecord struct {
+	NoteDocumentID   catalog.DocumentID
+	TargetDocumentID catalog.DocumentID
+	Start            int
+	Prefix           string
+	Suffix           string
+	Highlight        bool
+	Underline        bool
+	Strikethrough    bool
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+}
+
+type DocumentReadState struct {
+	DocumentID catalog.DocumentID
+	ProgressY  int
+	ProgressAt string
+}
+
 // CatalogStore is an outbound persistence/read-model port. SaveScan must save
 // all aggregate and FTS changes atomically.
 type CatalogStore interface {
@@ -97,8 +119,16 @@ type CatalogStore interface {
 	SaveDocument(ctx context.Context, save ScanSave) error
 	SaveSourceTimes(ctx context.Context, documents []*catalog.Document) error
 	SavePinned(ctx context.Context, documentID catalog.DocumentID, pinned bool) error
+	// SaveAnnotations/GetAnnotations retain legacy Miru sidecars only for
+	// migration. New annotation content is stored as Markdown note documents.
 	SaveAnnotations(ctx context.Context, documentID catalog.DocumentID, sidecar string) error
 	GetAnnotations(ctx context.Context, documentID catalog.DocumentID) (string, error)
+	UpsertAnnotationNote(ctx context.Context, record AnnotationNoteRecord) error
+	ListAnnotationNotes(ctx context.Context, targetDocumentID catalog.DocumentID) ([]AnnotationNoteRecord, error)
+	GetAnnotationNote(ctx context.Context, noteDocumentID catalog.DocumentID) (AnnotationNoteRecord, bool, error)
+	DeleteAnnotationNote(ctx context.Context, noteDocumentID catalog.DocumentID) error
+	SaveDocumentReadState(ctx context.Context, state DocumentReadState) error
+	GetDocumentReadState(ctx context.Context, documentID catalog.DocumentID) (DocumentReadState, bool, error)
 	Search(ctx context.Context, query string, limit int) ([]SearchHit, error)
 	ListDocuments(ctx context.Context, limit int, includeUnavailable bool) ([]DocumentRecord, error)
 	ResolveDocument(ctx context.Context, selector string) (*catalog.Document, string, error)

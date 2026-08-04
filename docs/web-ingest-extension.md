@@ -450,40 +450,41 @@ User: 点击 Save to membox
 
 ---
 
-## 10.5 Annotation 投影（已实现）
+## 10.5 Markdown Annotation Note（已实现）
 
-**原则：note.md 文档是实体，Miru annotation 是投影。**
+**原则：`*-note.md` 是唯一笔记内容权威；SQLite 保存 UUID 关系和锚点；Miru sidecar 只是在读取时生成的 DTO。**
 
 ```text
-原始页选区 Save
-  POST /api/ingest (selection, excerpt_raw)
-    ├─ 建 *-note.md（实体）
-    ├─ graph link page→note
-    └─ 投影：找同 source_url 的 page clip
-         ├─ 存在 → 服务端锚定摘录 → 写入 page 的 annotation sidecar
-         └─ 不存在 → 等 page clip 进来时 backfill
+Extension 或 Miru 选区 Save
+  ├─ 建/更新 *-note.md（blockquote 摘录 + 用户笔记）
+  ├─ annotation_notes：page UUID → note UUID + anchor/style
+  └─ Miru 打开 page
+       ├─ 读取关联 note Markdown
+       ├─ 与 DB anchor 组合成临时 miru-annotations JSON
+       └─ 前端原生渲染；不持久化 sidecar 副本
 ```
 
 | 场景 | 体验 |
 | --- | --- |
 | 原始网页 | 浮动卡片（扩展渲染），**默认禁用，popup 里点 Enable 才生效** |
-| Miru 阅读页 | **原生 annotation**：摘录高亮 + 编号上标 + 边栏笔记卡；不出浮动卡片 |
-
-存量迁移：`mm path scan`（TUI Ctrl+R）会自动重建投影；也可 `mm clip project` 显式执行。
+| Miru 阅读页 | 原生 annotation：摘录样式 + 编号上标 + 边栏笔记卡 |
 
 实现要点：
 
-- 锚定在服务端（`bridge_annotate.go`）：Markdown → 近似正文文本 → 空白宽松匹配摘录 → start/end + 32 字 prefix/suffix。前端 `resolveAnnotationRange` 用文本回退重新锚定，server offset 只是提示。
-- sidecar 带 `ref: <note文档UUID>`（join key，Miru parse/capture 全链路透传）。
-- sidecar 必须带 `sourceHash`（sha256）+ `sourceLength`（**JS UTF-16 长度**），否则 Miru 校验拒绝。
-- 幂等：同一 `exact` 文本 = 同一条投影，重存更新不复制。
-- 防丢失：Miru integration 对锚定失败的 annotation 记为 pending，下次 save 合并回去；hash 不匹配（正文被编辑）不阻断恢复。
-- Miru 侧 annotation 的删除只影响投影；重新 ingest 会重建。
+- `*-note.md` 只保存用户可读内容；不复制 `annotates`、anchor、style 等机器 metadata 到 front matter。
+- `annotation_notes` 以 note document UUID 为主键，保存 target UUID、start、prefix/suffix 和样式。
+- `GET /api/doc/:id/annotations` 读取时组合 Markdown + DB，并按当前 page Markdown 动态计算 `sourceHash/sourceLength`。
+- `POST /api/doc/:id/annotations` 把 Miru 新笔记物化成 `*-note.md`；编辑更新该文件；删除移除该文件与关系行。
+- 阅读进度独立存入 `document_read_state`，滚动不会重写笔记文件或 annotation JSON。
+- 旧 `document_annotations` 仅作为迁移读取源；下次保存会物化成 Markdown 并清除旧 blob。
+- Extension ingest 直接建立关系；先有 selection、后有 page 时，在 page ingest 时 backfill。
+- Miru/bridge server 启动时自动发现尚未关联的存量 `*-note.md` 并建立关系；已迁移记录会被跳过，不需要用户命令。
+- 锚定失败的前端 annotation 仍作为 pending 合并，避免一次渲染失败被误判为删除。
 
 已知限制：
 
-- 扩展里改笔记仍是本地态，不回写 membox（下一阶段的同步项）。
-- 摘录含公式/表格时锚定可能失败 → 投影跳过，note 文档与 link 不受影响。
+- Extension 浮动卡片中的本地编辑仍未回写 membox。
+- 摘录含公式/表格时可能无法锚定；Markdown note 与 UUID 关系不会丢失。
 
 ---
 

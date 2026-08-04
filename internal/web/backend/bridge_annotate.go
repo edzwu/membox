@@ -7,19 +7,22 @@ import (
 	"encoding/json"
 	"regexp"
 	"strings"
+
+	"membox/internal/application"
+	"membox/internal/application/port"
 )
 
-// Selection notes are mirrored as Miru annotations on the page clip they
-// belong to. The note document stays the entity; the annotation is a
-// projection the reader renders natively (highlight + margin note).
+// Selection-note Markdown documents are linked to the page clips they
+// annotate. Miru's sidecar shape is now only an on-read rendering DTO.
 
 const annotContextRunes = 32
 
-// upsertClipAnnotation anchors an excerpt inside the page clip's Markdown and
-// writes (or updates) the matching Miru annotation in its sidecar. Failures
-// are non-fatal: the note document and graph link already exist. Returns
-// whether an annotation was actually projected.
-func (s *Server) upsertClipAnnotation(ctx context.Context, pageID, refID, excerpt, note string) (bool, error) {
+// upsertClipAnnotationRelation anchors an excerpt inside the page clip and
+// stores the note UUID relationship plus anchor hints. Note content remains in
+// Markdown. Failures are non-fatal to browser ingest.
+func (s *Server) upsertClipAnnotationRelation(ctx context.Context, pageID, refID, excerpt string) (bool, error) {
+	s.annotationMu.Lock()
+	defer s.annotationMu.Unlock()
 	// Normalize the excerpt exactly like the page text is normalized: note
 	// bodies carry Turndown artifacts (****, backticks, \_ escapes) that must
 	// disappear both for matching here and for Miru's text-quote re-anchoring.
@@ -52,78 +55,30 @@ func (s *Server) upsertClipAnnotation(ctx context.Context, pageID, refID, excerp
 		suffixEnd = len(runes)
 	}
 
-	sidecar := map[string]any{}
-	if existing, err := s.service.GetAnnotations(ctx, pageID); err == nil && strings.TrimSpace(existing) != "" {
-		_ = json.Unmarshal([]byte(existing), &sidecar)
+	if refID == "" {
+		return false, nil
 	}
-	annotations := []map[string]any{}
-	if raw, ok := sidecar["annotations"].([]any); ok {
-		for _, item := range raw {
-			if m, ok := item.(map[string]any); ok {
-				annotations = append(annotations, m)
-			}
-		}
-	}
-
-	// Idempotent: same excerpt text identifies the same projection.
-	var entry map[string]any
-	for _, candidate := range annotations {
-		if exact, _ := candidate["exact"].(string); exact == excerpt {
-			entry = candidate
-			break
-		}
-	}
-	noteValue := any(nil)
-	if strings.TrimSpace(note) != "" {
-		noteValue = note
-	}
-	desired := map[string]any{
-		"start": start, "end": end, "exact": excerpt,
-		"prefix": string(runes[prefixStart:start]), "suffix": string(runes[end:suffixEnd]),
-		"highlight": true, "underline": false, "strikethrough": false,
-		"note": noteValue,
-	}
-	if refID != "" {
-		desired["ref"] = refID
-	}
-	// Skip the write when the stored projection already matches, so repeated
-	// scans (Ctrl+R auto-repair) never churn the sidecar.
-	if entry != nil && sameJSON(entry, desired) {
-		return true, nil
-	}
-	if entry == nil {
-		annotations = append(annotations, desired)
-	} else {
-		for k, v := range desired {
-			entry[k] = v
-		}
-	}
-
-	sidecar["format"] = "miru-annotations"
-	sidecar["version"] = 2
-	sidecar["annotations"] = annotations
-	// Miru verifies the sidecar against the loaded Markdown: hash must match
-	// and sourceLength is compared to the JS string length (UTF-16 units).
-	sum := sha256.Sum256(body)
-	sidecar["sourceHash"] = "sha256:" + hex.EncodeToString(sum[:])
-	sidecar["sourceLength"] = jsStringLength(string(body))
-	if _, hasTitle := sidecar["title"]; !hasTitle {
-		sidecar["title"] = titleFromBody(string(body))
-	}
-
-	out, err := json.Marshal(sidecar)
+	// Persist only the UUID relation and anchoring hints. The excerpt and note
+	// prose remain authoritative in refID's Markdown file; a Miru sidecar is
+	// assembled from the two sources only when the page is read.
+	_, err = s.service.SaveAnnotationNote(ctx, application.SaveAnnotationNoteOptions{
+		TargetSelector: pageID,
+		NoteSelector:   refID,
+		// Browser offsets use UTF-16 code units, not Go rune indexes.
+		Start:     jsStringLength(string(runes[:start])),
+		Prefix:    string(runes[prefixStart:start]),
+		Suffix:    string(runes[end:suffixEnd]),
+		Highlight: true,
+	})
 	if err != nil {
-		return false, err
-	}
-	if _, err := s.service.SaveAnnotations(ctx, pageID, string(out)); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
-// backfillPageAnnotations mirrors every existing selection note for a URL
-// onto a page clip (covers "notes saved before the page" and migration of
-// pre-existing *-note.md files). Returns how many notes were projected.
+// backfillPageAnnotations links every existing selection note for a URL to a
+// page clip (covers "notes saved before the page" and automatic migration of
+// pre-existing *-note.md files). Returns how many relations were established.
 func (s *Server) backfillPageAnnotations(ctx context.Context, pageID, sourceURL string) int {
 	records, err := s.service.ListClipsBySourceURL(ctx, sourceURL, true)
 	if err != nil {
@@ -131,37 +86,319 @@ func (s *Server) backfillPageAnnotations(ctx context.Context, pageID, sourceURL 
 	}
 	projected := 0
 	for _, rec := range records {
+		if existing, ok, getErr := s.service.GetAnnotationNote(ctx, string(rec.DocumentID)); getErr == nil && ok && string(existing.TargetDocumentID) == pageID {
+			continue
+		}
 		body, err := s.service.ReadDocument(ctx, string(rec.DocumentID))
 		if err != nil {
 			continue
 		}
-		excerpt, note, mode := parseClipBody(string(body))
+		excerpt, _, mode := parseClipBody(string(body))
 		if mode != "selection" || strings.TrimSpace(excerpt) == "" {
 			continue
 		}
-		if ok, _ := s.upsertClipAnnotation(ctx, pageID, string(rec.DocumentID), excerpt, note); ok {
+		if ok, _ := s.upsertClipAnnotationRelation(ctx, pageID, string(rec.DocumentID), excerpt); ok {
 			projected++
 		}
 	}
 	return projected
 }
 
-// ProjectExistingAnnotations rebuilds Miru annotation projections for every
-// stored page clip from its selection notes. One-shot migration for data
-// created before projections existed; safe to re-run (idempotent upserts).
-func (s *Server) ProjectExistingAnnotations(ctx context.Context) (pages, projected int, err error) {
+// migrateExistingAnnotationNotes automatically links selection notes created
+// before normalized annotation relations existed. It is idempotent, skips
+// already-linked notes, and never persists a Miru sidecar.
+func (s *Server) migrateExistingAnnotationNotes(ctx context.Context) error {
 	clipPages, err := s.service.ListDocumentSources(ctx, "page")
 	if err != nil {
-		return 0, 0, err
+		return err
 	}
 	for _, page := range clipPages {
-		if strings.TrimSpace(page.SourceURL) == "" {
+		if strings.TrimSpace(page.SourceURL) != "" {
+			s.backfillPageAnnotations(ctx, string(page.DocumentID), page.SourceURL)
+		}
+	}
+	return nil
+}
+
+type annotationAnchorPayload struct {
+	Start         int    `json:"start"`
+	End           int    `json:"end,omitempty"`
+	Exact         string `json:"exact"`
+	Prefix        string `json:"prefix,omitempty"`
+	Suffix        string `json:"suffix,omitempty"`
+	Highlight     bool   `json:"highlight"`
+	Underline     bool   `json:"underline"`
+	Strikethrough bool   `json:"strikethrough"`
+	Note          any    `json:"note"`
+	Ref           string `json:"ref,omitempty"`
+}
+
+type annotationProgressPayload struct {
+	Y  int    `json:"y"`
+	At string `json:"at"`
+}
+
+type annotationWritePayload struct {
+	Format             string                     `json:"format"`
+	Version            int                        `json:"version"`
+	Annotations        []annotationAnchorPayload  `json:"annotations"`
+	Progress           *annotationProgressPayload `json:"progress"`
+	ReplaceAnnotations bool                       `json:"replaceAnnotations"`
+}
+
+// liveAnnotationSidecar is an on-read view. It combines Markdown note content
+// with normalized UUID/anchor rows and never stores the resulting JSON.
+func (s *Server) liveAnnotationSidecar(ctx context.Context, pageID string) (map[string]any, bool, error) {
+	s.annotationMu.Lock()
+	defer s.annotationMu.Unlock()
+	body, err := s.service.ReadDocument(ctx, pageID)
+	if err != nil {
+		return nil, false, err
+	}
+	_, records, err := s.service.ListAnnotationNotes(ctx, pageID)
+	if err != nil {
+		return nil, false, err
+	}
+	annotations := make([]map[string]any, 0, len(records))
+	refs := map[string]bool{}
+	type anchorKey struct {
+		exact string
+		start int
+	}
+	anchors := map[anchorKey]bool{}
+	for _, record := range records {
+		noteBody, readErr := s.service.ReadDocument(ctx, string(record.NoteDocumentID))
+		if readErr != nil {
 			continue
 		}
-		pages++
-		projected += s.backfillPageAnnotations(ctx, string(page.DocumentID), page.SourceURL)
+		exact, note, _ := parseClipBody(string(noteBody))
+		exact = strings.TrimSpace(cleanInlineMarkdown(exact))
+		if exact == "" {
+			continue
+		}
+		entry := annotationMap(record, exact, note)
+		annotations = append(annotations, entry)
+		refs[string(record.NoteDocumentID)] = true
+		anchors[anchorKey{exact: exact, start: record.Start}] = true
 	}
-	return pages, projected, nil
+
+	// Keep pre-migration sidecars readable. Once the browser next saves, these
+	// entries are materialized as Markdown notes and the legacy blob is cleared.
+	legacy := map[string]any{}
+	if raw, legacyErr := s.service.GetAnnotations(ctx, pageID); legacyErr == nil && strings.TrimSpace(raw) != "" {
+		_ = json.Unmarshal([]byte(raw), &legacy)
+		if items, ok := legacy["annotations"].([]any); ok {
+			for _, rawItem := range items {
+				item, ok := rawItem.(map[string]any)
+				if !ok {
+					continue
+				}
+				ref, _ := item["ref"].(string)
+				exact, _ := item["exact"].(string)
+				start := 0
+				if value, ok := item["start"].(float64); ok {
+					start = int(value)
+				}
+				if (ref != "" && refs[ref]) || (ref == "" && anchors[anchorKey{exact: exact, start: start}]) {
+					continue
+				}
+				annotations = append(annotations, item)
+			}
+		}
+	}
+
+	var progress any
+	if readState, ok, stateErr := s.service.GetDocumentReadState(ctx, pageID); stateErr != nil {
+		return nil, false, stateErr
+	} else if ok {
+		progress = map[string]any{"y": readState.ProgressY, "at": readState.ProgressAt}
+	} else if value, ok := legacy["progress"]; ok {
+		progress = value
+	}
+
+	sum := sha256.Sum256(body)
+	sidecar := map[string]any{
+		"format":       "miru-annotations",
+		"version":      2,
+		"sourceHash":   "sha256:" + hex.EncodeToString(sum[:]),
+		"sourceLength": jsStringLength(string(body)),
+		"title":        titleFromBody(string(body)),
+		"annotations":  annotations,
+		"progress":     progress,
+	}
+	return sidecar, len(annotations) > 0 || progress != nil, nil
+}
+
+func annotationMap(record port.AnnotationNoteRecord, exact, note string) map[string]any {
+	noteValue := any(nil)
+	if strings.TrimSpace(note) != "" {
+		noteValue = note
+	}
+	return map[string]any{
+		"start": record.Start, "end": record.Start + jsStringLength(exact), "exact": exact,
+		"prefix": record.Prefix, "suffix": record.Suffix,
+		"highlight": record.Highlight, "underline": record.Underline, "strikethrough": record.Strikethrough,
+		"note": noteValue, "ref": string(record.NoteDocumentID),
+	}
+}
+
+// reconcileAnnotationNotes materializes every user annotation as a Markdown
+// document. The request is a transient UI snapshot, not a stored sidecar.
+func (s *Server) reconcileAnnotationNotes(ctx context.Context, pageID string, payload annotationWritePayload) ([]map[string]any, error) {
+	s.annotationMu.Lock()
+	defer s.annotationMu.Unlock()
+	_, existing, err := s.service.ListAnnotationNotes(ctx, pageID)
+	if err != nil {
+		return nil, err
+	}
+	byRef := make(map[string]port.AnnotationNoteRecord, len(existing))
+	for _, record := range existing {
+		byRef[string(record.NoteDocumentID)] = record
+	}
+	seen := map[string]bool{}
+	out := make([]map[string]any, 0, len(payload.Annotations))
+
+	for _, anchor := range payload.Annotations {
+		exact := strings.TrimSpace(anchor.Exact)
+		if exact == "" {
+			continue
+		}
+		note := ""
+		if value, ok := anchor.Note.(string); ok {
+			note = strings.TrimSpace(value)
+		}
+		ref := strings.TrimSpace(anchor.Ref)
+
+		// A newly created Miru annotation has no ref until the first save. Match
+		// it to the same anchor on subsequent saves rather than creating copies.
+		if ref == "" {
+			bestDistance := int(^uint(0) >> 1)
+			for candidateRef, candidate := range byRef {
+				if seen[candidateRef] {
+					continue
+				}
+				body, readErr := s.service.ReadDocument(ctx, candidateRef)
+				if readErr != nil {
+					continue
+				}
+				candidateExact, _, _ := parseClipBody(string(body))
+				if strings.TrimSpace(cleanInlineMarkdown(candidateExact)) != strings.TrimSpace(cleanInlineMarkdown(exact)) {
+					continue
+				}
+				distance := candidate.Start - anchor.Start
+				if distance < 0 {
+					distance = -distance
+				}
+				if distance < bestDistance {
+					bestDistance, ref = distance, candidateRef
+				}
+			}
+		}
+
+		body := selectionNoteMarkdown("", exact, note)
+		if ref != "" {
+			if current, readErr := s.service.ReadDocument(ctx, ref); readErr == nil {
+				oldExact, oldNote, _ := parseClipBody(string(current))
+				if strings.TrimSpace(cleanInlineMarkdown(oldExact)) == strings.TrimSpace(cleanInlineMarkdown(exact)) && strings.TrimSpace(oldNote) == note {
+					body = "" // no content churn; update anchor metadata only
+				} else {
+					body = selectionNoteMarkdown(string(current), exact, note)
+				}
+			} else {
+				ref = ""
+			}
+		}
+
+		result, saveErr := s.service.SaveAnnotationNote(ctx, application.SaveAnnotationNoteOptions{
+			TargetSelector: pageID, NoteSelector: ref, Title: annotationNoteTitle(exact), Body: body,
+			Start: anchor.Start, Prefix: anchor.Prefix, Suffix: anchor.Suffix,
+			Highlight: anchor.Highlight, Underline: anchor.Underline, Strikethrough: anchor.Strikethrough,
+		})
+		if saveErr != nil {
+			return nil, saveErr
+		}
+		ref = string(result.Record.NoteDocumentID)
+		seen[ref] = true
+		out = append(out, annotationMap(result.Record, exact, note))
+	}
+
+	if payload.ReplaceAnnotations {
+		for _, record := range existing {
+			ref := string(record.NoteDocumentID)
+			if !seen[ref] {
+				if err := s.service.DeleteAnnotationNote(ctx, pageID, ref); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+	if payload.Progress != nil {
+		if err := s.service.SaveDocumentReadState(ctx, pageID, payload.Progress.Y, payload.Progress.At); err != nil {
+			return nil, err
+		}
+	}
+	// The legacy blob has now been fully represented by Markdown documents and
+	// normalized rows. Clear it so there is only one content authority.
+	if _, err := s.service.SaveAnnotations(ctx, pageID, ""); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func annotationNoteTitle(exact string) string {
+	runes := []rune(strings.TrimSpace(exact))
+	if len(runes) > 56 {
+		runes = append(runes[:56], '…')
+	}
+	if len(runes) == 0 {
+		return "Selection note"
+	}
+	return string(runes) + " — note"
+}
+
+// selectionNoteMarkdown updates the human-readable note while preserving any
+// existing front matter and Source footer written by the browser extension.
+func selectionNoteMarkdown(existing, exact, note string) string {
+	frontMatter := ""
+	sourceFooter := ""
+	content := existing
+	if strings.HasPrefix(strings.TrimSpace(content), "---") {
+		start := strings.Index(content, "---")
+		rest := content[start+3:]
+		if end := strings.Index(rest, "\n---"); end >= 0 {
+			cut := start + 3 + end + 4
+			frontMatter = strings.TrimSpace(content[:cut]) + "\n\n"
+			content = content[cut:]
+		}
+	}
+	for _, line := range strings.Split(content, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "Source:") {
+			sourceFooter = strings.TrimSpace(line)
+			break
+		}
+	}
+	var quoted []string
+	for _, line := range strings.Split(strings.TrimSpace(exact), "\n") {
+		if line == "" {
+			quoted = append(quoted, ">")
+		} else {
+			quoted = append(quoted, "> "+line)
+		}
+	}
+	if note == "" {
+		note = "_No note._"
+	}
+	var b strings.Builder
+	b.WriteString(frontMatter)
+	b.WriteString(strings.Join(quoted, "\n"))
+	b.WriteString("\n\n")
+	b.WriteString(strings.TrimSpace(note))
+	if sourceFooter != "" {
+		b.WriteString("\n\n")
+		b.WriteString(sourceFooter)
+	}
+	b.WriteByte('\n')
+	return b.String()
 }
 
 // ---------------------------------------------------------------------------
@@ -294,14 +531,6 @@ func findExcerptOffsets(canonical, excerpt string) (int, int, bool) {
 
 // jsStringLength counts UTF-16 code units the way JavaScript's String.length
 // does; Miru verifies sourceLength against markdown.length.
-// sameJSON compares two annotation maps by their canonical JSON form
-// (json.Marshal sorts map keys).
-func sameJSON(a, b map[string]any) bool {
-	ja, errA := json.Marshal(a)
-	jb, errB := json.Marshal(b)
-	return errA == nil && errB == nil && string(ja) == string(jb)
-}
-
 func jsStringLength(s string) int {
 	n := 0
 	for _, r := range s {

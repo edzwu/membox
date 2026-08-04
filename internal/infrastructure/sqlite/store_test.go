@@ -51,7 +51,7 @@ CREATE TABLE graph_edges (
 	if pinned != 0 {
 		t.Fatalf("migrated pin default=%d, want 0", pinned)
 	}
-	for _, table := range []string{"graph_edges"} {
+	for _, table := range []string{"graph_edges", "annotation_notes", "document_read_state"} {
 		var count int
 		if err := store.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&count); err != nil {
 			t.Fatal(err)

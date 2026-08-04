@@ -254,19 +254,7 @@ func (b *Box) RemovePath(ctx context.Context, command RemovePathCommand) (Remove
 
 func (b *Box) ScanPaths(ctx context.Context, command ScanPathsCommand) (ScanReport, error) {
 	report, err := b.service.ScanPaths(ctx, application.ScanOptions{Selector: command.Selector, TimestampSource: command.TimestampSource})
-	if err == nil {
-		// Auto-repair clip annotation projections (Ctrl+R path): picks up
-		// pre-existing *-note.md files and anything that drifted. Best-effort
-		// and write-skipping when nothing changed, so scans stay cheap.
-		_, _, _ = web.NewServer(b.service).ProjectExistingAnnotations(ctx)
-	}
 	return scanReport(report), err
-}
-
-// ProjectClipAnnotations rebuilds Miru annotation projections for every stored
-// page clip from its selection notes (one-shot migration; also runs after scans).
-func (b *Box) ProjectClipAnnotations(ctx context.Context) (pages, projected int, err error) {
-	return web.NewServer(b.service).ProjectExistingAnnotations(ctx)
 }
 
 type SearchDocumentsQuery struct {
