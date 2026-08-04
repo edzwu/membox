@@ -3,6 +3,7 @@ package web_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -218,6 +219,7 @@ func TestMiruAnnotationsMaterializeAsMarkdownNoteDocuments(t *testing.T) {
 		Annotations []struct {
 			Note string `json:"note"`
 		} `json:"annotations"`
+		Revision int64 `json:"revision"`
 	}
 	if err := json.NewDecoder(resp2.Body).Decode(&edited); err != nil {
 		resp2.Body.Close()
@@ -227,9 +229,12 @@ func TestMiruAnnotationsMaterializeAsMarkdownNoteDocuments(t *testing.T) {
 	if len(edited.Annotations) != 1 || edited.Annotations[0].Note != "Edited outside Miru." {
 		t.Fatalf("external Markdown edit not reflected: %+v", edited)
 	}
+	if edited.Revision <= 0 {
+		t.Fatalf("GET annotations missing revision: %+v", edited)
+	}
 
 	postJSON(t, baseURL+"/api/doc/"+docID+"/annotations", map[string]any{
-		"format": "miru-annotations", "version": 2, "replaceAnnotations": true,
+		"format": "miru-annotations", "version": 2, "replaceAnnotations": true, "revision": edited.Revision,
 		"annotations": []any{}, "progress": map[string]any{"y": 13, "at": "2026-08-04T00:01:00Z"},
 	})
 	files, err = filepath.Glob(filepath.Join(notesDir, "*-note.md"))
@@ -845,5 +850,50 @@ func TestServerRelatedCreatesLinkedPlainDocument(t *testing.T) {
 	backResp.Body.Close()
 	if !strings.Contains(string(backBody), `"`+docID+`"`) || !strings.Contains(string(backBody), `"out"`) {
 		t.Fatalf("backlink missing from the new document's related list: %q", backBody)
+	}
+}
+
+func TestServerRefusesDeletionForStaleRevision(t *testing.T) {
+	baseURL, docID, notesDir := startServer(t)
+
+	sidecar := `{"format":"miru-annotations","version":2,"replaceAnnotations":true,"annotations":[
+		{"start":0,"end":4,"exact":"body","highlight":true,"note":"first note"}
+	]}`
+	postJSON(t, baseURL+"/api/doc/"+docID+"/annotations", json.RawMessage(sidecar))
+	files, err := filepath.Glob(filepath.Join(notesDir, "*-note.md"))
+	if err != nil || len(files) != 1 {
+		t.Fatalf("expected one note file, got %v (err=%v)", files, err)
+	}
+
+	// A tab that never saw this note (revision 0) tries to replace the whole
+	// set with nothing — the deletion must be refused.
+	stale := `{"format":"miru-annotations","version":2,"replaceAnnotations":true,"revision":0,"annotations":[]}`
+	postJSON(t, baseURL+"/api/doc/"+docID+"/annotations", json.RawMessage(stale))
+	files, err = filepath.Glob(filepath.Join(notesDir, "*-note.md"))
+	if err != nil || len(files) != 1 {
+		t.Fatalf("stale client wiped notes: %v (err=%v)", files, err)
+	}
+
+	// With the current revision the same request is authorized.
+	getResp, err := http.Get(baseURL + "/api/doc/" + docID + "/annotations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var view struct {
+		Revision int64 `json:"revision"`
+	}
+	if err := json.NewDecoder(getResp.Body).Decode(&view); err != nil {
+		getResp.Body.Close()
+		t.Fatal(err)
+	}
+	getResp.Body.Close()
+	if view.Revision <= 0 {
+		t.Fatalf("missing revision in GET: %+v", view)
+	}
+	fresh := fmt.Sprintf(`{"format":"miru-annotations","version":2,"replaceAnnotations":true,"revision":%d,"annotations":[]}`, view.Revision)
+	postJSON(t, baseURL+"/api/doc/"+docID+"/annotations", json.RawMessage(fresh))
+	files, err = filepath.Glob(filepath.Join(notesDir, "*-note.md"))
+	if err != nil || len(files) != 0 {
+		t.Fatalf("authorized replace left files: %v (err=%v)", files, err)
 	}
 }

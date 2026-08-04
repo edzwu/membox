@@ -34,6 +34,10 @@ let annotationsMutated = false;
 // Anchors that failed to re-anchor on load. Kept so the next save merges
 // them back into the sidecar instead of silently dropping them.
 let pendingAnchors = [];
+// Newest annotation updated_at (ms) this session has seen. Sent back on
+// replace-saves so the server refuses to delete notes that appeared after
+// this tab loaded (created or restored elsewhere).
+let loadedRevision = 0;
 
 function createConnectionButton() {
   const button = document.createElement('button');
@@ -376,6 +380,7 @@ async function persistReadingState(keepalive) {
     // Only an actual annotation mutation makes the submitted set authoritative
     // for deletions. Scroll/progress saves must never delete note documents.
     sidecar.replaceAnnotations = annotationsMutated;
+    sidecar.revision = loadedRevision;
     const liveCount = sidecar.annotations.length;
     mergePendingAnchors(sidecar);
     // Wipe protection: annotations loaded, none survived, and the user never
@@ -412,6 +417,9 @@ async function persistReadingState(keepalive) {
           if (saved[i] && saved[i].ref && !state.annotations[i].ref) {
             state.annotations[i].ref = saved[i].ref;
           }
+        }
+        if (result && Number.isFinite(Number(result.revision))) {
+          loadedRevision = Math.max(loadedRevision, Number(result.revision));
         }
       } catch (err) {
         /* ref write-back is best-effort */
@@ -479,6 +487,19 @@ function unbindDocument() {
   pendingAnchors = [];
   loadedAnnotationCount = 0;
   annotationsMutated = false;
+  loadedRevision = 0;
+}
+
+// Re-read the server revision after operations that bypass the annotation
+// POST response (explicit sync, auto-create).
+async function refreshRevision(id) {
+  try {
+    const response = await fetch(`/api/doc/${encodeURIComponent(id)}/annotations`, { cache: 'no-store' });
+    if (response.status === 204 || !response.ok) return;
+    loadedRevision = Number((await response.json()).revision) || 0;
+  } catch (err) {
+    /* keep the previous revision */
+  }
 }
 
 async function restoreReadingState(id, markdown) {
@@ -488,6 +509,11 @@ async function restoreReadingState(id, markdown) {
     if (response.status === 204 || !response.ok) return;
     const sidecarText = await response.text();
     if (!sidecarText.trim()) return;
+    try {
+      loadedRevision = Number(JSON.parse(sidecarText).revision) || 0;
+    } catch (err) {
+      loadedRevision = 0;
+    }
     const data = parseAnnotationSidecar(sidecarText);
     try {
       await verifyAnnotationSource(data, markdown);
@@ -566,6 +592,7 @@ async function autoCreateForAnnotations() {
     replaceDocumentID(result.id);
     loadedMarkdown = body;
     if (result.path) state.droppedFilename = result.path.split(/[\\/]/).pop();
+    await refreshRevision(result.id);
     showToast(`Notes auto-saved to membox: ${String(result.id).slice(0, 8)}`);
   } catch (err) {
     console.error('membox: auto-save failed', err);
@@ -600,8 +627,10 @@ async function syncToMembox() {
       // Explicit sync replaces stored notes, so it must carry every note we
       // know about — including ones that failed to re-anchor this load.
       mergePendingAnchors(annotations);
-      // Now that the set is complete, the client authorizes deletions itself.
+      // Now that the set is complete, the client authorizes deletions itself,
+      // scoped to the state it actually saw (revision).
       annotations.replaceAnnotations = true;
+      annotations.revision = loadedRevision;
     } catch (err) {
       console.warn('membox: could not pack annotation sidecar', err);
     }
@@ -615,6 +644,7 @@ async function syncToMembox() {
     replaceDocumentID(result.id);
     loadedMarkdown = body;
     if (result.path) state.droppedFilename = result.path.split(/[\\/]/).pop();
+    await refreshRevision(result.id);
     flashButton(elements.downloadAll);
     showToast(result.created ? 'Created in membox with notes' : 'Synced Markdown and notes to membox');
   } catch (err) {

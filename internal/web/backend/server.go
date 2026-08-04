@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"net"
 	"net/http"
 	"path"
@@ -331,8 +332,10 @@ func (s *Server) handleAnnotations(writer http.ResponseWriter, request *http.Req
 		if clearing {
 			// Zero progress with an empty timestamp deletes document_read_state.
 			payload.Progress = &annotationProgressPayload{}
+			// Server-authored clearing keeps full deletion authority.
+			payload.Revision = math.MaxInt64
 		}
-		annotations, err := s.reconcileAnnotationNotes(request.Context(), selector, payload)
+		annotations, revision, err := s.reconcileAnnotationNotes(request.Context(), selector, payload)
 		if err != nil {
 			http.Error(writer, err.Error(), http.StatusInternalServerError)
 			return
@@ -343,7 +346,7 @@ func (s *Server) handleAnnotations(writer http.ResponseWriter, request *http.Req
 			_, _ = s.service.SaveAnnotations(request.Context(), selector, originalBody)
 		}
 		writer.Header().Set("Content-Type", "application/json; charset=utf-8")
-		_ = json.NewEncoder(writer).Encode(map[string]any{"saved": true, "annotations": annotations})
+		_ = json.NewEncoder(writer).Encode(map[string]any{"saved": true, "annotations": annotations, "revision": revision})
 	default:
 		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -442,7 +445,7 @@ func (s *Server) handleSync(writer http.ResponseWriter, request *http.Request) {
 		// submitted set is complete (it merges unrestored anchors before sync).
 		// Forcing true here turned any incomplete submission into a wipe.
 		emptyEnvelope := len(annotationPayload.Annotations) == 0 && annotationPayload.Progress == nil
-		if _, err := s.reconcileAnnotationNotes(request.Context(), response.ID, annotationPayload); err != nil {
+		if _, _, err := s.reconcileAnnotationNotes(request.Context(), response.ID, annotationPayload); err != nil {
 			http.Error(writer, err.Error(), http.StatusInternalServerError)
 			return
 		}

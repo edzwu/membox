@@ -139,11 +139,15 @@ type annotationProgressPayload struct {
 }
 
 type annotationWritePayload struct {
-	Format             string                     `json:"format"`
-	Version            int                        `json:"version"`
-	Annotations        []annotationAnchorPayload  `json:"annotations"`
+	Format             string                    `json:"format"`
+	Version            int                       `json:"version"`
+	Annotations        []annotationAnchorPayload `json:"annotations"`
 	Progress           *annotationProgressPayload `json:"progress"`
-	ReplaceAnnotations bool                       `json:"replaceAnnotations"`
+	ReplaceAnnotations bool                      `json:"replaceAnnotations"`
+	// Revision is the newest annotation updated_at (ms) the client has seen.
+	// Replacement deletions are refused when the server state moved past it,
+	// so a stale tab can never wipe notes created or restored elsewhere.
+	Revision int64 `json:"revision"`
 }
 
 // liveAnnotationSidecar is an on-read view. It combines Markdown note content
@@ -161,12 +165,16 @@ func (s *Server) liveAnnotationSidecar(ctx context.Context, pageID string) (map[
 	}
 	annotations := make([]map[string]any, 0, len(records))
 	refs := map[string]bool{}
+	revision := int64(0)
 	type anchorKey struct {
 		exact string
 		start int
 	}
 	anchors := map[anchorKey]bool{}
 	for _, record := range records {
+		if ms := record.UpdatedAt.UnixMilli(); ms > revision {
+			revision = ms
+		}
 		noteBody, readErr := s.service.ReadDocument(ctx, string(record.NoteDocumentID))
 		if readErr != nil {
 			continue
@@ -225,6 +233,7 @@ func (s *Server) liveAnnotationSidecar(ctx context.Context, pageID string) (map[
 		"title":        titleFromBody(string(body)),
 		"annotations":  annotations,
 		"progress":     progress,
+		"revision":     revision,
 	}
 	return sidecar, len(annotations) > 0 || progress != nil, nil
 }
@@ -244,13 +253,22 @@ func annotationMap(record port.AnnotationNoteRecord, exact, note string) map[str
 
 // reconcileAnnotationNotes materializes every user annotation as a Markdown
 // document. The request is a transient UI snapshot, not a stored sidecar.
-func (s *Server) reconcileAnnotationNotes(ctx context.Context, pageID string, payload annotationWritePayload) ([]map[string]any, error) {
+// The second return value is the post-save revision (newest annotation
+// updated_at in milliseconds).
+func (s *Server) reconcileAnnotationNotes(ctx context.Context, pageID string, payload annotationWritePayload) ([]map[string]any, int64, error) {
 	s.annotationMu.Lock()
 	defer s.annotationMu.Unlock()
 	_, existing, err := s.service.ListAnnotationNotes(ctx, pageID)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
+	existingRevision := int64(0)
+	for _, record := range existing {
+		if ms := record.UpdatedAt.UnixMilli(); ms > existingRevision {
+			existingRevision = ms
+		}
+	}
+	newRevision := existingRevision
 	byRef := make(map[string]port.AnnotationNoteRecord, len(existing))
 	for _, record := range existing {
 		byRef[string(record.NoteDocumentID)] = record
@@ -315,34 +333,43 @@ func (s *Server) reconcileAnnotationNotes(ctx context.Context, pageID string, pa
 			Highlight: anchor.Highlight, Underline: anchor.Underline, Strikethrough: anchor.Strikethrough,
 		})
 		if saveErr != nil {
-			return nil, saveErr
+			return nil, 0, saveErr
 		}
 		ref = string(result.Record.NoteDocumentID)
+		if ms := result.Record.UpdatedAt.UnixMilli(); ms > newRevision {
+			newRevision = ms
+		}
 		seen[ref] = true
 		out = append(out, annotationMap(result.Record, exact, note))
 	}
 
 	if payload.ReplaceAnnotations {
-		for _, record := range existing {
-			ref := string(record.NoteDocumentID)
-			if !seen[ref] {
-				if err := s.service.DeleteAnnotationNote(ctx, pageID, ref); err != nil {
-					return nil, err
+		// Optimistic concurrency: deletion is only authorized against the state
+		// the client actually saw. A missing or stale revision (a tab loaded
+		// before other notes were created or restored) must never wipe them.
+		authorized := payload.Revision > 0 && existingRevision <= payload.Revision
+		if authorized {
+			for _, record := range existing {
+				ref := string(record.NoteDocumentID)
+				if !seen[ref] {
+					if err := s.service.DeleteAnnotationNote(ctx, pageID, ref); err != nil {
+						return nil, 0, err
+					}
 				}
 			}
 		}
 	}
 	if payload.Progress != nil {
 		if err := s.service.SaveDocumentReadState(ctx, pageID, payload.Progress.Y, payload.Progress.At); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 	}
 	// The legacy blob has now been fully represented by Markdown documents and
 	// normalized rows. Clear it so there is only one content authority.
 	if _, err := s.service.SaveAnnotations(ctx, pageID, ""); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return out, nil
+	return out, newRevision, nil
 }
 
 // denseExcerpt normalizes an excerpt for identity comparison: inline markup
