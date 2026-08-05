@@ -128,7 +128,7 @@ function renderDocStatus() {
   statusBadge.dataset.hasDocument = String(Boolean(documentID));
   if (saved) {
     statusBadge.setAttribute('aria-label', `Saved document ${documentID}`);
-    statusBadge.title = `Saved · ${documentID} (click to copy UUID)`;
+    statusBadge.title = `Saved · ${documentID.slice(-5)} (click to copy full UUID)`;
   } else {
     statusBadge.setAttribute('aria-label', 'Current document has unsaved changes');
     statusBadge.title = documentID
