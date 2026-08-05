@@ -148,6 +148,10 @@ func (s *Server) handleStatus(writer http.ResponseWriter, request *http.Request)
 
 func (s *Server) handleDocument(writer http.ResponseWriter, request *http.Request) {
 	selector := strings.Trim(strings.TrimPrefix(request.URL.Path, "/api/doc/"), "/")
+	if strings.HasSuffix(selector, "/related/candidates") {
+		s.handleRelatedCandidates(writer, request, strings.TrimSuffix(selector, "/related/candidates"))
+		return
+	}
 	if strings.HasSuffix(selector, "/annotations") {
 		s.handleAnnotations(writer, request, strings.TrimSuffix(selector, "/annotations"))
 		return
@@ -181,9 +185,75 @@ func (s *Server) handleDocument(writer http.ResponseWriter, request *http.Reques
 	_, _ = writer.Write(body)
 }
 
-// handleRelated exposes the one-hop neighborhood of a document (GET) and
-// creates a new plain Markdown document linked back to it (POST). The new
-// document is a regular file, not a *-note.md selection note.
+// handleRelatedCandidates powers the existing-document picker. It searches
+// literal UUID/title/path fragments and omits the focus, existing relations,
+// and internal selection-note documents.
+func (s *Server) handleRelatedCandidates(writer http.ResponseWriter, request *http.Request, selector string) {
+	if request.Method != http.MethodGet {
+		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	query := strings.TrimSpace(request.URL.Query().Get("q"))
+	if selector == "" || query == "" {
+		http.Error(writer, "document selector and query are required", http.StatusBadRequest)
+		return
+	}
+	limit := 8
+	if raw := request.URL.Query().Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 20 {
+			http.Error(writer, "limit must be between 1 and 20", http.StatusBadRequest)
+			return
+		}
+		limit = parsed
+	}
+	focus, graph, err := s.service.GetDocumentGraph(request.Context(), selector)
+	if err != nil {
+		http.Error(writer, err.Error(), http.StatusNotFound)
+		return
+	}
+	excluded := map[string]bool{string(focus.ID): true}
+	for _, link := range append(graph.Outgoing, graph.Incoming...) {
+		if link.Document != nil {
+			excluded[string(link.Document.ID)] = true
+		}
+	}
+	fetchLimit := limit * 4
+	if fetchLimit > 100 {
+		fetchLimit = 100
+	}
+	hits, err := s.service.SuggestDocuments(request.Context(), query, fetchLimit)
+	if err != nil {
+		http.Error(writer, err.Error(), http.StatusBadRequest)
+		return
+	}
+	type candidateView struct {
+		ID    string `json:"id"`
+		Title string `json:"title"`
+		Path  string `json:"path"`
+	}
+	candidates := make([]candidateView, 0, limit)
+	for _, hit := range hits {
+		if excluded[string(hit.DocumentID)] || strings.HasSuffix(hit.Path, "-note.md") {
+			continue
+		}
+		title := strings.TrimSpace(hit.Title)
+		if title == "" {
+			title = path.Base(hit.Path)
+		}
+		candidates = append(candidates, candidateView{ID: string(hit.DocumentID), Title: title, Path: hit.Path})
+		if len(candidates) == limit {
+			break
+		}
+	}
+	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+	writer.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(writer).Encode(map[string]any{"candidates": candidates})
+}
+
+// handleRelated exposes the one-hop neighborhood of a document (GET), links
+// an existing document, or creates a new plain Markdown document linked back
+// to it. New documents are regular files, not *-note.md selection notes.
 func (s *Server) handleRelated(writer http.ResponseWriter, request *http.Request, selector string) {
 	if selector == "" {
 		http.Error(writer, "missing document selector", http.StatusBadRequest)
@@ -243,8 +313,9 @@ func (s *Server) handleRelated(writer http.ResponseWriter, request *http.Request
 			return
 		}
 		var payload struct {
-			Title string `json:"title"`
-			Body  string `json:"body"`
+			TargetID string `json:"target_id"`
+			Title    string `json:"title"`
+			Body     string `json:"body"`
 		}
 		if err := json.Unmarshal(body, &payload); err != nil {
 			http.Error(writer, "invalid related document payload", http.StatusBadRequest)
@@ -253,6 +324,39 @@ func (s *Server) handleRelated(writer http.ResponseWriter, request *http.Request
 		current, _, err := s.service.ResolveDocument(ctx, selector)
 		if err != nil {
 			http.Error(writer, err.Error(), http.StatusNotFound)
+			return
+		}
+		if targetID := strings.TrimSpace(payload.TargetID); targetID != "" {
+			target, _, resolveErr := s.service.ResolveDocument(ctx, targetID)
+			if resolveErr != nil {
+				http.Error(writer, resolveErr.Error(), http.StatusNotFound)
+				return
+			}
+			if target.ID == current.ID {
+				http.Error(writer, "a document cannot be related to itself", http.StatusBadRequest)
+				return
+			}
+			if strings.HasSuffix(target.Location.RelativePath, "-note.md") {
+				http.Error(writer, "selection notes cannot be added as related documents", http.StatusBadRequest)
+				return
+			}
+			linked, linkErr := s.service.LinkDocuments(ctx, string(current.ID), string(target.ID))
+			if linkErr != nil {
+				http.Error(writer, linkErr.Error(), http.StatusInternalServerError)
+				return
+			}
+			title := strings.TrimSpace(target.Index.Title)
+			if title == "" {
+				title = path.Base(target.Location.RelativePath)
+			}
+			writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+			_ = json.NewEncoder(writer).Encode(map[string]any{
+				"id":             string(target.ID),
+				"title":          title,
+				"path":           target.Location.RelativePath,
+				"already_exists": linked.AlreadyExists,
+				"view_url":       s.ViewURL(string(target.ID)),
+			})
 			return
 		}
 		title := strings.TrimSpace(payload.Title)

@@ -60,7 +60,7 @@ function createConnectionButton() {
 
 const connectionButton = createConnectionButton();
 
-// Bottom-left cluster: status pill plus the “new related document” button.
+// Bottom-left cluster: status pill plus the “add related document” button.
 // The pill tells whether the current document already has a membox identity
 // and shows the UUID suffix that identifies it.
 function createStatusCluster() {
@@ -99,8 +99,8 @@ function createAddRelatedButton() {
   button.className = 'membox-add-related';
   button.hidden = true;
   button.textContent = '+';
-  button.title = 'New related document';
-  button.setAttribute('aria-label', 'New related document');
+  button.title = 'Add related document';
+  button.setAttribute('aria-label', 'Add related document');
   statusCluster.appendChild(button);
   button.addEventListener('click', openRelatedModal);
   return button;
@@ -135,8 +135,8 @@ function renderDocStatus() {
 
 // ---------------------------------------------------------------------------
 // Related documents: a tile grid under the TOC showing the one-hop
-// neighborhood of the current document, plus a “+” flow that creates a new
-// plain Markdown document linked back to it.
+// neighborhood of the current document, plus a “+” flow that links an
+// existing Markdown document or creates a new one.
 // ---------------------------------------------------------------------------
 function createRelatedPanel() {
   const panel = document.createElement('div');
@@ -228,57 +228,240 @@ function renderRelatedGrid(items) {
   }
 }
 
-// Modal for creating a related document.
+// Modal for linking an existing document or creating a new one.
 function createRelatedModal() {
   const backdrop = document.createElement('div');
   backdrop.className = 'membox-modal-backdrop';
   backdrop.hidden = true;
   backdrop.innerHTML = `
-    <div class="membox-modal" role="dialog" aria-modal="true" aria-label="New related document">
-      <div class="membox-modal-title">New related document</div>
-      <input class="membox-modal-input" type="text" placeholder="Title" maxlength="200" spellcheck="false">
-      <textarea class="membox-modal-body" placeholder="Paste related content (Markdown)\u2026" spellcheck="false"></textarea>
-      <div class="membox-modal-hint">Saves as a new Markdown document linked back to the current one \u00b7 \u2318Enter to save</div>
+    <div class="membox-modal" role="dialog" aria-modal="true" aria-labelledby="membox-related-dialog-title">
+      <div class="membox-modal-title" id="membox-related-dialog-title">Add related document</div>
+      <div class="membox-modal-tabs" role="tablist" aria-label="Add related document">
+        <button type="button" class="membox-modal-tab is-active" role="tab" aria-selected="true" data-mode="existing">Choose existing</button>
+        <button type="button" class="membox-modal-tab" role="tab" aria-selected="false" data-mode="new">Create new</button>
+      </div>
+      <div class="membox-related-picker" data-panel="existing" role="tabpanel">
+        <input class="membox-related-search" type="search" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="membox-related-options" placeholder="Search by title or UUID\u2026" autocomplete="off" spellcheck="false">
+        <div class="membox-related-options" id="membox-related-options" role="listbox" aria-label="Matching documents"></div>
+        <div class="membox-modal-hint">Type any part of a title or UUID, then choose a document.</div>
+      </div>
+      <div class="membox-related-create" data-panel="new" role="tabpanel" hidden>
+        <input class="membox-modal-input" type="text" placeholder="Title" maxlength="200" spellcheck="false">
+        <textarea class="membox-modal-body" placeholder="Paste related content (Markdown)\u2026" spellcheck="false"></textarea>
+        <div class="membox-modal-hint">Saves a new Markdown document linked to the current one \u00b7 \u2318Enter to save</div>
+      </div>
       <div class="membox-modal-actions">
         <button type="button" class="membox-modal-btn membox-modal-cancel">Cancel</button>
-        <button type="button" class="membox-modal-btn membox-modal-save">Create</button>
+        <button type="button" class="membox-modal-btn membox-modal-save" disabled>Link document</button>
       </div>
     </div>`;
   document.body.appendChild(backdrop);
+  const modal = backdrop.querySelector('.membox-modal');
+  const searchInput = backdrop.querySelector('.membox-related-search');
+  const options = backdrop.querySelector('.membox-related-options');
+  const titleInput = backdrop.querySelector('.membox-modal-input');
+  const bodyInput = backdrop.querySelector('.membox-modal-body');
+  const primaryButton = backdrop.querySelector('.membox-modal-save');
+  const tabs = Array.from(backdrop.querySelectorAll('.membox-modal-tab'));
+  const panels = Array.from(backdrop.querySelectorAll('[data-panel]'));
+
   backdrop.addEventListener('mousedown', (event) => {
     if (event.target === backdrop) closeRelatedModal();
   });
-  const modal = backdrop.querySelector('.membox-modal');
-  const titleInput = backdrop.querySelector('.membox-modal-input');
-  const bodyInput = backdrop.querySelector('.membox-modal-body');
   backdrop.querySelector('.membox-modal-cancel').addEventListener('click', closeRelatedModal);
-  backdrop.querySelector('.membox-modal-save').addEventListener('click', () => void saveRelated());
-  const onKeydown = (event) => {
+  primaryButton.addEventListener('click', () => {
+    if (relatedModalMode === 'existing') void linkExistingRelated();
+    else void saveRelated();
+  });
+  tabs.forEach((tab) => tab.addEventListener('click', () => setRelatedModalMode(tab.dataset.mode)));
+  searchInput.addEventListener('input', scheduleRelatedSearch);
+  searchInput.addEventListener('keydown', onRelatedSearchKeydown);
+  modal.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
       event.stopPropagation();
       closeRelatedModal();
-    } else if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+    } else if (relatedModalMode === 'new' && event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
       event.preventDefault();
       void saveRelated();
     }
-  };
-  modal.addEventListener('keydown', onKeydown);
-  return { backdrop, titleInput, bodyInput };
+  });
+  return { backdrop, searchInput, options, titleInput, bodyInput, primaryButton, tabs, panels };
 }
 
 const relatedModal = createRelatedModal();
 let relatedSaving = false;
+let relatedModalMode = 'existing';
+let selectedRelatedCandidate = null;
+let relatedSearchTimer = 0;
+let relatedSearchController = null;
+let relatedSearchGeneration = 0;
+
+function setRelatedModalMode(mode, focus = true) {
+  relatedModalMode = mode === 'new' ? 'new' : 'existing';
+  relatedModal.tabs.forEach((tab) => {
+    const active = tab.dataset.mode === relatedModalMode;
+    tab.classList.toggle('is-active', active);
+    tab.setAttribute('aria-selected', String(active));
+  });
+  relatedModal.panels.forEach((panel) => { panel.hidden = panel.dataset.panel !== relatedModalMode; });
+  relatedModal.primaryButton.textContent = relatedModalMode === 'existing' ? 'Link document' : 'Create';
+  updateRelatedPrimaryButton();
+  if (focus) {
+    (relatedModalMode === 'existing' ? relatedModal.searchInput : relatedModal.titleInput).focus();
+  }
+}
+
+function updateRelatedPrimaryButton() {
+  const ready = relatedModalMode === 'existing' ? Boolean(selectedRelatedCandidate) : true;
+  relatedModal.primaryButton.disabled = relatedSaving || !ready;
+}
+
+function renderRelatedOptions(items, message = '') {
+  relatedModal.options.textContent = '';
+  relatedModal.searchInput.setAttribute('aria-expanded', String(items.length > 0));
+  if (!items.length) {
+    const status = document.createElement('div');
+    status.className = 'membox-related-option-status';
+    status.textContent = message;
+    relatedModal.options.appendChild(status);
+    return;
+  }
+  for (const item of items) {
+    const option = document.createElement('button');
+    option.type = 'button';
+    option.className = 'membox-related-option';
+    option.setAttribute('role', 'option');
+    option.setAttribute('aria-selected', String(selectedRelatedCandidate?.id === item.id));
+    const title = document.createElement('span');
+    title.className = 'membox-related-option-title';
+    title.textContent = item.title || item.path || item.id;
+    const id = document.createElement('code');
+    id.className = 'membox-related-option-id';
+    id.textContent = item.id;
+    const path = document.createElement('span');
+    path.className = 'membox-related-option-path';
+    path.textContent = item.path || '';
+    option.append(title, id, path);
+    option.addEventListener('click', () => selectRelatedCandidate(item, option));
+    option.addEventListener('keydown', onRelatedOptionKeydown);
+    relatedModal.options.appendChild(option);
+  }
+}
+
+function selectRelatedCandidate(item, option) {
+  selectedRelatedCandidate = item;
+  relatedModal.options.querySelectorAll('.membox-related-option').forEach((candidate) => {
+    const selected = candidate === option;
+    candidate.classList.toggle('is-selected', selected);
+    candidate.setAttribute('aria-selected', String(selected));
+  });
+  updateRelatedPrimaryButton();
+}
+
+function scheduleRelatedSearch() {
+  selectedRelatedCandidate = null;
+  updateRelatedPrimaryButton();
+  window.clearTimeout(relatedSearchTimer);
+  if (relatedSearchController) relatedSearchController.abort();
+  relatedSearchGeneration++;
+  const query = relatedModal.searchInput.value.trim();
+  if (!query) {
+    renderRelatedOptions([], 'Start typing to find a document');
+    return;
+  }
+  renderRelatedOptions([], 'Searching\u2026');
+  relatedSearchTimer = window.setTimeout(() => void searchRelatedCandidates(query), 180);
+}
+
+async function searchRelatedCandidates(query) {
+  if (relatedSearchController) relatedSearchController.abort();
+  relatedSearchController = new AbortController();
+  const generation = ++relatedSearchGeneration;
+  try {
+    const params = new URLSearchParams({ q: query, limit: '8' });
+    const response = await fetch(`/api/doc/${encodeURIComponent(documentID)}/related/candidates?${params}`, {
+      cache: 'no-store',
+      signal: relatedSearchController.signal,
+    });
+    if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
+    const data = await response.json();
+    if (generation !== relatedSearchGeneration || relatedModal.backdrop.hidden) return;
+    const candidates = Array.isArray(data.candidates) ? data.candidates : [];
+    renderRelatedOptions(candidates, candidates.length ? '' : 'No matching unlinked documents');
+  } catch (err) {
+    if (err.name === 'AbortError') return;
+    console.warn('membox: related document search failed', err);
+    renderRelatedOptions([], 'Could not search documents');
+  }
+}
+
+function onRelatedSearchKeydown(event) {
+  if (!['ArrowDown', 'Enter'].includes(event.key)) return;
+  const first = relatedModal.options.querySelector('.membox-related-option');
+  if (!first) return;
+  event.preventDefault();
+  if (event.key === 'Enter') {
+    if (selectedRelatedCandidate) void linkExistingRelated();
+    else first.click();
+  } else {
+    first.focus();
+  }
+}
+
+function onRelatedOptionKeydown(event) {
+  if (!['ArrowDown', 'ArrowUp', 'Enter'].includes(event.key)) return;
+  event.preventDefault();
+  if (event.key === 'Enter') {
+    if (event.currentTarget.getAttribute('aria-selected') === 'true') void linkExistingRelated();
+    else event.currentTarget.click();
+    return;
+  }
+  const options = Array.from(relatedModal.options.querySelectorAll('.membox-related-option'));
+  const index = options.indexOf(event.currentTarget);
+  const next = event.key === 'ArrowDown' ? options[index + 1] : options[index - 1];
+  (next || relatedModal.searchInput).focus();
+}
 
 function openRelatedModal() {
   if (!connected || !documentID) return;
+  relatedModal.searchInput.value = '';
   relatedModal.titleInput.value = '';
   relatedModal.bodyInput.value = '';
+  selectedRelatedCandidate = null;
+  renderRelatedOptions([], 'Start typing to find a document');
   relatedModal.backdrop.hidden = false;
-  relatedModal.titleInput.focus();
+  setRelatedModalMode('existing');
 }
 
 function closeRelatedModal() {
+  window.clearTimeout(relatedSearchTimer);
+  if (relatedSearchController) relatedSearchController.abort();
+  relatedSearchGeneration++;
   relatedModal.backdrop.hidden = true;
+}
+
+async function linkExistingRelated() {
+  if (relatedSaving || !selectedRelatedCandidate) return;
+  relatedSaving = true;
+  updateRelatedPrimaryButton();
+  try {
+    const response = await fetch(`/api/doc/${encodeURIComponent(documentID)}/related`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target_id: selectedRelatedCandidate.id }),
+    });
+    if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
+    const result = await response.json();
+    closeRelatedModal();
+    showToast(`Linked related document: ${result.title || String(result.id).slice(-5)}`);
+    void loadRelated();
+  } catch (err) {
+    console.error('membox: linking related document failed', err);
+    showToast(`Could not link document: ${err.message}`);
+  } finally {
+    relatedSaving = false;
+    updateRelatedPrimaryButton();
+  }
 }
 
 async function saveRelated() {
@@ -296,8 +479,7 @@ async function saveRelated() {
     return;
   }
   relatedSaving = true;
-  const saveButton = relatedModal.backdrop.querySelector('.membox-modal-save');
-  saveButton.disabled = true;
+  updateRelatedPrimaryButton();
   try {
     const response = await fetch(`/api/doc/${encodeURIComponent(documentID)}/related`, {
       method: 'POST',
@@ -314,7 +496,7 @@ async function saveRelated() {
     showToast(`Could not create related document: ${err.message}`);
   } finally {
     relatedSaving = false;
-    saveButton.disabled = false;
+    updateRelatedPrimaryButton();
   }
 }
 

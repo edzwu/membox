@@ -1263,6 +1263,42 @@ ORDER BY bm25(document_fts,5.0,2.0,1.0) LIMIT ?`, ftsQuery, limit)
 	return hits, rows.Err()
 }
 
+// SuggestDocuments performs literal substring matching for picker UIs. UUIDs
+// are not part of FTS, so this deliberately searches document identity and
+// metadata rather than document bodies.
+func (s *Store) SuggestDocuments(ctx context.Context, query string, limit int) ([]port.SearchHit, error) {
+	rows, err := s.db.QueryContext(ctx, `WITH needle(value) AS (VALUES(lower(?)))
+SELECT d.id,COALESCE(i.title,''),l.relative_path,''
+FROM documents d
+JOIN document_locations l ON l.document_id=d.id
+LEFT JOIN document_index i ON i.document_id=d.id
+CROSS JOIN needle n
+WHERE l.status='active' AND `+notTrashedClause+`
+  AND (instr(lower(d.id),n.value)>0 OR instr(lower(COALESCE(i.title,'')),n.value)>0 OR instr(lower(l.relative_path),n.value)>0)
+ORDER BY CASE
+  WHEN lower(d.id)=n.value THEN 0
+  WHEN instr(lower(d.id),n.value)=1 THEN 1
+  WHEN instr(lower(COALESCE(i.title,'')),n.value)=1 THEN 2
+  WHEN instr(lower(d.id),n.value)>0 THEN 3
+  WHEN instr(lower(COALESCE(i.title,'')),n.value)>0 THEN 4
+  ELSE 5 END,
+  lower(COALESCE(i.title,'')),lower(l.relative_path)
+LIMIT ?`, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("suggesting documents: %w", err)
+	}
+	defer rows.Close()
+	var hits []port.SearchHit
+	for rows.Next() {
+		var hit port.SearchHit
+		if err := rows.Scan(&hit.DocumentID, &hit.Title, &hit.Path, &hit.Snippet); err != nil {
+			return nil, err
+		}
+		hits = append(hits, hit)
+	}
+	return hits, rows.Err()
+}
+
 func plainFTSQuery(query string) string {
 	fields := strings.Fields(query)
 	parts := make([]string, 0, len(fields))

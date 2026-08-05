@@ -73,9 +73,8 @@
 }
 
 /* Bottom-left document status cluster: visible only while connected. Green
-   dot + UUID suffix means the current document lives in membox; a muted dot
-   means it is still an unsynced paste. The + button creates a new related
-   document. */
+   dot means the current document lives in membox; a muted dot means it is
+   still an unsynced paste. The + button adds a related document. */
 .membox-status-cluster {
   position: fixed;
   left: 24px;
@@ -137,7 +136,7 @@
   }
 }
 
-/* + button: new related document. */
+/* + button: add a related document. */
 .membox-add-related {
   appearance: none;
   width: 32px;
@@ -258,7 +257,7 @@
   pointer-events: none;
 }
 
-/* New-related-document modal. */
+/* Related-document picker / creator modal. */
 .membox-modal-backdrop {
   position: fixed;
   inset: 0;
@@ -293,8 +292,48 @@
   color: var(--ink);
 }
 
+.membox-modal-tabs {
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--line) 55%, transparent);
+}
+
+.membox-modal-tab {
+  flex: 1;
+  appearance: none;
+  border: 0;
+  border-radius: 7px;
+  padding: 7px 10px;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.membox-modal-tab.is-active {
+  background: var(--paper-raised);
+  color: var(--ink);
+  box-shadow: 0 1px 4px var(--shadow);
+}
+
+.membox-related-picker,
+.membox-related-create {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.membox-related-picker[hidden],
+.membox-related-create[hidden] {
+  display: none;
+}
+
 .membox-modal-input,
-.membox-modal-body {
+.membox-modal-body,
+.membox-related-search {
   appearance: none;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -308,7 +347,8 @@
 }
 
 .membox-modal-input:focus,
-.membox-modal-body:focus {
+.membox-modal-body:focus,
+.membox-related-search:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
 }
@@ -317,6 +357,83 @@
   min-height: 200px;
   resize: vertical;
   line-height: 1.5;
+}
+
+.membox-related-options {
+  min-height: 190px;
+  max-height: min(340px, 46vh);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 3px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--paper) 58%, transparent);
+}
+
+.membox-related-option {
+  appearance: none;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 3px 12px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink-soft);
+  text-align: left;
+  cursor: pointer;
+}
+
+.membox-related-option:hover,
+.membox-related-option:focus,
+.membox-related-option.is-selected {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--line));
+  background: color-mix(in srgb, var(--accent-soft) 54%, transparent);
+}
+
+.membox-related-option.is-selected {
+  border-color: var(--accent);
+}
+
+.membox-related-option-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.membox-related-option-id {
+  align-self: center;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.membox-related-option-path {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: 10.5px;
+}
+
+.membox-related-option-status {
+  margin: auto;
+  padding: 24px;
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  text-align: center;
 }
 
 .membox-modal-hint {

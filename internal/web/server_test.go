@@ -853,6 +853,60 @@ func TestServerRelatedCreatesLinkedPlainDocument(t *testing.T) {
 	}
 }
 
+func TestServerRelatedSearchesAndLinksExistingDocument(t *testing.T) {
+	baseURL, docID, _ := startServer(t)
+
+	saveResp, err := http.Post(baseURL+"/api/save", "application/json", strings.NewReader(`{"title":"Online Softmax","body":"# Online Softmax\n\nexisting card\n"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	saveBody, _ := io.ReadAll(saveResp.Body)
+	saveResp.Body.Close()
+	var target struct {
+		ID string `json:"id"`
+	}
+	if saveResp.StatusCode != http.StatusOK || json.Unmarshal(saveBody, &target) != nil || target.ID == "" {
+		t.Fatalf("could not create target document: status=%d body=%q", saveResp.StatusCode, saveBody)
+	}
+
+	assertCandidate := func(query string, want bool) {
+		t.Helper()
+		resp, getErr := http.Get(baseURL + "/api/doc/" + docID + "/related/candidates?q=" + query)
+		if getErr != nil {
+			t.Fatal(getErr)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("candidate search failed: status=%d body=%q", resp.StatusCode, body)
+		}
+		got := strings.Contains(string(body), `"id":"`+target.ID+`"`)
+		if got != want {
+			t.Fatalf("candidate presence for %q = %v, want %v: %q", query, got, want, body)
+		}
+	}
+	assertCandidate("Softmax", true)
+	assertCandidate(target.ID[len(target.ID)-6:], true)
+
+	linkBody := postJSON(t, baseURL+"/api/doc/"+docID+"/related", map[string]string{"target_id": target.ID})
+	if !strings.Contains(string(linkBody), `"id":"`+target.ID+`"`) {
+		t.Fatalf("unexpected link response: %q", linkBody)
+	}
+
+	listResp, err := http.Get(baseURL + "/api/doc/" + docID + "/related")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listBody, _ := io.ReadAll(listResp.Body)
+	listResp.Body.Close()
+	if !strings.Contains(string(listBody), `"id":"`+target.ID+`"`) || !strings.Contains(string(listBody), `"direction":"out"`) {
+		t.Fatalf("existing document missing from related list: %q", listBody)
+	}
+
+	// Already-related cards should not continue to appear in autocomplete.
+	assertCandidate("Softmax", false)
+}
+
 func TestServerRefusesDeletionForStaleRevision(t *testing.T) {
 	baseURL, docID, notesDir := startServer(t)
 

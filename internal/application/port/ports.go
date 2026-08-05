@@ -148,6 +148,7 @@ type CatalogStore interface {
 	SaveDocumentReadState(ctx context.Context, state DocumentReadState) error
 	GetDocumentReadState(ctx context.Context, documentID catalog.DocumentID) (DocumentReadState, bool, error)
 	Search(ctx context.Context, query string, limit int) ([]SearchHit, error)
+	SuggestDocuments(ctx context.Context, query string, limit int) ([]SearchHit, error)
 	ListDocuments(ctx context.Context, limit int, includeUnavailable bool) ([]DocumentRecord, error)
 	ResolveDocument(ctx context.Context, selector string) (*catalog.Document, string, error)
 	// Document source URLs (browser clip provenance), stored at ingest time.

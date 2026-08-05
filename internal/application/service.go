@@ -414,6 +414,22 @@ func (s *Service) Search(ctx context.Context, query string, limit int) ([]port.S
 	return s.store.Search(ctx, query, limit)
 }
 
+// SuggestDocuments finds active documents by UUID, title, or path substring.
+// Unlike full-text Search, it is intended for compact picker/autocomplete UIs.
+func (s *Service) SuggestDocuments(ctx context.Context, query string, limit int) ([]port.SearchHit, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, errors.New("suggestion query is required")
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+	if limit > 100 {
+		return nil, errors.New("suggestion limit cannot exceed 100")
+	}
+	return s.store.SuggestDocuments(ctx, query, limit)
+}
+
 func (s *Service) ResolveDocument(ctx context.Context, selector string) (*catalog.Document, string, error) {
 	if strings.TrimSpace(selector) == "" {
 		return nil, "", errors.New("document selector is required")
