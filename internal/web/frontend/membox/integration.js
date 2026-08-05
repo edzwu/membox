@@ -66,6 +66,7 @@ const connectionButton = createConnectionButton();
 function createStatusCluster() {
   const cluster = document.createElement('div');
   cluster.className = 'membox-status-cluster';
+  cluster.hidden = true;
   document.body.appendChild(cluster);
   return cluster;
 }
@@ -109,12 +110,14 @@ const addRelatedButton = createAddRelatedButton();
 
 function renderDocStatus() {
   if (!connected) {
+    statusCluster.hidden = true;
     statusBadge.hidden = true;
     addRelatedButton.hidden = true;
     hideRelatedPanel();
     return;
   }
   const text = statusBadge.querySelector('.membox-status-text');
+  statusCluster.hidden = false;
   statusBadge.hidden = false;
   if (documentID) {
     statusBadge.dataset.saved = 'true';
@@ -183,8 +186,17 @@ function renderRelatedGrid(items) {
     tile.className = 'membox-related-tile';
     tile.href = `/?id=${encodeURIComponent(item.id)}`;
     tile.dataset.direction = item.direction === 'in' ? 'in' : 'out';
-    tile.dataset.tip = `${label}\n${item.id}`;
     tile.setAttribute('aria-label', `${label} (${item.id})`);
+    const tooltip = document.createElement('span');
+    tooltip.className = 'membox-related-tooltip';
+    const tooltipTitle = document.createElement('span');
+    tooltipTitle.className = 'membox-related-tooltip-title';
+    tooltipTitle.textContent = label;
+    const tooltipID = document.createElement('code');
+    tooltipID.className = 'membox-related-tooltip-id';
+    tooltipID.textContent = item.id;
+    tooltip.append(tooltipTitle, tooltipID);
+    tile.appendChild(tooltip);
     relatedGrid.appendChild(tile);
   }
 }
