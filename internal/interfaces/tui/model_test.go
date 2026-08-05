@@ -738,6 +738,18 @@ func TestModel_AgentModeUsesBadgeAndPlaceholderError(t *testing.T) {
 	if model.inputMode != inputModeAgent || !strings.Contains(model.modeBadge(), " AGENT ") {
 		t.Fatalf("ctrl+p did not cycle to agent mode: mode=%s badge=%q", model.inputMode, model.modeBadge())
 	}
+	if !strings.Contains(model.input.Placeholder, "agent") {
+		t.Fatalf("agent mode still shows placeholder %q", model.input.Placeholder)
+	}
+	if strings.Contains(model.input.Placeholder, "filter documents") {
+		t.Fatalf("agent mode should not reuse the filter placeholder: %q", model.input.Placeholder)
+	}
+	cmdModel := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	updated, _ = cmdModel.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+	cmdModel = updated.(Model)
+	if cmdModel.inputMode != inputModeCmd || !strings.Contains(cmdModel.input.Placeholder, "command") || strings.Contains(cmdModel.input.Placeholder, "filter documents") {
+		t.Fatalf(": should open cmd mode with a command placeholder: mode=%s placeholder=%q", cmdModel.inputMode, cmdModel.input.Placeholder)
+	}
 	model.input.SetValue("summarize current document")
 	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(Model)

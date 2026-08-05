@@ -265,10 +265,24 @@ type renamedMsg struct {
 }
 type spaceTimeoutMsg struct{ sequence uint64 }
 
+// inputPlaceholder keeps the empty-input hint in sync with the active mode so
+// the field never promises "filter documents" while a command or agent
+// prompt is open.
+func inputPlaceholder(mode string) string {
+	switch mode {
+	case inputModeCmd:
+		return "command: note · topic · link · rename (tab for suggestions)"
+	case inputModeAgent:
+		return "ask the agent about your documents…"
+	default:
+		return "filter documents (tab toggles name/full search)"
+	}
+}
+
 func New(ctx context.Context, app App, launcher host.Launcher) Model {
 	input := textinput.New()
 	input.Prompt = ""
-	input.Placeholder = "filter documents"
+	input.Placeholder = inputPlaceholder(inputModeSearch)
 	spin := spinner.New()
 	spin.Spinner = spinner.Dot
 	vp := viewport.New(40, 10)
@@ -1543,6 +1557,7 @@ func (m *Model) openInput(mode string) tea.Cmd {
 	m.inputVisible = true
 	m.inputActive = true
 	m.inputMode = mode
+	m.input.Placeholder = inputPlaceholder(mode)
 	m.input.Focus()
 	m.input.SetValue("")
 	m.historyIndex = len(m.commandHistory)
@@ -1571,6 +1586,7 @@ func (m *Model) cycleInputMode() tea.Cmd {
 	case inputModeAgent:
 		m.inputMode = inputModeSearch
 	}
+	m.input.Placeholder = inputPlaceholder(m.inputMode)
 	m.cmdSuggestions = nil
 	m.cmdSelected = 0
 	m.cmdMenuVisible = false
