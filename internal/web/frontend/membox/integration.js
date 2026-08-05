@@ -79,7 +79,7 @@ function createStatusBadge() {
   badge.id = 'membox-doc-status';
   badge.className = 'membox-doc-status';
   badge.hidden = true;
-  badge.innerHTML = '<span class="membox-status-dot" aria-hidden="true"></span><span class="membox-status-text"></span>';
+  badge.innerHTML = '<span class="membox-status-dot" aria-hidden="true"></span>';
   statusCluster.appendChild(badge);
   badge.addEventListener('click', () => {
     if (!documentID || !navigator.clipboard) return;
@@ -116,19 +116,16 @@ function renderDocStatus() {
     hideRelatedPanel();
     return;
   }
-  const text = statusBadge.querySelector('.membox-status-text');
   statusCluster.hidden = false;
   statusBadge.hidden = false;
   if (documentID) {
     statusBadge.dataset.saved = 'true';
-    text.textContent = String(documentID).slice(-5);
     statusBadge.setAttribute('aria-label', `Saved document ${documentID}`);
     statusBadge.title = `Saved · ${documentID} (click to copy UUID)`;
     addRelatedButton.hidden = false;
     void loadRelated();
   } else {
     statusBadge.dataset.saved = 'false';
-    text.textContent = '';
     statusBadge.setAttribute('aria-label', 'Current document is not saved');
     statusBadge.title = 'Current document is not saved';
     addRelatedButton.hidden = true;
