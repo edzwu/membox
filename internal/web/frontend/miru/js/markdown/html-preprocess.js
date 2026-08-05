@@ -41,6 +41,30 @@ function readAttr(tag, name) {
   return m ? m[1] : '';
 }
 
+// Linear-time check for a code span whose entire content is one Markdown
+// link. Avoid regexes with nested quantifiers here: imported documents can be
+// hundreds of KB and one malformed link must never block the browser thread.
+function isCodeWrappedMarkdownLink(value) {
+  if (!value.startsWith('[') || !value.endsWith(')')) return false;
+  const labelEnd = value.indexOf('](');
+  if (labelEnd <= 1 || value.indexOf('[', 1) !== -1 || value.indexOf(']', labelEnd + 1) !== -1) return false;
+
+  const destinationStart = labelEnd + 2;
+  const destinationEnd = value.length - 1;
+  if (destinationStart >= destinationEnd) return false;
+  let depth = 0;
+  for (let i = destinationStart; i < destinationEnd; i++) {
+    const char = value[i];
+    if (/\s/.test(char)) return false;
+    if (char === '(') depth++;
+    if (char === ')') {
+      if (depth === 0) return false;
+      depth--;
+    }
+  }
+  return depth === 0;
+}
+
 function convertInlineHtml(text) {
   let out = text;
 
@@ -79,7 +103,13 @@ export function preprocessHtml(text) {
   };
   let out = text.replace(/(^|\n)([ \t]*(```+|~~~+)[\s\S]*?\n[ \t]*\3[ \t]*(?=\n|$))/g,
     (m, lead, block) => lead + protect(block));
-  out = out.replace(/`[^`\n]+`/g, (m) => protect(m));
+
+  // Some HTML→Markdown converters produce a code span around the *entire*
+  // Markdown link (`[runtime.NumCPU](https://...)`) when the source was an
+  // <a><code>…</code></a>. Repair that artifact; protect every ordinary code
+  // span in the same single linear pass. Fenced examples are already safe.
+  out = out.replace(/`([^`\n]+)`/g, (whole, content) =>
+    isCodeWrappedMarkdownLink(content) ? content : protect(whole));
 
   // Normalize smart quotes inside tags before reading attributes.
   out = unsmartQuotes(out);
