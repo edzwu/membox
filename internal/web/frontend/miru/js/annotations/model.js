@@ -6,7 +6,7 @@ import { elements } from '../dom.js';
 import { state } from '../state.js';
 import { refreshNoteNumbers, scheduleNoteLayout } from './layout.js';
 import { focusNote } from './focus.js';
-import { updateMarkdownDownloadControl } from '../ui/chrome.js';
+import { createAnnotationClientId, notifyAnnotationsChanged } from './session.js';
 
 export function findAnnot(id) {
   return state.annotations.find((a) => String(a.id) === String(id));
@@ -14,7 +14,7 @@ export function findAnnot(id) {
 
 export function removeAnnot(id) {
   state.annotations = state.annotations.filter((a) => String(a.id) !== String(id));
-  updateMarkdownDownloadControl();
+  notifyAnnotationsChanged();
   scheduleNoteLayout();
 }
 
@@ -208,9 +208,22 @@ export function applyAnnotationRange(range, flags) {
     attachNoteBadge(span, id);
     insertNoteCard(id, flags.note, span);
   }
-  state.annotations.push({ id, hl: !!flags.hl, ul: !!flags.ul, sl: !!flags.sl, note: flags.note || null, ref: flags.ref || null });
+  state.annotations.push({
+    id,
+    clientId: flags.clientId || createAnnotationClientId(),
+    hl: !!flags.hl,
+    ul: !!flags.ul,
+    sl: !!flags.sl,
+    note: flags.note || null,
+    ref: flags.ref || null,
+  });
   refreshNoteNumbers();
-  updateMarkdownDownloadControl();
+  if (flags.notify === false) {
+    // Restores update the in-memory/visual model but are not user mutations.
+    // The caller performs one presentation refresh after the batch.
+  } else {
+    notifyAnnotationsChanged();
+  }
   scheduleNoteLayout();
   if (flags.note) {
     requestAnimationFrame(() => focusNote(id, { scrollTo: 'card', duration: 1600 }));
@@ -247,8 +260,7 @@ export function setNoteOnPassage(entry, annotEl, text) {
   }
   refreshNoteNumbers();
   scheduleNoteLayout();
-  // Note content changed: notify persistence listeners (miru-annotations-changed).
-  updateMarkdownDownloadControl();
+  notifyAnnotationsChanged();
 }
 
 export function deleteAnnotation(id) {
@@ -296,7 +308,7 @@ export function startEditNoteCard(card, entry) {
       entry.note = v;
       restore();
       scheduleNoteLayout();
-      if (changed) updateMarkdownDownloadControl();
+      if (changed) notifyAnnotationsChanged();
     } else {
       deleteAnnotation(entry.id);
     }

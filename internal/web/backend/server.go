@@ -439,7 +439,7 @@ func (s *Server) handleAnnotations(writer http.ResponseWriter, request *http.Req
 			// Server-authored clearing keeps full deletion authority.
 			payload.Revision = math.MaxInt64
 		}
-		annotations, revision, err := s.reconcileAnnotationNotes(request.Context(), selector, payload)
+		annotations, revision, replacementApplied, err := s.reconcileAnnotationNotes(request.Context(), selector, payload)
 		if err != nil {
 			http.Error(writer, err.Error(), http.StatusInternalServerError)
 			return
@@ -450,7 +450,10 @@ func (s *Server) handleAnnotations(writer http.ResponseWriter, request *http.Req
 			_, _ = s.service.SaveAnnotations(request.Context(), selector, originalBody)
 		}
 		writer.Header().Set("Content-Type", "application/json; charset=utf-8")
-		_ = json.NewEncoder(writer).Encode(map[string]any{"saved": true, "annotations": annotations, "revision": revision})
+		_ = json.NewEncoder(writer).Encode(map[string]any{
+			"saved": true, "annotations": annotations, "revision": revision,
+			"replacement_applied": replacementApplied,
+		})
 	default:
 		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -469,9 +472,12 @@ type syncRequest struct {
 }
 
 type saveResponse struct {
-	ID      string `json:"id"`
-	Path    string `json:"path"`
-	Created bool   `json:"created"`
+	ID                 string           `json:"id"`
+	Path               string           `json:"path"`
+	Created            bool             `json:"created"`
+	Annotations        []map[string]any `json:"annotations,omitempty"`
+	Revision           int64            `json:"revision,omitempty"`
+	ReplacementApplied *bool            `json:"replacement_applied,omitempty"`
 }
 
 func decodeJSON(writer http.ResponseWriter, request *http.Request, target any) bool {
@@ -549,10 +555,14 @@ func (s *Server) handleSync(writer http.ResponseWriter, request *http.Request) {
 		// submitted set is complete (it merges unrestored anchors before sync).
 		// Forcing true here turned any incomplete submission into a wipe.
 		emptyEnvelope := len(annotationPayload.Annotations) == 0 && annotationPayload.Progress == nil
-		if _, _, err := s.reconcileAnnotationNotes(request.Context(), response.ID, annotationPayload); err != nil {
-			http.Error(writer, err.Error(), http.StatusInternalServerError)
+		saved, revision, replacementApplied, reconcileErr := s.reconcileAnnotationNotes(request.Context(), response.ID, annotationPayload)
+		if reconcileErr != nil {
+			http.Error(writer, reconcileErr.Error(), http.StatusInternalServerError)
 			return
 		}
+		response.Annotations = saved
+		response.Revision = revision
+		response.ReplacementApplied = &replacementApplied
 		if emptyEnvelope {
 			_, _ = s.service.SaveAnnotations(request.Context(), response.ID, annotations)
 		}

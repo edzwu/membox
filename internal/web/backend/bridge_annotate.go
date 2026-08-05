@@ -130,6 +130,7 @@ type annotationAnchorPayload struct {
 	Underline     bool   `json:"underline"`
 	Strikethrough bool   `json:"strikethrough"`
 	Note          any    `json:"note"`
+	ClientID      string `json:"clientId,omitempty"`
 	Ref           string `json:"ref,omitempty"`
 }
 
@@ -139,11 +140,11 @@ type annotationProgressPayload struct {
 }
 
 type annotationWritePayload struct {
-	Format             string                    `json:"format"`
-	Version            int                       `json:"version"`
-	Annotations        []annotationAnchorPayload `json:"annotations"`
+	Format             string                     `json:"format"`
+	Version            int                        `json:"version"`
+	Annotations        []annotationAnchorPayload  `json:"annotations"`
 	Progress           *annotationProgressPayload `json:"progress"`
-	ReplaceAnnotations bool                      `json:"replaceAnnotations"`
+	ReplaceAnnotations bool                       `json:"replaceAnnotations"`
 	// Revision is the newest annotation updated_at (ms) the client has seen.
 	// Replacement deletions are refused when the server state moved past it,
 	// so a stale tab can never wipe notes created or restored elsewhere.
@@ -253,14 +254,14 @@ func annotationMap(record port.AnnotationNoteRecord, exact, note string) map[str
 
 // reconcileAnnotationNotes materializes every user annotation as a Markdown
 // document. The request is a transient UI snapshot, not a stored sidecar.
-// The second return value is the post-save revision (newest annotation
-// updated_at in milliseconds).
-func (s *Server) reconcileAnnotationNotes(ctx context.Context, pageID string, payload annotationWritePayload) ([]map[string]any, int64, error) {
+// It returns the saved DTOs, post-save revision, and whether an authoritative
+// replacement was applied (stale revisions preserve omitted notes).
+func (s *Server) reconcileAnnotationNotes(ctx context.Context, pageID string, payload annotationWritePayload) ([]map[string]any, int64, bool, error) {
 	s.annotationMu.Lock()
 	defer s.annotationMu.Unlock()
 	_, existing, err := s.service.ListAnnotationNotes(ctx, pageID)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, false, err
 	}
 	existingRevision := int64(0)
 	for _, record := range existing {
@@ -333,27 +334,40 @@ func (s *Server) reconcileAnnotationNotes(ctx context.Context, pageID string, pa
 			Highlight: anchor.Highlight, Underline: anchor.Underline, Strikethrough: anchor.Strikethrough,
 		})
 		if saveErr != nil {
-			return nil, 0, saveErr
+			return nil, 0, false, saveErr
 		}
 		ref = string(result.Record.NoteDocumentID)
 		if ms := result.Record.UpdatedAt.UnixMilli(); ms > newRevision {
 			newRevision = ms
 		}
 		seen[ref] = true
-		out = append(out, annotationMap(result.Record, exact, note))
+		saved := annotationMap(result.Record, exact, note)
+		if clientID := strings.TrimSpace(anchor.ClientID); clientID != "" {
+			saved["clientId"] = clientID
+		}
+		out = append(out, saved)
 	}
 
+	replacementApplied := true
 	if payload.ReplaceAnnotations {
 		// Optimistic concurrency: deletion is only authorized against the state
 		// the client actually saw. A missing or stale revision (a tab loaded
 		// before other notes were created or restored) must never wipe them.
-		authorized := payload.Revision > 0 && existingRevision <= payload.Revision
+		hasOmitted := false
+		for _, record := range existing {
+			if !seen[string(record.NoteDocumentID)] {
+				hasOmitted = true
+				break
+			}
+		}
+		authorized := !hasOmitted || (payload.Revision > 0 && existingRevision <= payload.Revision)
+		replacementApplied = authorized
 		if authorized {
 			for _, record := range existing {
 				ref := string(record.NoteDocumentID)
 				if !seen[ref] {
 					if err := s.service.DeleteAnnotationNote(ctx, pageID, ref); err != nil {
-						return nil, 0, err
+						return nil, 0, false, err
 					}
 				}
 			}
@@ -361,15 +375,15 @@ func (s *Server) reconcileAnnotationNotes(ctx context.Context, pageID string, pa
 	}
 	if payload.Progress != nil {
 		if err := s.service.SaveDocumentReadState(ctx, pageID, payload.Progress.Y, payload.Progress.At); err != nil {
-			return nil, 0, err
+			return nil, 0, false, err
 		}
 	}
 	// The legacy blob has now been fully represented by Markdown documents and
 	// normalized rows. Clear it so there is only one content authority.
 	if _, err := s.service.SaveAnnotations(ctx, pageID, ""); err != nil {
-		return nil, 0, err
+		return nil, 0, false, err
 	}
-	return out, newRevision, nil
+	return out, newRevision, replacementApplied, nil
 }
 
 // denseExcerpt normalizes an excerpt for identity comparison: inline markup

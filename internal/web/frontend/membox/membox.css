@@ -55,6 +55,10 @@
   background: #3f8b61;
 }
 
+.membox-connection[data-sync="dirty"]::after {
+  background: #c28a35;
+}
+
 .membox-connection.is-connecting::after {
   background: var(--muted);
   animation: membox-pulse 0.9s ease-in-out infinite alternate;

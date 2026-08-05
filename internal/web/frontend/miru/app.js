@@ -11,6 +11,7 @@ import { initMarkdown, setEmptyState, clearDocument } from './js/document.js';
 import { toggleFoldAll } from './js/render/folding.js';
 import { onTocClick } from './js/render/toc.js';
 import { initAnnotations, hideAnnotToolbar } from './js/annotations/toolbar.js';
+import { hasUnsavedAnnotationChanges } from './js/annotations/session.js';
 import { copyAllMarkdown, downloadAllMarkdown } from './js/export/markdown-export.js';
 import { exportPNG, copyPNG } from './js/export/png.js';
 import { exportSiteZip } from './js/export/site.js';
@@ -33,6 +34,13 @@ function bindEvents() {
   elements.htmlAll.addEventListener('click', exportSiteZip);
   elements.copyPng.addEventListener('click', copyPNG);
   document.addEventListener('keydown', onKeydown);
+  window.addEventListener('beforeunload', onBeforeUnload);
+}
+
+function onBeforeUnload(event) {
+  if (!hasUnsavedAnnotationChanges()) return;
+  event.preventDefault();
+  event.returnValue = '';
 }
 
 function onKeydown(event) {

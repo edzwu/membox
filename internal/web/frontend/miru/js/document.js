@@ -7,7 +7,7 @@ import { elements, READING_CONTROLS } from './dom.js';
 import { state } from './state.js';
 import { prefersReducedMotion } from './utils.js';
 import { showToast } from './ui/feedback.js';
-import { closeToc, updateMarkdownDownloadControl } from './ui/chrome.js';
+import { closeToc } from './ui/chrome.js';
 import { parseFrontmatter, renderFrontmatter } from './markdown/frontmatter.js';
 import { parseMarkdownStructure } from './markdown/structure.js';
 import { preprocessMath } from './markdown/math-preprocess.js';
@@ -19,6 +19,7 @@ import { foldSections, addFoldListeners, updateFoldToggleIcon } from './render/f
 import { assignHeadingIds, buildToc, observeHeadings, resetToc, getHeadingLabel } from './render/toc.js';
 import { looksLikeMarkdown, detectSnippetLanguage, renderSnippet } from './render/snippet.js';
 import { scheduleNoteLayout } from './annotations/layout.js';
+import { resetAnnotationSession } from './annotations/session.js';
 import { hideAnnotToolbar } from './annotations/toolbar.js';
 
 let md = null;
@@ -144,11 +145,9 @@ function setReadingState() {
 
 function loadSnippetDocument(code, lang) {
   state.currentMarkdown = code;
-  state.annotations = [];
-  state.noteCounter = 0;
+  resetAnnotationSession();
   state.leadingSource = '';
   state.sectionSources = [];
-  updateMarkdownDownloadControl();
   hideAnnotToolbar();
   elements.article.innerHTML = '';
 
@@ -183,9 +182,7 @@ export function loadDocument(text) {
   }
 
   state.currentMarkdown = text;
-  state.annotations = [];
-  state.noteCounter = 0;
-  updateMarkdownDownloadControl();
+  resetAnnotationSession();
   hideAnnotToolbar();
   const { meta, body } = parseFrontmatter(text);
   const structure = parseMarkdownStructure(body);
@@ -214,9 +211,7 @@ export function clearDocument() {
   state.currentMarkdown = '';
   state.docTitle = '';
   state.droppedFilename = '';
-  state.annotations = [];
-  state.noteCounter = 0;
-  updateMarkdownDownloadControl();
+  resetAnnotationSession();
   hideAnnotToolbar();
   elements.article.classList.remove('has-note-rail');
   state.leadingSource = '';

@@ -9,6 +9,7 @@ import { loadDocument } from '../js/document.js';
 import { isEditableTarget, sanitizeFilename } from '../js/utils.js';
 import { showToast, flashButton } from '../js/ui/feedback.js';
 import { updateMarkdownDownloadControl } from '../js/ui/chrome.js';
+import { markAnnotationsSaved } from '../js/annotations/session.js';
 import {
   buildAnnotationSidecar,
   parseAnnotationSidecar,
@@ -31,6 +32,10 @@ let loadedMarkdown = '';
 // notes with an empty set (keep the saved ones, update progress only).
 let loadedAnnotationCount = 0;
 let annotationsMutated = false;
+let annotationsDirty = false;
+let saveInFlight = false;
+let savePending = false;
+let saveAbortController = null;
 // Anchors that failed to re-anchor on load. Kept so the next save merges
 // them back into the sidecar instead of silently dropping them.
 let pendingAnchors = [];
@@ -505,7 +510,11 @@ function setDownloadMeaning() {
     updateMarkdownDownloadControl();
     return;
   }
-  const label = syncing ? 'Syncing to membox…' : 'Sync Markdown and notes to membox';
+  const label = syncing
+    ? 'Syncing to membox…'
+    : annotationsDirty
+      ? 'Sync Markdown and unsaved notes to membox'
+      : 'Sync Markdown and notes to membox';
   elements.downloadAll.setAttribute('aria-label', label);
   elements.downloadAll.title = label;
   elements.downloadAll.classList.toggle('is-syncing', syncing);
@@ -514,12 +523,17 @@ function setDownloadMeaning() {
 function renderConnection() {
   connectionButton.disabled = connecting;
   connectionButton.dataset.connected = String(connected);
+  connectionButton.dataset.sync = annotationsDirty ? 'dirty' : 'clean';
   connectionButton.classList.toggle('is-connecting', connecting);
   const label = connecting
     ? 'Checking membox connection…'
     : connected
-      ? 'Connected to membox — click to disconnect'
-      : 'Disconnected from membox — click to connect';
+      ? annotationsDirty
+        ? 'Connected to membox — notes waiting to sync'
+        : 'Connected to membox — click to disconnect'
+      : annotationsDirty
+        ? 'Disconnected — notes remain available in this session'
+        : 'Disconnected from membox — click to connect';
   connectionButton.setAttribute('aria-label', label);
   connectionButton.title = label;
   setDownloadMeaning();
@@ -539,8 +553,15 @@ async function toggleConnection() {
   if (connecting) return;
   if (connected) {
     connected = false;
+    if (sidecarSaveTimer) {
+      clearTimeout(sidecarSaveTimer);
+      sidecarSaveTimer = null;
+    }
+    if (saveAbortController) saveAbortController.abort();
     renderConnection();
-    showToast('Disconnected from membox — arrow downloads locally');
+    showToast(annotationsDirty
+      ? 'Disconnected — notes remain available in this session'
+      : 'Disconnected from membox — arrow downloads locally');
     return;
   }
   connecting = true;
@@ -548,7 +569,14 @@ async function toggleConnection() {
   connected = await backendAvailable();
   connecting = false;
   renderConnection();
-  showToast(connected ? 'Connected to membox — arrow now syncs' : 'Could not connect to membox');
+  if (connected && annotationsDirty) {
+    showToast('Connected to membox — syncing session notes');
+    savePending = false;
+    if (documentID) scheduleReadingStateSave();
+    else void autoCreateForAnnotations();
+  } else {
+    showToast(connected ? 'Connected to membox — arrow now syncs' : 'Could not connect to membox');
+  }
 }
 
 function replaceDocumentID(id) {
@@ -594,15 +622,40 @@ function mergePendingAnchors(sidecar) {
   }
 }
 
+function assertAnnotationReplacement(result) {
+  if (result && result.replacement_applied === false) {
+    throw new Error('Notes changed in another session; reload before replacing them');
+  }
+}
+
+function applySavedAnnotationRefs(saved, sessionId) {
+  if (sessionId !== state.annotationSessionId || !Array.isArray(saved)) return;
+  const refsByClientID = new Map(saved
+    .filter((item) => item && item.clientId && item.ref)
+    .map((item) => [item.clientId, item.ref]));
+  for (const entry of state.annotations) {
+    const ref = refsByClientID.get(entry.clientId);
+    if (ref) entry.ref = ref;
+  }
+}
+
 async function persistReadingState(keepalive) {
-  if (!documentID || !state.currentMarkdown) return;
+  if (!connected || !documentID || !state.currentMarkdown) return;
+  if (saveInFlight) {
+    savePending = true;
+    return;
+  }
+  saveInFlight = true;
+  saveAbortController = new AbortController();
+  const savedSessionId = state.annotationSessionId;
+  const savedVersion = state.annotationVersion;
   try {
     const sidecar = await buildAnnotationSidecar(sidecarFilename(), state.currentMarkdown, currentProgress());
+    if (!connected || savedSessionId !== state.annotationSessionId) return;
     // Only an actual annotation mutation makes the submitted set authoritative
     // for deletions. Scroll/progress saves must never delete note documents.
     sidecar.replaceAnnotations = annotationsMutated;
     sidecar.revision = loadedRevision;
-    const liveCount = sidecar.annotations.length;
     mergePendingAnchors(sidecar);
     // Wipe protection: annotations loaded, none survived, and the user never
     // deleted any → keep the stored annotations, only refresh progress.
@@ -624,35 +677,39 @@ async function persistReadingState(keepalive) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(sidecar),
       keepalive: !!keepalive,
+      signal: saveAbortController.signal,
     });
     if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
-    // Write the server-assigned note UUIDs back into the live entries. Without
-    // this, every save re-submits ref-less annotations and the backend has to
-    // re-match them by text; a mismatch then creates duplicate note files.
-    // Response order mirrors the submitted set (pending anchors trail it).
-    if (!keepalive) {
-      try {
-        const result = await response.clone().json();
-        const saved = result && Array.isArray(result.annotations) ? result.annotations : [];
-        for (let i = 0; i < liveCount && i < saved.length && i < state.annotations.length; i++) {
-          if (saved[i] && saved[i].ref && !state.annotations[i].ref) {
-            state.annotations[i].ref = saved[i].ref;
-          }
-        }
-        if (result && Number.isFinite(Number(result.revision))) {
-          loadedRevision = Math.max(loadedRevision, Number(result.revision));
-        }
-      } catch (err) {
-        /* ref write-back is best-effort */
-      }
+    const result = await response.json();
+    if (savedSessionId !== state.annotationSessionId) return;
+    applySavedAnnotationRefs(result && result.annotations, savedSessionId);
+    assertAnnotationReplacement(result);
+    if (result && Number.isFinite(Number(result.revision))) {
+      loadedRevision = Math.max(loadedRevision, Number(result.revision));
     }
+    markAnnotationsSaved(savedSessionId, savedVersion);
+    annotationsDirty = savedSessionId === state.annotationSessionId && savedVersion < state.annotationVersion;
+    if (!annotationsDirty) annotationsMutated = false;
+    if (annotationsDirty) savePending = true;
+    renderConnection();
   } catch (err) {
-    console.error('membox: failed to save reading state', err);
+    annotationsDirty = annotationsDirty || savedVersion > state.annotationSavedVersion;
+    renderConnection();
+    if (err.name !== 'AbortError') {
+      console.error('membox: failed to save reading state; notes remain in this session', err);
+    }
+  } finally {
+    saveAbortController = null;
+    saveInFlight = false;
+    if (savePending && connected) {
+      savePending = false;
+      void persistReadingState(false);
+    }
   }
 }
 
 function scheduleReadingStateSave() {
-  if (!documentID || restoring) return;
+  if (!connected || !documentID || restoring) return;
   if (sidecarSaveTimer) clearTimeout(sidecarSaveTimer);
   sidecarSaveTimer = setTimeout(() => {
     sidecarSaveTimer = null;
@@ -665,6 +722,7 @@ function flushReadingStateSave() {
     clearTimeout(sidecarSaveTimer);
     sidecarSaveTimer = null;
   }
+  if (!connected) return;
   void persistReadingState(true);
 }
 
@@ -692,6 +750,9 @@ window.addEventListener('load', applyProgressScroll);
 window.addEventListener('miru-annotations-changed', () => {
   if (restoring) return;
   annotationsMutated = true;
+  annotationsDirty = true;
+  renderConnection();
+  if (!connected) return;
   if (!documentID) {
     void autoCreateForAnnotations();
     return;
@@ -704,10 +765,17 @@ document.addEventListener('visibilitychange', () => {
 
 function unbindDocument() {
   replaceDocumentID('');
+  if (sidecarSaveTimer) {
+    clearTimeout(sidecarSaveTimer);
+    sidecarSaveTimer = null;
+  }
+  if (saveAbortController) saveAbortController.abort();
   loadedMarkdown = '';
   pendingAnchors = [];
   loadedAnnotationCount = 0;
   annotationsMutated = false;
+  annotationsDirty = false;
+  savePending = false;
   loadedRevision = 0;
 }
 
@@ -752,6 +820,9 @@ async function restoreReadingState(id, markdown) {
     }
     loadedAnnotationCount = Array.isArray(data.annotations) ? data.annotations.length : 0;
     annotationsMutated = false;
+    annotationsDirty = false;
+    markAnnotationsSaved(state.annotationSessionId, state.annotationVersion);
+    renderConnection();
     if (Array.isArray(data.unrestored) && data.unrestored.length) {
       pendingAnchors = data.unrestored;
     }
@@ -795,14 +866,17 @@ async function autoCreateForAnnotations() {
   const body = state.currentMarkdown || '';
   if (!body.trim() || state.annotations.length === 0) return;
   autoCreating = true;
+  const savedSessionId = state.annotationSessionId;
+  const savedVersion = state.annotationVersion;
   try {
     const title = (state.docTitle || '').trim() || 'Untitled';
-    let annotations = null;
+    let annotations;
     try {
       annotations = await buildAnnotationSidecar(sanitizeFilename(title) + '.md', body, currentProgress());
     } catch (err) {
-      console.warn('membox: could not pack annotation sidecar', err);
+      throw new Error(`Could not prepare session notes: ${err.message}`);
     }
+    if (!connected || savedSessionId !== state.annotationSessionId) return;
     const response = await fetch('/api/sync', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -810,16 +884,30 @@ async function autoCreateForAnnotations() {
     });
     if (!response.ok) throw new Error((await response.text()).trim() || `HTTP ${response.status}`);
     const result = await response.json();
+    if (savedSessionId !== state.annotationSessionId) return;
     replaceDocumentID(result.id);
     loadedMarkdown = body;
     if (result.path) state.droppedFilename = result.path.split(/[\\/]/).pop();
-    await refreshRevision(result.id);
+    applySavedAnnotationRefs(result.annotations, savedSessionId);
+    assertAnnotationReplacement(result);
+    loadedRevision = Number(result.revision) || loadedRevision;
+    if (!loadedRevision) await refreshRevision(result.id);
+    markAnnotationsSaved(savedSessionId, savedVersion);
+    annotationsDirty = savedSessionId === state.annotationSessionId && savedVersion < state.annotationVersion;
+    if (!annotationsDirty) annotationsMutated = false;
+    renderConnection();
     showToast(`Notes auto-saved to membox: ${String(result.id).slice(0, 8)}`);
   } catch (err) {
-    console.error('membox: auto-save failed', err);
-    showToast(`Auto-save failed: ${err.message}`);
+    annotationsDirty = true;
+    renderConnection();
+    console.error('membox: auto-save failed; notes remain in this session', err);
+    showToast(`Auto-save failed — notes remain in this session: ${err.message}`);
   } finally {
     autoCreating = false;
+    if (annotationsDirty && connected) {
+      if (documentID) scheduleReadingStateSave();
+      else if (savedSessionId !== state.annotationSessionId) queueMicrotask(() => void autoCreateForAnnotations());
+    }
   }
 }
 
@@ -835,13 +923,15 @@ async function syncToMembox() {
   // overwrite. Explicitly loaded content keeps its UUID while unchanged.
   const id = documentID && body === loadedMarkdown ? documentID : '';
   const title = (state.docTitle || '').trim() || 'Untitled';
+  const savedSessionId = state.annotationSessionId;
+  const savedVersion = state.annotationVersion;
 
   syncing = true;
   setDownloadMeaning();
   try {
     // A sidecar-shaped DTO rides along so the backend can reconcile separate
     // Markdown note documents and refresh reading progress in one request.
-    let annotations = null;
+    let annotations;
     try {
       const markdownFile = sanitizeFilename(title) + '.md';
       annotations = await buildAnnotationSidecar(markdownFile, body, currentProgress());
@@ -853,8 +943,9 @@ async function syncToMembox() {
       annotations.replaceAnnotations = true;
       annotations.revision = loadedRevision;
     } catch (err) {
-      console.warn('membox: could not pack annotation sidecar', err);
+      throw new Error(`Could not prepare session notes: ${err.message}`);
     }
+    if (!connected || savedSessionId !== state.annotationSessionId) return;
     const response = await fetch('/api/sync', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -862,15 +953,26 @@ async function syncToMembox() {
     });
     if (!response.ok) throw new Error((await response.text()).trim() || `HTTP ${response.status}`);
     const result = await response.json();
+    if (savedSessionId !== state.annotationSessionId) return;
     replaceDocumentID(result.id);
     loadedMarkdown = body;
     if (result.path) state.droppedFilename = result.path.split(/[\\/]/).pop();
-    await refreshRevision(result.id);
+    applySavedAnnotationRefs(result.annotations, savedSessionId);
+    assertAnnotationReplacement(result);
+    loadedRevision = Number(result.revision) || loadedRevision;
+    if (!loadedRevision) await refreshRevision(result.id);
+    markAnnotationsSaved(savedSessionId, savedVersion);
+    annotationsDirty = savedSessionId === state.annotationSessionId && savedVersion < state.annotationVersion;
+    if (!annotationsDirty) annotationsMutated = false;
+    renderConnection();
+    if (annotationsDirty) scheduleReadingStateSave();
     flashButton(elements.downloadAll);
     showToast(result.created ? 'Created in membox with notes' : 'Synced Markdown and notes to membox');
   } catch (err) {
-    console.error('membox: sync failed', err);
-    showToast(`Sync failed: ${err.message}`);
+    annotationsDirty = annotationsDirty || savedVersion > state.annotationSavedVersion;
+    renderConnection();
+    console.error('membox: sync failed; notes remain in this session', err);
+    showToast(`Sync failed — notes remain in this session: ${err.message}`);
   } finally {
     syncing = false;
     setDownloadMeaning();
@@ -901,7 +1003,7 @@ document.addEventListener('drop', (event) => {
 // Miru updates this title when annotations change; connected mode owns its
 // sync wording, so immediately re-apply it after those generic updates.
 new MutationObserver(() => {
-  if (connected && elements.downloadAll.title !== 'Sync Markdown and notes to membox' && !syncing) {
+  if (connected && !elements.downloadAll.title.startsWith('Sync Markdown') && !syncing) {
     setDownloadMeaning();
   }
 }).observe(elements.downloadAll, { attributes: true, attributeFilter: ['title'] });
@@ -911,7 +1013,7 @@ async function start() {
   connected = await backendAvailable();
   connecting = false;
   renderConnection();
-  await loadFromMembox();
+  if (connected) await loadFromMembox();
 }
 
 void start();

@@ -163,11 +163,14 @@ func TestMiruAnnotationsMaterializeAsMarkdownNoteDocuments(t *testing.T) {
 		"annotations": []map[string]any{{
 			"start": 16, "exact": "body", "prefix": "Flash Attention ", "suffix": "",
 			"highlight": true, "underline": false, "strikethrough": false,
-			"note": "Remember this passage.",
+			"note": "Remember this passage.", "clientId": "miru-client-1",
 		}},
 		"progress": map[string]any{"y": 12, "at": "2026-08-04T00:00:00Z"},
 	}
-	postJSON(t, baseURL+"/api/doc/"+docID+"/annotations", payload)
+	firstSave := postJSON(t, baseURL+"/api/doc/"+docID+"/annotations", payload)
+	if !strings.Contains(string(firstSave), `"clientId":"miru-client-1"`) || !strings.Contains(string(firstSave), `"ref":`) {
+		t.Fatalf("annotation save did not echo stable client mapping: %q", firstSave)
+	}
 	// A second save before reload still has no client-side ref. It must update
 	// the same note rather than creating a duplicate file.
 	postJSON(t, baseURL+"/api/doc/"+docID+"/annotations", payload)
@@ -246,7 +249,7 @@ func TestMiruAnnotationsMaterializeAsMarkdownNoteDocuments(t *testing.T) {
 func TestServerSyncUpdatesMarkdownAndAnnotationsTogether(t *testing.T) {
 	baseURL, docID, notesDir := startServer(t)
 
-	payload := strings.NewReader(`{"id":"` + docID + `","title":"Flash Attention","body":"# Flash Attention\n\nsynced body\n","annotations":{"format":"miru-annotations","version":2,"annotations":[]}}`)
+	payload := strings.NewReader(`{"id":"` + docID + `","title":"Flash Attention","body":"# Flash Attention\n\nsynced body\n","annotations":{"format":"miru-annotations","version":2,"annotations":[{"start":16,"exact":"synced body","highlight":true,"note":null,"clientId":"sync-client-1"}]}}`)
 	resp, err := http.Post(baseURL+"/api/sync", "application/json", payload)
 	if err != nil {
 		t.Fatal(err)
@@ -257,14 +260,21 @@ func TestServerSyncUpdatesMarkdownAndAnnotationsTogether(t *testing.T) {
 		t.Fatalf("sync failed: status=%d body=%q", resp.StatusCode, responseBody)
 	}
 	var result struct {
-		ID      string `json:"id"`
-		Created bool   `json:"created"`
+		ID          string `json:"id"`
+		Created     bool   `json:"created"`
+		Annotations []struct {
+			ClientID string `json:"clientId"`
+			Ref      string `json:"ref"`
+		} `json:"annotations"`
 	}
 	if err := json.Unmarshal(responseBody, &result); err != nil {
 		t.Fatal(err)
 	}
 	if result.ID != docID || result.Created {
 		t.Fatalf("sync changed identity: %+v", result)
+	}
+	if len(result.Annotations) != 1 || result.Annotations[0].ClientID != "sync-client-1" || result.Annotations[0].Ref == "" {
+		t.Fatalf("sync response missing annotation client mapping: %+v", result)
 	}
 	saved, err := os.ReadFile(filepath.Join(notesDir, "flash.md"))
 	if err != nil {
@@ -922,7 +932,10 @@ func TestServerRefusesDeletionForStaleRevision(t *testing.T) {
 	// A tab that never saw this note (revision 0) tries to replace the whole
 	// set with nothing — the deletion must be refused.
 	stale := `{"format":"miru-annotations","version":2,"replaceAnnotations":true,"revision":0,"annotations":[]}`
-	postJSON(t, baseURL+"/api/doc/"+docID+"/annotations", json.RawMessage(stale))
+	staleResult := postJSON(t, baseURL+"/api/doc/"+docID+"/annotations", json.RawMessage(stale))
+	if !strings.Contains(string(staleResult), `"replacement_applied":false`) {
+		t.Fatalf("stale replacement conflict was not reported: %q", staleResult)
+	}
 	files, err = filepath.Glob(filepath.Join(notesDir, "*-note.md"))
 	if err != nil || len(files) != 1 {
 		t.Fatalf("stale client wiped notes: %v (err=%v)", files, err)
@@ -945,7 +958,10 @@ func TestServerRefusesDeletionForStaleRevision(t *testing.T) {
 		t.Fatalf("missing revision in GET: %+v", view)
 	}
 	fresh := fmt.Sprintf(`{"format":"miru-annotations","version":2,"replaceAnnotations":true,"revision":%d,"annotations":[]}`, view.Revision)
-	postJSON(t, baseURL+"/api/doc/"+docID+"/annotations", json.RawMessage(fresh))
+	freshResult := postJSON(t, baseURL+"/api/doc/"+docID+"/annotations", json.RawMessage(fresh))
+	if !strings.Contains(string(freshResult), `"replacement_applied":true`) {
+		t.Fatalf("authorized replacement was not reported: %q", freshResult)
+	}
 	files, err = filepath.Glob(filepath.Join(notesDir, "*-note.md"))
 	if err != nil || len(files) != 0 {
 		t.Fatalf("authorized replace left files: %v (err=%v)", files, err)

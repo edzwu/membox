@@ -6,6 +6,7 @@ import { state } from '../state.js';
 import { sanitizeFilename } from '../utils.js';
 import { showToast, downloadBlob, flashButton, writeClipboard, flashCopied } from '../ui/feedback.js';
 import { buildAnnotationSidecar } from '../annotations/sidecar.js';
+import { markAnnotationsSaved } from '../annotations/session.js';
 import { buildZip } from '../zip.js';
 
 export function copyAllMarkdown() {
@@ -26,6 +27,8 @@ export async function downloadAllMarkdown() {
   showToast('Packing Markdown + annotations...');
   try {
     const markdown = state.currentMarkdown;
+    const savedSessionId = state.annotationSessionId;
+    const savedVersion = state.annotationVersion;
     const markdownFile = base + '.md';
     const annotationFile = base + '.miru.json';
     const sidecar = await buildAnnotationSidecar(markdownFile, markdown);
@@ -35,6 +38,7 @@ export async function downloadAllMarkdown() {
       { name: annotationFile, data: encoder.encode(JSON.stringify(sidecar, null, 2) + '\n') },
     ]);
     downloadBlob(new Blob([zipBytes], { type: 'application/zip' }), base + '.miru.zip');
+    markAnnotationsSaved(savedSessionId, savedVersion);
     flashButton(elements.downloadAll);
     showToast('Miru bundle saved');
   } catch (err) {

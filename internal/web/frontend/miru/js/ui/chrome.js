@@ -6,9 +6,9 @@ import { STORAGE_KEY } from '../constants.js';
 import { elements } from '../dom.js';
 import { state } from '../state.js';
 
-// Kept here (rather than in export/markdown-export.js) so the annotation
-// model and sidecar modules can report "annotations changed" without an
-// import cycle back into the export layer.
+// Pure presentation update. Annotation mutation events are emitted separately
+// by annotations/session.js so document loads and restores cannot look like
+// user edits to optional persistence adapters.
 export function updateMarkdownDownloadControl() {
   const hasAnnotations = state.annotations.length > 0;
   const label = hasAnnotations
@@ -16,10 +16,6 @@ export function updateMarkdownDownloadControl() {
     : 'Download Markdown';
   elements.downloadAll.setAttribute('aria-label', label);
   elements.downloadAll.title = label;
-  // Single choke point every annotation mutation funnels through; host
-  // adapters (e.g. the membox integration) listen to persist notes and
-  // reading progress.
-  window.dispatchEvent(new CustomEvent('miru-annotations-changed'));
 }
 
 export function applyTheme(theme) {

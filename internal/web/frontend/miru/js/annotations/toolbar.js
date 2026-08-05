@@ -10,6 +10,7 @@ import { showToast } from '../ui/feedback.js';
 import { scheduleNoteLayout } from './layout.js';
 import { initNoteFocus, focusNote } from './focus.js';
 import { annotationTextFromRange } from './sidecar.js';
+import { notifyAnnotationsChanged } from './session.js';
 import {
   findAnnot,
   applyMark,
@@ -147,6 +148,8 @@ function handleEditAction(action, annotEl, entry, btn) {
     unwrapAnnotEl(annotEl);
     removeAnnot(entry.id);
     hideAnnotToolbar();
+  } else {
+    notifyAnnotationsChanged();
   }
 }
 

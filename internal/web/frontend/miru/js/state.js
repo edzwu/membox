@@ -17,8 +17,14 @@ export const state = {
   docTitle: '',
   droppedFilename: '',
 
-  // Annotation state lives in memory unless the user explicitly saves a Miru
-  // bundle. Visual exports capture the DOM; Markdown itself stays untouched.
+  // Annotation state always lives in memory for the active session. Optional
+  // hosts may persist snapshots; a Miru bundle remains the standalone durable
+  // export. Visual exports capture the DOM; Markdown itself stays untouched.
   annotations: [],
   noteCounter: 0,
+  // Versioned independently from backend revisions. Optional persistence
+  // adapters use the session id to ignore stale async saves after navigation.
+  annotationSessionId: 0,
+  annotationVersion: 0,
+  annotationSavedVersion: 0,
 };
