@@ -839,13 +839,23 @@ async function restoreReadingState(id, markdown) {
   }
 }
 
+function decodeFilenameHeader(value) {
+  if (!value) return '';
+  try {
+    return decodeURIComponent(value);
+  } catch (err) {
+    // Backward compatibility with older servers and literal `%` filenames.
+    return value;
+  }
+}
+
 async function loadFromMembox() {
   if (!documentID) return;
   try {
     const response = await fetch(`/api/doc/${encodeURIComponent(documentID)}`, { cache: 'no-store' });
     if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
     const markdown = await response.text();
-    const filename = response.headers.get('X-Membox-Filename');
+    const filename = decodeFilenameHeader(response.headers.get('X-Membox-Filename'));
     if (filename) {
       state.droppedFilename = filename;
       document.title = `${filename.replace(/\.[^.]+$/, '')} — membox`;

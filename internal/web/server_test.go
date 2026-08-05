@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -100,6 +101,35 @@ func TestServerServesReaderAndMarkdown(t *testing.T) {
 	missingResp.Body.Close()
 	if missingResp.StatusCode != http.StatusNotFound {
 		t.Fatalf("expected 404 for missing doc, got %d", missingResp.StatusCode)
+	}
+}
+
+func TestServerEncodesUnicodeFilenameHeader(t *testing.T) {
+	baseURL, _, _ := startServer(t)
+	body := postJSON(t, baseURL+"/api/save", map[string]string{
+		"title": "C 实现 Barrier 同步原语",
+		"body":  "# C 实现 Barrier 同步原语\n",
+	})
+	var saved struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(body, &saved); err != nil || saved.ID == "" {
+		t.Fatalf("invalid save response: %q", body)
+	}
+
+	resp, err := http.Get(baseURL + "/api/doc/" + saved.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	const filename = "c-实现-barrier-同步原语.md"
+	encoded := resp.Header.Get("X-Membox-Filename")
+	if encoded != url.PathEscape(filename) {
+		t.Fatalf("encoded filename header = %q, want %q", encoded, url.PathEscape(filename))
+	}
+	decoded, err := url.PathUnescape(encoded)
+	if err != nil || decoded != filename {
+		t.Fatalf("decoded filename = %q (err=%v), want %q", decoded, err, filename)
 	}
 }
 

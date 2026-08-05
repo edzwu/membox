@@ -12,6 +12,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/url"
 	"path"
 	"path/filepath"
 	"strconv"
@@ -180,7 +181,9 @@ func (s *Server) handleDocument(writer http.ResponseWriter, request *http.Reques
 	}
 	writer.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 	writer.Header().Set("Cache-Control", "no-store")
-	writer.Header().Set("X-Membox-Filename", filepath.Base(document.Location.RelativePath))
+	// HTTP header values do not have a browser-portable Unicode encoding.
+	// Keep the custom header ASCII-only and let the frontend decode UTF-8.
+	writer.Header().Set("X-Membox-Filename", url.PathEscape(filepath.Base(document.Location.RelativePath)))
 	writer.Header().Set("X-Membox-Path", absolute)
 	_, _ = writer.Write(body)
 }
