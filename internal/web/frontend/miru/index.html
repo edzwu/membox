@@ -8,8 +8,7 @@
   <script>
     (function(){
       var t='light';
-      try{var s=localStorage.getItem('miru-theme');if(s==='dark'||s==='light')t=s;
-      else if(window.matchMedia&&window.matchMedia('(prefers-color-scheme:dark)').matches)t='dark';}
+      try{var s=localStorage.getItem('miru-theme');if(s==='dark'||s==='light')t=s;}
       catch(e){}
       document.documentElement.setAttribute('data-theme',t);
     })();

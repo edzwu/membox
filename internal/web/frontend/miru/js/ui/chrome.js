@@ -36,8 +36,6 @@ export function initTheme() {
 
   if (saved === 'dark' || saved === 'light') {
     theme = saved;
-  } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-    theme = 'dark';
   }
 
   applyTheme(theme);

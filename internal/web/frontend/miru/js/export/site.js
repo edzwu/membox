@@ -1,6 +1,6 @@
 /* Miru — export the current document as a small interactive static site
    (index.html inside a ZIP): sticky TOC, live section folding, and a theme
-   toggle that defaults to the viewer's system preference. */
+   toggle that defaults to light. */
 
 import { elements } from '../dom.js';
 import { state } from '../state.js';
@@ -93,19 +93,15 @@ export function exportSiteZip() {
         }
       `;
 
-    // Minimal interactivity for the static export: theme toggle (follows the
-    // viewer's system theme by default, remembers a manual choice) and
-    // click-to-fold headings.
+    // Minimal interactivity for the static export: theme toggle (light by
+    // default, remembers a manual choice) and click-to-fold headings.
     const interactiveScript = `
 (function () {
   var root = document.documentElement;
   var STORAGE_KEY = 'miru-theme';
 
-  function systemTheme() {
-    return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-  }
   function currentTheme() {
-    return root.getAttribute('data-theme') || systemTheme();
+    return root.getAttribute('data-theme') || 'light';
   }
   function setIcon(theme) {
     var icon = document.getElementById('export-theme-icon');
@@ -118,13 +114,7 @@ export function exportSiteZip() {
 
   var saved = null;
   try { saved = localStorage.getItem(STORAGE_KEY); } catch (e) {}
-  if (saved === 'dark' || saved === 'light') {
-    applyTheme(saved);
-  } else {
-    // No saved choice: leave data-theme unset so prefers-color-scheme applies,
-    // and just reflect the current icon.
-    setIcon(systemTheme());
-  }
+  applyTheme(saved === 'dark' || saved === 'light' ? saved : 'light');
 
   var toggle = document.getElementById('export-theme-toggle');
   if (toggle) {
