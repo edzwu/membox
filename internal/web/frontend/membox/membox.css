@@ -208,11 +208,13 @@
   z-index: 60;
 }
 
-/* Structured hover tooltip: title can wrap, UUID never truncates or wraps. */
+/* Structured hover tooltip: title can wrap, UUID never truncates or wraps.
+   It is temporarily portaled to body by integration.js so the TOC's scroll
+   container cannot clip it at the left or right edge. */
 .membox-related-tooltip {
-  position: absolute;
-  bottom: calc(100% + 8px);
-  left: 50%;
+  position: fixed;
+  left: 0;
+  top: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -226,14 +228,14 @@
   box-shadow: 0 6px 18px var(--shadow);
   opacity: 0;
   pointer-events: none;
-  transform: translateX(-50%) translateY(2px);
+  transform: translateY(2px);
   transition: opacity 0.15s ease, transform 0.15s ease;
-  z-index: 80;
+  z-index: 300;
 }
 
-.membox-related-tile:hover .membox-related-tooltip {
+.membox-related-tooltip.is-visible {
   opacity: 1;
-  transform: translateX(-50%) translateY(0);
+  transform: translateY(0);
 }
 
 .membox-related-tooltip-title {

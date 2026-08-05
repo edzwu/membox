@@ -172,6 +172,30 @@ async function loadRelated() {
   }
 }
 
+function showRelatedTooltip(tile, tooltip) {
+  const rect = tile.getBoundingClientRect();
+  document.body.appendChild(tooltip);
+  tooltip.classList.add('is-visible');
+  // Measure after moving to body, then keep the tooltip inside the viewport.
+  const tipRect = tooltip.getBoundingClientRect();
+  const margin = 8;
+  const left = Math.max(margin, Math.min(
+    window.innerWidth - tipRect.width - margin,
+    rect.left + (rect.width - tipRect.width) / 2,
+  ));
+  let top = rect.top - tipRect.height - margin;
+  if (top < margin) top = rect.bottom + margin;
+  tooltip.style.left = `${Math.round(left)}px`;
+  tooltip.style.top = `${Math.round(top)}px`;
+}
+
+function hideRelatedTooltip(tile, tooltip) {
+  tooltip.classList.remove('is-visible');
+  tooltip.style.left = '';
+  tooltip.style.top = '';
+  if (tooltip.parentNode === document.body) tile.appendChild(tooltip);
+}
+
 function renderRelatedGrid(items) {
   relatedGrid.textContent = '';
   if (!items.length) {
@@ -197,6 +221,10 @@ function renderRelatedGrid(items) {
     tooltipID.textContent = `membox · ${String(item.id).slice(-5)}`;
     tooltip.append(tooltipTitle, tooltipID);
     tile.appendChild(tooltip);
+    tile.addEventListener('mouseenter', () => showRelatedTooltip(tile, tooltip));
+    tile.addEventListener('mouseleave', () => hideRelatedTooltip(tile, tooltip));
+    tile.addEventListener('focus', () => showRelatedTooltip(tile, tooltip));
+    tile.addEventListener('blur', () => hideRelatedTooltip(tile, tooltip));
     relatedGrid.appendChild(tile);
   }
 }
