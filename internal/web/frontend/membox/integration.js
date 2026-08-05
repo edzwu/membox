@@ -84,7 +84,7 @@ function createStatusBadge() {
   badge.id = 'membox-doc-status';
   badge.className = 'membox-doc-status';
   badge.hidden = true;
-  badge.innerHTML = '<span class="membox-status-dot" aria-hidden="true"></span>';
+  badge.innerHTML = '<span class="membox-status-dot" aria-hidden="true"></span><span class="membox-status-label">unsaved</span>';
   statusCluster.appendChild(badge);
   badge.addEventListener('click', () => {
     if (!documentID || !navigator.clipboard) return;
@@ -123,16 +123,22 @@ function renderDocStatus() {
   }
   statusCluster.hidden = false;
   statusBadge.hidden = false;
-  if (documentID) {
-    statusBadge.dataset.saved = 'true';
+  const saved = Boolean(documentID) && !annotationsDirty;
+  statusBadge.dataset.saved = String(saved);
+  statusBadge.dataset.hasDocument = String(Boolean(documentID));
+  if (saved) {
     statusBadge.setAttribute('aria-label', `Saved document ${documentID}`);
     statusBadge.title = `Saved · ${documentID} (click to copy UUID)`;
+  } else {
+    statusBadge.setAttribute('aria-label', 'Current document has unsaved changes');
+    statusBadge.title = documentID
+      ? 'Unsaved changes · waiting to sync to membox'
+      : 'Current document is not saved to membox';
+  }
+  if (documentID) {
     addRelatedButton.hidden = false;
     void loadRelated();
   } else {
-    statusBadge.dataset.saved = 'false';
-    statusBadge.setAttribute('aria-label', 'Current document is not saved');
-    statusBadge.title = 'Current document is not saved';
     addRelatedButton.hidden = true;
     hideRelatedPanel();
   }

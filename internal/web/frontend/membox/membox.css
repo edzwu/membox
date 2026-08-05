@@ -76,9 +76,9 @@
   to { transform: translateY(3px); }
 }
 
-/* Bottom-left document status cluster: visible only while connected. Green
-   dot means the current document lives in membox; a muted dot means it is
-   still an unsynced paste. The + button adds a related document. */
+/* Bottom-left document status cluster: visible only while connected. Pending
+   content says “unsaved”; once membox confirms persistence it collapses to a
+   green dot. The + button adds a related document. */
 .membox-status-cluster {
   position: fixed;
   left: 24px;
@@ -100,15 +100,30 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
+  gap: 6px;
+  min-width: 30px;
   height: 30px;
+  padding: 0 10px;
   appearance: none;
   border: 0;
-  border-radius: 999px 0 0 999px;
+  border-radius: 999px;
   background: transparent;
   color: var(--muted);
+  font-family: var(--font-sans);
   cursor: default;
-  transition: background 0.15s ease;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.membox-doc-status[data-has-document="true"] {
+  border-radius: 999px 0 0 999px;
+  cursor: pointer;
+}
+
+.membox-status-label {
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0.01em;
 }
 
 .membox-status-dot {
@@ -119,16 +134,25 @@
   flex: 0 0 auto;
 }
 
+.membox-doc-status[data-saved="false"] .membox-status-dot {
+  display: none;
+}
+
 .membox-doc-status[data-saved="true"] {
+  width: 30px;
+  padding: 0;
   color: var(--ink-soft);
-  cursor: pointer;
+}
+
+.membox-doc-status[data-saved="true"] .membox-status-label {
+  display: none;
 }
 
 .membox-doc-status[data-saved="true"] .membox-status-dot {
   background: #3f8b61;
 }
 
-.membox-doc-status[data-saved="true"]:hover {
+.membox-doc-status[data-has-document="true"]:hover {
   color: var(--accent);
   background: color-mix(in srgb, var(--accent-soft) 62%, transparent);
 }
