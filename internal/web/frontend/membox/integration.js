@@ -194,7 +194,7 @@ function renderRelatedGrid(items) {
     tooltipTitle.textContent = label;
     const tooltipID = document.createElement('code');
     tooltipID.className = 'membox-related-tooltip-id';
-    tooltipID.textContent = item.id;
+    tooltipID.textContent = `membox · ${String(item.id).slice(-5)}`;
     tooltip.append(tooltipTitle, tooltipID);
     tile.appendChild(tooltip);
     relatedGrid.appendChild(tile);
