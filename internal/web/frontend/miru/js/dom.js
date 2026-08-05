@@ -12,7 +12,6 @@ export const elements = {
   tocBackdrop: document.getElementById('toc-backdrop'),
   tocToggle: document.getElementById('toc-toggle'),
   tocPin: document.getElementById('toc-pin'),
-  newPaste: document.getElementById('new-paste'),
   themeToggle: document.getElementById('theme-toggle'),
   themeIcon: document.querySelector('.theme-icon'),
   foldToggle: document.getElementById('fold-toggle'),
@@ -29,7 +28,6 @@ export const elements = {
 
 // Topbar and floating controls that only make sense while reading.
 export const READING_CONTROLS = [
-  elements.newPaste,
   elements.tocToggle,
   elements.foldToggle,
   elements.copyAll,

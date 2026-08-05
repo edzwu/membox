@@ -58,7 +58,7 @@ function createConnectionButton() {
       <path class="connection-slash" d="M5 5l14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
     </svg>
     <span class="sr-only">membox connection</span>`;
-  elements.newPaste.insertAdjacentElement('afterend', button);
+  elements.tocToggle.insertAdjacentElement('afterend', button);
   button.addEventListener('click', toggleConnection);
   return button;
 }
@@ -989,7 +989,6 @@ elements.downloadAll.addEventListener('click', (event) => {
 }, true);
 
 // Keep the adapter identity honest when the user starts a fresh paste/session.
-elements.newPaste.addEventListener('click', unbindDocument);
 elements.brand.addEventListener('click', unbindDocument);
 document.addEventListener('paste', (event) => {
   if (isEditableTarget(event.target)) return;

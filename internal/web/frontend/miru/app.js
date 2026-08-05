@@ -21,7 +21,6 @@ import { initDropZone } from './js/io/drop.js';
 function bindEvents() {
   document.addEventListener('paste', onPaste);
   elements.brand.addEventListener('click', clearDocument);
-  elements.newPaste.addEventListener('click', clearDocument);
   elements.themeToggle.addEventListener('click', toggleTheme);
   elements.foldToggle.addEventListener('click', toggleFoldAll);
   elements.tocToggle.addEventListener('click', toggleToc);

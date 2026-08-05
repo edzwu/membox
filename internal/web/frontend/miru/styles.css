@@ -248,19 +248,6 @@ button {
   background: var(--accent-soft);
 }
 
-.new-paste {
-  border: 1px solid var(--line);
-  background: var(--paper-raised);
-  color: var(--ink-soft);
-  padding: 7px 14px;
-}
-
-.new-paste:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-  background: var(--accent-soft);
-}
-
 .theme-toggle {
   width: 36px;
   height: 36px;
@@ -589,11 +576,6 @@ body.is-reading .empty {
   display: none;
 }
 
-body.is-reading .new-paste {
-  display: inline-flex;
-}
-
-body.is-empty .new-paste,
 body.is-empty .toc-toggle {
   display: none;
 }
