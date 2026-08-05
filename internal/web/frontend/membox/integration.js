@@ -121,14 +121,16 @@ function renderDocStatus() {
   statusBadge.hidden = false;
   if (documentID) {
     statusBadge.dataset.saved = 'true';
-    text.textContent = `membox \u00b7 ${String(documentID).slice(-5)}`;
-    statusBadge.title = `Saved in membox \u00b7 ${documentID} (click to copy UUID)`;
+    text.textContent = String(documentID).slice(-5);
+    statusBadge.setAttribute('aria-label', `Saved document ${documentID}`);
+    statusBadge.title = `Saved · ${documentID} (click to copy UUID)`;
     addRelatedButton.hidden = false;
     void loadRelated();
   } else {
     statusBadge.dataset.saved = 'false';
-    text.textContent = 'membox \u00b7 unsaved';
-    statusBadge.title = 'Connected to membox \u2014 this document has not been saved yet';
+    text.textContent = '';
+    statusBadge.setAttribute('aria-label', 'Current document is not saved');
+    statusBadge.title = 'Current document is not saved';
     addRelatedButton.hidden = true;
     hideRelatedPanel();
   }
