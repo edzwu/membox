@@ -20,10 +20,14 @@ import (
 const bridgeTokenHeader = "X-Membox-Token"
 
 // BridgeFile is written next to the database so the browser extension can pair.
+// Mode and PID describe the Web Companion that owns the port (extension clients
+// ignore unknown fields).
 type BridgeFile struct {
 	BaseURL     string `json:"base_url"`
 	Token       string `json:"token"`
 	Port        int    `json:"port"`
+	Mode        string `json:"mode,omitempty"`
+	PID         int    `json:"pid,omitempty"`
 	HostVersion string `json:"host_version,omitempty"`
 	WrittenAt   string `json:"written_at"`
 }

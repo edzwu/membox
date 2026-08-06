@@ -4,10 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -17,6 +15,7 @@ import (
 	"membox/internal/domain/catalog"
 	"membox/internal/web"
 	"membox/internal/web/backend"
+	"membox/internal/web/companion"
 )
 
 type Config struct {
@@ -74,63 +73,94 @@ func (b *Box) Close() error {
 func (b *Box) WebServer() *web.Server { return web.NewServer(b.service) }
 
 // DefaultBridgePort is the preferred fixed port so the browser extension can
-// keep a stable pairing URL while the TUI (or mm serve) is running.
-const DefaultBridgePort = 8787
+// keep a stable pairing URL while the Web Companion is running.
+const DefaultBridgePort = companion.DefaultPort
 
-// StartWebServer starts the shared localhost Miru + ingest bridge if needed.
-// port 0 prefers DefaultBridgePort then falls back to an ephemeral port.
-// Returns the base URL (http://127.0.0.1:…).
-func (b *Box) StartWebServer(ctx context.Context, port int) (string, error) {
-	if b.webServer != nil {
-		return b.webServer.BaseURL(), nil
+// WebStatusView is the control-plane snapshot of the Web Companion shown in
+// the TUI status bar and config panel.
+type WebStatusView struct {
+	Running   bool      `json:"running"`
+	URL       string    `json:"url,omitempty"`
+	Port      int       `json:"port,omitempty"`
+	Mode      string    `json:"mode,omitempty"`
+	PID       int       `json:"pid,omitempty"`
+	Tabs      int       `json:"tabs"`
+	DirtyTabs int       `json:"dirty_tabs"`
+	StartedAt time.Time `json:"started_at,omitempty"`
+	// Started reports that the last Ensure call spawned a new companion.
+	Started bool `json:"started"`
+}
+
+func webStatusView(status companion.Status) WebStatusView {
+	return WebStatusView{
+		Running:   status.Running,
+		URL:       status.BaseURL,
+		Port:      status.Port,
+		Mode:      status.Mode,
+		PID:       status.PID,
+		Tabs:      status.Tabs,
+		DirtyTabs: status.DirtyTabs,
+		StartedAt: status.StartedAt,
+		Started:   status.Started,
 	}
-	// Reuse token across restarts so the browser extension pairing survives
-	// quitting and reopening the TUI.
-	token, err := backend.LoadOrCreateBridgeToken(b.home)
+}
+
+// WebStatus probes the Web Companion without starting it.
+func (b *Box) WebStatus(ctx context.Context) (WebStatusView, error) {
+	status, err := companion.Probe(ctx, b.home)
+	return webStatusView(status), err
+}
+
+// webLifecycleFromSetting resolves the stored "web on exit" policy into the
+// companion lifecycle used when the caller does not pick one explicitly.
+func (b *Box) webLifecycleFromSetting(ctx context.Context) string {
+	value, err := b.service.GetSetting(ctx, application.SettingWebOnExit)
+	if err == nil && value == application.OnExitKeep {
+		return companion.LifecycleKeep
+	}
+	return companion.LifecycleSession
+}
+
+// EnsureWebCompanion connects to the running Web Companion or starts one.
+// An empty lifecycle defers to the stored "web on exit" policy. The Box never
+// embeds the server itself: one companion process per home owns the port, the
+// bridge file, and web-originated writes.
+func (b *Box) EnsureWebCompanion(ctx context.Context, lifecycle string) (WebStatusView, error) {
+	if strings.TrimSpace(lifecycle) == "" {
+		lifecycle = b.webLifecycleFromSetting(ctx)
+	}
+	status, _, err := companion.Ensure(ctx, b.home, lifecycle, 0, nil)
+	return webStatusView(status), err
+}
+
+// StopWeb asks the Web Companion to shut down gracefully and waits for it.
+func (b *Box) StopWeb(ctx context.Context) error {
+	return companion.Stop(ctx, b.home)
+}
+
+// SetWebLifecycle switches a running companion between session and keep mode.
+func (b *Box) SetWebLifecycle(ctx context.Context, mode string) error {
+	return companion.SetLifecycle(ctx, b.home, mode)
+}
+
+// StartWebServer keeps the historical API: ensure the Web Companion is up and
+// return its base URL. The port argument is accepted for compatibility; the
+// companion owns port selection.
+func (b *Box) StartWebServer(ctx context.Context, _ int) (string, error) {
+	status, err := b.EnsureWebCompanion(ctx, "")
 	if err != nil {
 		return "", err
 	}
-	attempts := []int{port}
-	if port == 0 {
-		attempts = []int{DefaultBridgePort, 0}
-	}
-	var lastErr error
-	for _, candidate := range attempts {
-		server := web.NewServer(b.service)
-		server.SetToken(token)
-		baseURL, startErr := server.Start(ctx, candidate)
-		if startErr != nil {
-			lastErr = startErr
-			continue
-		}
-		listenPort := 0
-		if u, parseErr := url.Parse(baseURL); parseErr == nil {
-			listenPort, _ = strconv.Atoi(u.Port())
-		}
-		if _, writeErr := backend.WriteBridgeFile(b.home, backend.BridgeFile{
-			BaseURL:     baseURL,
-			Token:       token,
-			Port:        listenPort,
-			HostVersion: Version,
-		}); writeErr != nil {
-			_ = server.Shutdown(ctx)
-			return "", writeErr
-		}
-		b.webServer = server
-		return baseURL, nil
-	}
-	if lastErr == nil {
-		lastErr = errors.New("failed to start web server")
-	}
-	return "", lastErr
+	return status.URL, nil
 }
 
-// BridgeInfo returns the live bridge base URL and token after StartWebServer.
+// BridgeInfo returns the live bridge base URL and token from bridge.json.
 func (b *Box) BridgeInfo() (baseURL, token string) {
-	if b.webServer == nil {
+	bridge, err := backend.ReadBridgeFile(b.home)
+	if err != nil {
 		return "", ""
 	}
-	return b.webServer.BaseURL(), b.webServer.Token()
+	return bridge.BaseURL, bridge.Token
 }
 
 // GetViewer returns the configured viewer mode (leaf or web).
@@ -169,8 +199,8 @@ func (b *Box) SetSetting(ctx context.Context, key, value string) error {
 	return b.service.SetSetting(ctx, key, value)
 }
 
-// OpenDocumentWeb lazily starts the shared local web server and returns the
-// browser URL rendering the given document. The server is shut down by Close.
+// OpenDocumentWeb ensures the Web Companion is running and returns the
+// browser URL rendering the given document.
 func (b *Box) OpenDocumentWeb(ctx context.Context, selector string) (string, error) {
 	document, absolute, err := b.service.ResolveDocument(ctx, selector)
 	if err != nil {
@@ -179,10 +209,11 @@ func (b *Box) OpenDocumentWeb(ctx context.Context, selector string) (string, err
 	if document.Status != catalog.DocumentActive {
 		return "", fmt.Errorf("document %s is %s at %s", document.ID, document.Status, absolute)
 	}
-	if _, err := b.StartWebServer(ctx, 0); err != nil {
+	status, err := b.EnsureWebCompanion(ctx, "")
+	if err != nil {
 		return "", err
 	}
-	return b.webServer.ViewURL(string(document.ID)), nil
+	return status.URL + "/?id=" + string(document.ID), nil
 }
 
 type PathView struct {

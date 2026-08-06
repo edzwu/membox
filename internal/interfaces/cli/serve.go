@@ -3,12 +3,11 @@ package cli
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"time"
 
 	"github.com/spf13/cobra"
 
-	"membox"
+	"membox/internal/web/companion"
 )
 
 func newServeCommand(runtime *runtime) *cobra.Command {
@@ -20,21 +19,18 @@ func newServeCommand(runtime *runtime) *cobra.Command {
 		Short: "Start the local Miru web server and browser-bridge endpoint",
 		Args:  noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			box, err := runtime.get()
-			if err != nil {
-				return err
-			}
-
-			// --no-token is a dev escape hatch: start without auth by using the
-			// lower-level server path. Normal path always issues a token.
+			// --no-token is a dev escape hatch: run an in-process server without
+			// auth or the companion lock. Never use this for real data.
 			if noToken {
+				box, err := runtime.get()
+				if err != nil {
+					return err
+				}
 				server := box.WebServer()
 				baseURL, startErr := server.Start(cmd.Context(), port)
 				if startErr != nil {
 					return startErr
 				}
-				// Keep process-owned server alive the same way Box does.
-				// Note: this bypasses Box.webServer; shutdown locally.
 				defer func() {
 					shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 					defer cancel()
@@ -45,32 +41,21 @@ func newServeCommand(runtime *runtime) *cobra.Command {
 				return nil
 			}
 
-			baseURL, err := box.StartWebServer(cmd.Context(), port)
+			home, err := resolveHome(runtime)
 			if err != nil {
 				return err
 			}
-			_, token := box.BridgeInfo()
-			home := runtime.home
-			if home == "" {
-				config, cfgErr := membox.DefaultConfig()
-				if cfgErr != nil {
-					return cfgErr
-				}
-				home = config.Home
+			if status, _ := companion.Probe(cmd.Context(), home); status.Running {
+				return fmt.Errorf("a web companion is already running: %s (stop it with: mm web stop)", status.BaseURL)
 			}
-
 			out := cmd.OutOrStdout()
-			fmt.Fprintf(out, "membox serve\n")
-			fmt.Fprintf(out, "  URL:    %s\n", baseURL)
-			fmt.Fprintf(out, "  Bridge: %s\n", filepath.Join(home, "bridge.json"))
-			fmt.Fprintf(out, "  Token:  %s\n", token)
-			fmt.Fprintf(out, "\nPair the browser extension with this URL and token.\n")
-			fmt.Fprintf(out, "While the TUI is open it also starts this bridge automatically.\n")
-			fmt.Fprintf(out, "Press Ctrl+C to stop.\n")
-
-			<-cmd.Context().Done()
-			// Box.Close (via runtime.close) shuts down the shared server.
-			return nil
+			err = runServeForeground(cmd.Context(), runtime, port, func(format string, args ...any) {
+				fmt.Fprintf(out, format, args...)
+			})
+			if err == context.Canceled {
+				return nil
+			}
+			return err
 		},
 	}
 	command.Flags().IntVar(&port, "port", 0, "listen port (0 = prefer 8787, else ephemeral)")

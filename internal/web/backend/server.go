@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"membox/internal/application"
 	"membox/internal/domain/catalog"
@@ -38,6 +39,15 @@ type Server struct {
 	// so rename must not split that operation between the old and new location.
 	documentMu   sync.Mutex
 	annotationMu sync.Mutex
+
+	// Web Companion control plane: lifecycle mode, connected browser tabs, and
+	// the callbacks that stop the process or change modes at runtime.
+	companionMu          sync.Mutex
+	companionMode        string
+	companionStartedAt   time.Time
+	companionTabs        map[string]tabPresence
+	onCompanionStop      func()
+	onCompanionLifecycle func(mode string)
 }
 
 // NewServer receives frontend files from the composition root rather than
@@ -71,6 +81,10 @@ func (s *Server) Start(ctx context.Context, port int) (string, error) {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/status", s.handleStatus)
+	mux.HandleFunc("/api/companion/status", s.handleCompanionStatus)
+	mux.HandleFunc("/api/companion/stop", s.handleCompanionStop)
+	mux.HandleFunc("/api/companion/lifecycle", s.handleCompanionLifecycle)
+	mux.HandleFunc("/api/companion/presence", s.handleCompanionPresence)
 	mux.HandleFunc("/api/bridge/status", s.handleBridgeStatus)
 	mux.HandleFunc("/api/bridge/clips", s.handleBridgeClips)
 	mux.HandleFunc("/api/ingest", s.handleIngest)

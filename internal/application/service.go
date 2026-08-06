@@ -1408,6 +1408,7 @@ var settingSpecs = []Setting{
 	{Key: "model", Label: "model", Value: "k3", Options: []string{"k3", "grok-4.5"}},
 	{Key: SettingMainPath, Label: "main path", Value: "", Options: nil},
 	{Key: SettingHideNotes, Label: "hide notes", Value: "on", Options: []string{"on", "off"}},
+	{Key: SettingWebOnExit, Label: "web on exit", Value: OnExitAsk, Options: []string{OnExitAsk, OnExitStop, OnExitKeep}},
 }
 
 const (
@@ -1415,11 +1416,23 @@ const (
 	ViewerWeb        = "web"
 	SettingMainPath  = "main_path"
 	SettingHideNotes = "hide_notes"
+	SettingWebOnExit = "web_on_exit"
+
+	// Web Companion behavior after the TUI quits: ask interactively, stop the
+	// companion, or keep it running for the browser.
+	OnExitAsk  = "ask"
+	OnExitStop = "stop"
+	OnExitKeep = "keep"
 )
 
 // GetViewer returns the configured viewer mode, defaulting to leaf.
 func (s *Service) GetViewer(ctx context.Context) (string, error) {
 	return s.getSetting(ctx, "viewer")
+}
+
+// GetSetting returns the resolved value (stored or spec default) for a key.
+func (s *Service) GetSetting(ctx context.Context, key string) (string, error) {
+	return s.getSetting(ctx, key)
 }
 
 // SetViewer persists the viewer mode after validating it.
