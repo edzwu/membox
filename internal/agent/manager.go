@@ -2,9 +2,6 @@ package agent
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -12,8 +9,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 // Minimum Pi version accepted by the capability probe.
@@ -22,12 +17,12 @@ const MinPiVersion = "0.1.0"
 
 // Config configures the AgentManager.
 type Config struct {
-	Home           string
-	Enabled        bool
-	PiPath         string // empty = PATH lookup
-	MaxWorkers     int
-	IdleTimeout    time.Duration
-	WriteTools     bool // V1 default false
+	Home            string
+	Enabled         bool
+	PiPath          string // empty = PATH lookup
+	MaxWorkers      int
+	IdleTimeout     time.Duration
+	WriteTools      bool // V1 default false
 	InternalBaseURL func() string
 	// ExtensionSource is the TypeScript source materialized at startup.
 	ExtensionSource []byte
@@ -37,7 +32,8 @@ type Config struct {
 	GetSetting func(ctx context.Context, key string) (string, error)
 }
 
-// manager is the concrete AgentManager.
+// manager is the concrete AgentManager. All mutable state lives on the struct
+// (no package globals) so one Companion owns exactly one control plane.
 type manager struct {
 	cfg Config
 
@@ -49,12 +45,14 @@ type manager struct {
 	extensionPath string
 	sessionRoot   string
 	workers       map[string]*sessionSlot // membox session id -> slot
-	// idempotency: client|session|key -> runID
-	idempotency map[string]idempotencyEntry
-	// pending run contexts for approval routing
-	approvals map[string]*pendingApproval // approvalID -> pending
-	// run controllers
-	runs map[string]*runState // runID -> state
+
+	// Transient control-plane state, bounded and pruned.
+	idempotency map[string]idempotencyEntry // client|session|key -> runID
+	approvals   map[string]*pendingApproval // approvalID -> pending
+	runs        map[string]*runState        // runID -> state
+	workerAuths map[string]workerAuth       // workerID -> auth
+	runContexts map[string]runContextEntry  // sessionID -> pending turn context
+	createIdem  map[string]createIdemEntry  // client|key -> snapshot
 
 	probedAt time.Time
 	ctx      context.Context
@@ -66,38 +64,9 @@ type sessionSlot struct {
 	record   SessionRecord
 	worker   *worker
 	stream   *eventStream
-	loading  bool
-	failed   string
 	lastUsed time.Time
 }
 
-type idempotencyEntry struct {
-	runID     string
-	expiresAt time.Time
-}
-
-type pendingApproval struct {
-	SessionID    string
-	RunID        string
-	ControllerID string
-	Worker       *worker
-	PiRequestID  string
-	ExpiresAt    time.Time
-	Resolved     bool
-	Decision     string
-}
-
-type runState struct {
-	ID           string
-	SessionID    string
-	ControllerID string
-	DocumentID   string
-	StartedAt    time.Time
-	// controller lease retention after disconnect
-	ControllerSeen time.Time
-}
-
-// NewManager constructs a lazy-start AgentManager.
 func NewManager(cfg Config) Manager {
 	if cfg.MaxWorkers <= 0 {
 		cfg.MaxWorkers = 2
@@ -116,6 +85,9 @@ func NewManager(cfg Config) Manager {
 		idempotency: make(map[string]idempotencyEntry),
 		approvals:   make(map[string]*pendingApproval),
 		runs:        make(map[string]*runState),
+		workerAuths: make(map[string]workerAuth),
+		runContexts: make(map[string]runContextEntry),
+		createIdem:  make(map[string]createIdemEntry),
 		ctx:         ctx,
 		cancel:      cancel,
 	}
@@ -244,7 +216,6 @@ func probePi(ctx context.Context, configured string) (path, version string, err 
 			continue
 		}
 		ver := strings.TrimSpace(string(out))
-		// Accept any non-empty version for now; MinPiVersion is advisory.
 		if ver == "" {
 			last = fmtError(CodeIncompatiblePi, "empty pi version")
 			continue
@@ -289,7 +260,6 @@ func (m *manager) CreateSession(ctx context.Context, cmd CreateSessionCommand) (
 	if m.cfg.Catalog == nil {
 		return SessionSnapshot{}, fmtError(CodeInternal, "session catalog not configured")
 	}
-	// Idempotency for create: reuse key space with session="new"
 	if cmd.IdempotencyKey != "" && cmd.ClientID != "" {
 		if snap, ok := m.lookupCreateIdempotency(cmd.ClientID, cmd.IdempotencyKey); ok {
 			return snap, nil
@@ -453,182 +423,6 @@ func (m *manager) RenameSession(ctx context.Context, sessionID, title string) (S
 	return recordToView(rec, StateUnloaded, false), nil
 }
 
-func (m *manager) Prompt(ctx context.Context, cmd PromptCommand) (RunView, error) {
-	if strings.TrimSpace(cmd.Text) == "" {
-		return RunView{}, fmtError(CodeInvalidRequest, "prompt text is required")
-	}
-	if strings.TrimSpace(cmd.ClientID) == "" {
-		return RunView{}, fmtError(CodeInvalidRequest, "client id is required")
-	}
-	if err := m.ensureProbed(ctx); err != nil {
-		return RunView{}, err
-	}
-	if cmd.IdempotencyKey != "" {
-		key := idemKey(cmd.ClientID, cmd.SessionID, cmd.IdempotencyKey)
-		m.mu.Lock()
-		if entry, ok := m.idempotency[key]; ok && time.Now().Before(entry.expiresAt) {
-			runID := entry.runID
-			m.mu.Unlock()
-			return RunView{RunID: runID, Accepted: true}, nil
-		}
-		m.mu.Unlock()
-	}
-
-	slot, err := m.loadSession(ctx, cmd.SessionID)
-	if err != nil {
-		return RunView{}, err
-	}
-	if slot.worker.IsBusy() {
-		return RunView{}, fmtError(CodeBusy, "The session is already running.")
-	}
-
-	// Validate document context if provided.
-	docID := strings.TrimSpace(cmd.DocumentID)
-	if docID != "" {
-		if m.cfg.Tools == nil {
-			return RunView{}, fmtError(CodeInvalidRequest, "document tools unavailable")
-		}
-		if _, err := m.cfg.Tools.GetDocument(ctx, docID); err != nil {
-			return RunView{}, fmtError(CodeInvalidRequest, "document context not found")
-		}
-		// Stash context for the extension's before_agent_start fetch.
-		m.storeRunContext(cmd.SessionID, docID)
-	}
-
-	runID := newEntityID()
-	if err := slot.worker.prompt(context.Background(), runID, cmd.ClientID, cmd.Text, docID); err != nil {
-		return RunView{}, err
-	}
-	m.mu.Lock()
-	m.runs[runID] = &runState{
-		ID:             runID,
-		SessionID:      cmd.SessionID,
-		ControllerID:   cmd.ClientID,
-		DocumentID:     docID,
-		StartedAt:      time.Now().UTC(),
-		ControllerSeen: time.Now(),
-	}
-	if cmd.IdempotencyKey != "" {
-		m.idempotency[idemKey(cmd.ClientID, cmd.SessionID, cmd.IdempotencyKey)] = idempotencyEntry{
-			runID:     runID,
-			expiresAt: time.Now().Add(10 * time.Minute),
-		}
-		m.pruneIdempotencyLocked()
-	}
-	m.mu.Unlock()
-	_ = m.cfg.Catalog.TouchSession(ctx, cmd.SessionID, time.Now().UTC())
-	return RunView{RunID: runID, Accepted: true}, nil
-}
-
-func (m *manager) Abort(ctx context.Context, sessionID, runID, clientID string) error {
-	slot, err := m.loadSession(ctx, sessionID)
-	if err != nil {
-		return err
-	}
-	state, _, _, currentRun, _, _, _ := slot.worker.SnapshotInfo()
-	if currentRun != "" && runID != "" && currentRun != runID {
-		return fmtError(CodeInvalidRequest, "run is not active")
-	}
-	_ = state
-	_ = clientID // any authenticated client may abort; UI must warn
-	return slot.worker.abort(ctx)
-}
-
-func (m *manager) Claim(ctx context.Context, sessionID, runID, clientID string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	run, ok := m.runs[runID]
-	if !ok || run.SessionID != sessionID {
-		return fmtError(CodeInvalidRequest, "run not found")
-	}
-	// Only allow claim when controller lease expired (30s).
-	if time.Since(run.ControllerSeen) < 30*time.Second && run.ControllerID != clientID {
-		return fmtError(CodeNotRunController, "controller lease still active")
-	}
-	run.ControllerID = clientID
-	run.ControllerSeen = time.Now()
-	if slot, ok := m.workers[sessionID]; ok && slot.worker != nil {
-		slot.worker.mu.Lock()
-		slot.worker.clientID = clientID
-		slot.worker.mu.Unlock()
-	}
-	return nil
-}
-
-func (m *manager) Subscribe(ctx context.Context, sessionID, afterEventID string) (Subscription, error) {
-	if err := m.ensureProbed(ctx); err != nil {
-		return nil, err
-	}
-	slot, err := m.loadSession(ctx, sessionID)
-	if err != nil {
-		return nil, err
-	}
-	return slot.stream.Subscribe(ctx, afterEventID)
-}
-
-func (m *manager) ResolveApproval(ctx context.Context, cmd ResolveApprovalCommand) error {
-	m.mu.Lock()
-	pending, ok := m.approvals[cmd.ApprovalID]
-	if !ok {
-		m.mu.Unlock()
-		return fmtError(CodeApprovalExpired, "approval not found")
-	}
-	if pending.Resolved {
-		if pending.Decision == cmd.Decision {
-			m.mu.Unlock()
-			return nil // idempotent
-		}
-		m.mu.Unlock()
-		return fmtError(CodeApprovalResolved, "approval already resolved")
-	}
-	if pending.SessionID != cmd.SessionID || pending.RunID != cmd.RunID {
-		m.mu.Unlock()
-		return fmtError(CodeInvalidRequest, "approval mismatch")
-	}
-	if pending.ControllerID != cmd.ClientID {
-		// Allow claim-expired controllers via Claim first.
-		run := m.runs[cmd.RunID]
-		if run == nil || run.ControllerID != cmd.ClientID {
-			m.mu.Unlock()
-			return fmtError(CodeNotRunController, "only the run controller may resolve approvals")
-		}
-	}
-	if time.Now().After(pending.ExpiresAt) {
-		pending.Resolved = true
-		pending.Decision = "deny"
-		m.mu.Unlock()
-		_ = pending.Worker.respondExtensionUI(ctx, pending.PiRequestID, map[string]any{"confirmed": false})
-		return fmtError(CodeApprovalExpired, "approval expired")
-	}
-	pending.Resolved = true
-	pending.Decision = cmd.Decision
-	worker := pending.Worker
-	piID := pending.PiRequestID
-	sessionID := pending.SessionID
-	runID := pending.RunID
-	m.mu.Unlock()
-
-	confirmed := cmd.Decision == "allow_once"
-	if err := worker.respondExtensionUI(ctx, piID, map[string]any{"confirmed": confirmed}); err != nil {
-		return err
-	}
-	worker.stream.Publish(Event{
-		SessionID: sessionID,
-		RunID:     runID,
-		Type:      EventApprovalResolved,
-		Payload: payloadObject(map[string]any{
-			"approval_id": cmd.ApprovalID,
-			"decision":    cmd.Decision,
-		}),
-	})
-	worker.mu.Lock()
-	if worker.state == StateWaitingApproval {
-		worker.state = StateRunning
-	}
-	worker.mu.Unlock()
-	return nil
-}
-
 func (m *manager) ListModels(ctx context.Context) ([]ModelRef, error) {
 	if err := m.ensureProbed(ctx); err != nil {
 		return nil, err
@@ -643,7 +437,6 @@ func (m *manager) ListModels(ctx context.Context) ([]ModelRef, error) {
 		}
 	}
 	m.mu.Unlock()
-	// Temporary worker for model listing.
 	stream := newEventStream("probe")
 	w, err := m.spawnWorker(ctx, "probe-"+newEntityID()[:8], SessionRecord{Title: "probe"}, "", stream, nil)
 	if err != nil {
@@ -730,6 +523,9 @@ func (m *manager) Shutdown(ctx context.Context) error {
 		slots = append(slots, slot)
 		delete(m.workers, id)
 	}
+	for workerID := range m.workerAuths {
+		delete(m.workerAuths, workerID)
+	}
 	m.mu.Unlock()
 	var errs []error
 	for _, slot := range slots {
@@ -746,8 +542,9 @@ func (m *manager) Shutdown(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// --- internal helpers ---
-
+// loadSession returns the live slot for a session, spawning its worker when
+// needed. Concurrent loaders race safely: the loser stops its worker and
+// joins the winner's slot.
 func (m *manager) loadSession(ctx context.Context, sessionID string) (*sessionSlot, error) {
 	if m.cfg.Catalog == nil {
 		return nil, fmtError(CodeInternal, "session catalog not configured")
@@ -788,7 +585,6 @@ func (m *manager) loadSession(ctx context.Context, sessionID string) (*sessionSl
 	}
 	slot := &sessionSlot{record: rec, worker: worker, stream: stream, lastUsed: time.Now()}
 	m.mu.Lock()
-	// Double-check race: another loader may have won.
 	if existing, ok := m.workers[sessionID]; ok && existing.worker != nil {
 		m.mu.Unlock()
 		_ = worker.Stop(ctx)
@@ -800,6 +596,8 @@ func (m *manager) loadSession(ctx context.Context, sessionID string) (*sessionSl
 	return slot, nil
 }
 
+// spawnWorker starts one Pi RPC process bound to sessionID and registers its
+// internal credentials plus approval routing before the process runs.
 func (m *manager) spawnWorker(ctx context.Context, sessionID string, rec SessionRecord, sessionPath string, stream *eventStream, model *ModelRef) (*worker, error) {
 	m.mu.Lock()
 	piPath := m.piPath
@@ -839,339 +637,38 @@ func (m *manager) spawnWorker(ctx context.Context, sessionID string, rec Session
 		cfg.ModelID = rec.ModelID
 	}
 	w := newWorker(m.ctx, cfg, stream)
-	// Register internal credentials before Start so extension can call back.
-	registerWorkerAuth(workerID, sessionID, token, m)
-	w.onSettled = func(runID string, interrupted bool) {
+	w.onSettled = func(runID string, _ bool) {
 		m.mu.Lock()
 		delete(m.runs, runID)
 		m.mu.Unlock()
-		_ = interrupted
 	}
-	// Capture extension UI approvals into manager map.
-	// Monkey-patch via stream listener? worker already publishes approval.requested;
-	// we intercept by wrapping handleExtensionUI through a callback.
-	w.mu.Lock()
-	// Install approval bridge after start by watching stream — simpler: override via onApproval.
-	w.mu.Unlock()
+	w.onApprovalRequested = func(req ApprovalRequest) {
+		timeout := 60 * time.Second
+		if req.TimeoutMS > 0 {
+			timeout = time.Duration(req.TimeoutMS) * time.Millisecond
+		}
+		m.mu.Lock()
+		m.approvals[req.ApprovalID] = &pendingApproval{
+			SessionID:    req.SessionID,
+			RunID:        req.RunID,
+			ControllerID: req.ControllerID,
+			Worker:       w,
+			PiRequestID:  req.ApprovalID,
+			ExpiresAt:    time.Now().Add(timeout),
+		}
+		m.mu.Unlock()
+	}
+	m.registerWorkerAuth(workerID, sessionID, token)
 
 	if err := w.Start(); err != nil {
-		revokeWorkerAuth(workerID)
+		m.revokeWorkerAuth(workerID)
 		return nil, err
 	}
-	// Hook approvals: re-bind handle by storing manager reference on worker via stream events.
-	// We register a side channel: when approval.requested is published, manager records it.
-	// Done by wrapping Publish — instead, poll is wrong. Attach callback:
-	m.attachApprovalBridge(w, sessionID)
 	return w, nil
 }
 
-func (m *manager) attachApprovalBridge(w *worker, sessionID string) {
-	// Replace stream publish is hard; instead wrap worker's handle by storing manager.
-	// We intercept at ResolveApproval time from events already published.
-	// Record pending approvals when events of type approval.requested appear —
-	// subscribe internally once.
-	go func() {
-		sub, err := w.stream.Subscribe(m.ctx, "")
-		if err != nil {
-			return
-		}
-		defer sub.Close()
-		for {
-			select {
-			case <-m.ctx.Done():
-				return
-			case ev, ok := <-sub.Events():
-				if !ok {
-					return
-				}
-				if ev.Type != EventApprovalRequested {
-					continue
-				}
-				var payload struct {
-					ApprovalID   string `json:"approval_id"`
-					ControllerID string `json:"controller_id"`
-					TimeoutMS    int    `json:"timeout_ms"`
-				}
-				_ = json.Unmarshal(ev.Payload, &payload)
-				timeout := 60 * time.Second
-				if payload.TimeoutMS > 0 {
-					timeout = time.Duration(payload.TimeoutMS) * time.Millisecond
-				}
-				m.mu.Lock()
-				m.approvals[payload.ApprovalID] = &pendingApproval{
-					SessionID:    sessionID,
-					RunID:        ev.RunID,
-					ControllerID: payload.ControllerID,
-					Worker:       w,
-					PiRequestID:  payload.ApprovalID,
-					ExpiresAt:    time.Now().Add(timeout),
-				}
-				m.mu.Unlock()
-			}
-		}
-	}()
-}
-
-func (m *manager) ensureCapacity(ctx context.Context) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	loaded := 0
-	for _, slot := range m.workers {
-		if slot.worker != nil {
-			loaded++
-		}
-	}
-	if loaded < m.cfg.MaxWorkers {
-		return nil
-	}
-	// Evict longest-idle unloaded-eligible worker.
-	var (
-		victimID string
-		victim   *sessionSlot
-		oldest   time.Time
-	)
-	for id, slot := range m.workers {
-		if slot.worker == nil {
-			continue
-		}
-		if slot.worker.IsBusy() {
-			continue
-		}
-		if slot.stream != nil && slot.stream.SubscriberCount() > 0 {
-			continue
-		}
-		idleSince := slot.worker.IdleSince()
-		if victimID == "" || idleSince.Before(oldest) {
-			victimID, victim, oldest = id, slot, idleSince
-		}
-	}
-	if victim == nil {
-		return fmtError(CodeCapacityReached, "agent worker capacity reached")
-	}
-	delete(m.workers, victimID)
-	go func() {
-		_ = victim.worker.Stop(ctx)
-		victim.stream.Close()
-	}()
-	return nil
-}
-
-func (m *manager) evictionLoop() {
-	defer m.wg.Done()
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-m.ctx.Done():
-			return
-		case <-ticker.C:
-			m.evictIdle()
-		}
-	}
-}
-
-func (m *manager) evictIdle() {
-	m.mu.Lock()
-	var victims []*sessionSlot
-	var ids []string
-	now := time.Now()
-	for id, slot := range m.workers {
-		if slot.worker == nil {
-			continue
-		}
-		if slot.worker.IsBusy() {
-			continue
-		}
-		if slot.stream != nil && slot.stream.SubscriberCount() > 0 {
-			continue
-		}
-		if now.Sub(slot.worker.IdleSince()) >= m.cfg.IdleTimeout {
-			victims = append(victims, slot)
-			ids = append(ids, id)
-			delete(m.workers, id)
-		}
-	}
-	m.mu.Unlock()
-	for _, slot := range victims {
-		_ = slot.worker.Stop(context.Background())
-		slot.stream.Close()
-	}
-}
-
-// Run context stash for extension before_agent_start.
-var (
-	runContextMu sync.Mutex
-	runContexts  = map[string]runContextEntry{} // sessionID -> context
-)
-
-type runContextEntry struct {
-	DocumentID string
-	Title      string
-	Status     string
-	ExpiresAt  time.Time
-}
-
-func (m *manager) storeRunContext(sessionID, documentID string) {
-	title, status := "", ""
-	if m.cfg.Tools != nil {
-		if view, err := m.cfg.Tools.GetDocument(context.Background(), documentID); err == nil {
-			title, status = view.Title, view.Status
-		}
-	}
-	runContextMu.Lock()
-	runContexts[sessionID] = runContextEntry{
-		DocumentID: documentID,
-		Title:      title,
-		Status:     status,
-		ExpiresAt:  time.Now().Add(5 * time.Minute),
-	}
-	runContextMu.Unlock()
-}
-
-// TakeRunContext is called once by the internal HTTP handler for the extension.
-func TakeRunContext(sessionID string) (runContextEntry, bool) {
-	runContextMu.Lock()
-	defer runContextMu.Unlock()
-	entry, ok := runContexts[sessionID]
-	if !ok {
-		return runContextEntry{}, false
-	}
-	delete(runContexts, sessionID)
-	if time.Now().After(entry.ExpiresAt) {
-		return runContextEntry{}, false
-	}
-	return entry, true
-}
-
-// Worker auth registry for internal endpoints.
-type workerAuth struct {
-	SessionID string
-	Token     string
-	Manager   *manager
-}
-
-var (
-	workerAuthMu sync.Mutex
-	workerAuths  = map[string]workerAuth{} // workerID -> auth
-)
-
-func registerWorkerAuth(workerID, sessionID, token string, m *manager) {
-	workerAuthMu.Lock()
-	workerAuths[workerID] = workerAuth{SessionID: sessionID, Token: token, Manager: m}
-	workerAuthMu.Unlock()
-}
-
-func revokeWorkerAuth(workerID string) {
-	workerAuthMu.Lock()
-	delete(workerAuths, workerID)
-	workerAuthMu.Unlock()
-}
-
-// LookupWorkerAuth validates an internal worker request.
-func LookupWorkerAuth(workerID, sessionID, token string) (InternalManager, bool) {
-	workerAuthMu.Lock()
-	defer workerAuthMu.Unlock()
-	auth, ok := workerAuths[workerID]
-	if !ok {
-		return nil, false
-	}
-	if auth.SessionID != sessionID || auth.Token == "" || auth.Token != token {
-		return nil, false
-	}
-	return auth.Manager, true
-}
-
-// ManagerHandle is a validated internal worker identity.
-type ManagerHandle struct {
-	Manager   InternalManager
-	SessionID string
-	WorkerID  string
-}
-
-// InternalManager is the subset of manager used by internal HTTP handlers.
-type InternalManager interface {
-	ToolsFor() DocumentTools
-	WriteToolsEnabled() bool
-}
-
-// ToolsFor returns document tools from a manager (for internal HTTP).
+// ToolsFor exposes document tools to the internal HTTP adapter.
 func (m *manager) ToolsFor() DocumentTools { return m.cfg.Tools }
 
+// WriteToolsEnabled reports whether write tools are active for this manager.
 func (m *manager) WriteToolsEnabled() bool { return m.cfg.WriteTools }
-
-// AsInternal exposes the concrete manager as InternalManager after auth.
-func (m *manager) AsInternal() InternalManager { return m }
-
-// create-session idempotency (stores full snapshot briefly)
-var (
-	createIdemMu sync.Mutex
-	createIdem   = map[string]struct {
-		snap SessionSnapshot
-		exp  time.Time
-	}{}
-)
-
-func (m *manager) lookupCreateIdempotency(clientID, key string) (SessionSnapshot, bool) {
-	createIdemMu.Lock()
-	defer createIdemMu.Unlock()
-	entry, ok := createIdem[clientID+"|"+key]
-	if !ok || time.Now().After(entry.exp) {
-		return SessionSnapshot{}, false
-	}
-	return entry.snap, true
-}
-
-func (m *manager) storeCreateIdempotency(clientID, key string, snap SessionSnapshot) {
-	createIdemMu.Lock()
-	defer createIdemMu.Unlock()
-	createIdem[clientID+"|"+key] = struct {
-		snap SessionSnapshot
-		exp  time.Time
-	}{snap: snap, exp: time.Now().Add(10 * time.Minute)}
-}
-
-func (m *manager) pruneIdempotencyLocked() {
-	now := time.Now()
-	for k, v := range m.idempotency {
-		if now.After(v.expiresAt) {
-			delete(m.idempotency, k)
-		}
-	}
-	// Bound map size.
-	if len(m.idempotency) > 1000 {
-		for k := range m.idempotency {
-			delete(m.idempotency, k)
-			if len(m.idempotency) <= 500 {
-				break
-			}
-		}
-	}
-}
-
-func idemKey(clientID, sessionID, key string) string {
-	return clientID + "|" + sessionID + "|" + key
-}
-
-func randomToken(n int) string {
-	b := make([]byte, n)
-	if _, err := rand.Read(b); err != nil {
-		id, _ := uuid.NewV7()
-		return id.String()
-	}
-	return hex.EncodeToString(b)
-}
-
-func nilString(s string) *string {
-	if s == "" {
-		return nil
-	}
-	return &s
-}
-
-// writeToolsFlag formats the worker env var the embedded extension checks.
-func writeToolsFlag(enabled bool) string {
-	if enabled {
-		return "1"
-	}
-	return "0"
-}

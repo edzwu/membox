@@ -479,13 +479,13 @@ type ingestRequest struct {
 }
 
 type ingestResponse struct {
-	ID        string `json:"id"`
-	Path      string `json:"path"`
-	Created   bool   `json:"created"`
-	Updated   bool   `json:"updated,omitempty"`
-	ViewURL   string `json:"view_url"`
-	Linked    string `json:"linked,omitempty"`
-	Title     string `json:"title,omitempty"`
+	ID      string `json:"id"`
+	Path    string `json:"path"`
+	Created bool   `json:"created"`
+	Updated bool   `json:"updated,omitempty"`
+	ViewURL string `json:"view_url"`
+	Linked  string `json:"linked,omitempty"`
+	Title   string `json:"title,omitempty"`
 }
 
 type ingestConflictResponse struct {

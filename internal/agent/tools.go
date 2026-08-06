@@ -39,14 +39,14 @@ type DocumentHit struct {
 
 // DocumentChunk is a bounded body read.
 type DocumentChunk struct {
-	ID           string `json:"id"`
-	Title        string `json:"title"`
-	Revision     string `json:"revision"`
-	Text         string `json:"text"`
-	Offset       int    `json:"offset"`
-	NextCursor   string `json:"next_cursor,omitempty"`
-	TotalRunes   int    `json:"total_runes"`
-	Truncated    bool   `json:"truncated"`
+	ID         string `json:"id"`
+	Title      string `json:"title"`
+	Revision   string `json:"revision"`
+	Text       string `json:"text"`
+	Offset     int    `json:"offset"`
+	NextCursor string `json:"next_cursor,omitempty"`
+	TotalRunes int    `json:"total_runes"`
+	Truncated  bool   `json:"truncated"`
 }
 
 // DocumentView is metadata for one document.
@@ -62,18 +62,18 @@ type DocumentView struct {
 
 // RelatedView summarizes neighborhood links.
 type RelatedView struct {
-	ID      string        `json:"id"`
-	Notes   []DocumentHit `json:"notes"`
-	Links   []DocumentHit `json:"links"`
-	Topics  []DocumentHit `json:"topics"`
+	ID     string        `json:"id"`
+	Notes  []DocumentHit `json:"notes"`
+	Links  []DocumentHit `json:"links"`
+	Topics []DocumentHit `json:"topics"`
 }
 
 // CreateNoteCommand creates a plain note (Phase 4).
 type CreateNoteCommand struct {
-	Title      string `json:"title"`
-	Body       string `json:"body"`
-	TargetID   string `json:"target_id,omitempty"`
-	PreviewOK  bool   `json:"-"`
+	Title     string `json:"title"`
+	Body      string `json:"body"`
+	TargetID  string `json:"target_id,omitempty"`
+	PreviewOK bool   `json:"-"`
 }
 
 // UpdateDocumentCommand replaces document body with revision check (Phase 4).

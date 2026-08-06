@@ -24,6 +24,20 @@ type Manager interface {
 	SetThinking(ctx context.Context, sessionID, level string) error
 	Doctor(ctx context.Context) (DoctorReport, error)
 	Shutdown(ctx context.Context) error
+
+	// Internal worker API (used by the Companion's worker-only HTTP adapter).
+	ValidateWorker(workerID, sessionID, token string) bool
+	TakeRunContext(sessionID string) (RunContext, bool)
+	ToolsFor() DocumentTools
+	WriteToolsEnabled() bool
+}
+
+// ManagerHandle is a validated internal worker identity handed to the
+// worker-only HTTP handlers.
+type ManagerHandle struct {
+	Manager   Manager
+	SessionID string
+	WorkerID  string
 }
 
 // Status is the lightweight capability probe result.
@@ -64,11 +78,31 @@ type PromptCommand struct {
 
 // ResolveApprovalCommand answers one write confirmation.
 type ResolveApprovalCommand struct {
-	SessionID   string
-	RunID       string
-	ApprovalID  string
-	ClientID    string
-	Decision    string // allow_once | deny
+	SessionID  string
+	RunID      string
+	ApprovalID string
+	ClientID   string
+	Decision   string // allow_once | deny
+}
+
+// ApprovalRequest is the structured payload a worker delivers to the manager
+// when a write tool asks for user confirmation.
+type ApprovalRequest struct {
+	ApprovalID   string
+	SessionID    string
+	RunID        string
+	ControllerID string
+	Title        string
+	Message      string
+	TimeoutMS    int
+}
+
+// RunContext is the per-turn document context the extension fetches once at
+// before_agent_start.
+type RunContext struct {
+	DocumentID string `json:"document_id"`
+	Title      string `json:"title"`
+	Status     string `json:"status"`
 }
 
 // ModelRef identifies a configured Pi model.
@@ -109,11 +143,11 @@ type ActiveRun struct {
 
 // SessionSnapshot is the reconnect recovery payload.
 type SessionSnapshot struct {
-	Session      SessionView      `json:"session"`
-	Messages     []json.RawMessage `json:"messages"`
-	ActiveRun    *ActiveRun       `json:"active_run"`
-	LastEventID  string           `json:"last_event_id"`
-	StreamEpoch  string           `json:"stream_epoch"`
+	Session     SessionView       `json:"session"`
+	Messages    []json.RawMessage `json:"messages"`
+	ActiveRun   *ActiveRun        `json:"active_run"`
+	LastEventID string            `json:"last_event_id"`
+	StreamEpoch string            `json:"stream_epoch"`
 }
 
 // Event is the normalized public event model.
@@ -172,16 +206,16 @@ const (
 
 // Session/worker state constants.
 const (
-	StateDisabled     = "disabled"
-	StateProbing      = "probing"
-	StateReady        = "ready"
-	StateUnavailable  = "unavailable"
-	StateUnloaded     = "unloaded"
-	StateStarting     = "starting"
-	StateIdle         = "idle"
-	StateRunning      = "running"
-	StateFailed       = "failed"
-	StateRestarting   = "restarting"
-	StateInterrupted  = "interrupted"
+	StateDisabled        = "disabled"
+	StateProbing         = "probing"
+	StateReady           = "ready"
+	StateUnavailable     = "unavailable"
+	StateUnloaded        = "unloaded"
+	StateStarting        = "starting"
+	StateIdle            = "idle"
+	StateRunning         = "running"
+	StateFailed          = "failed"
+	StateRestarting      = "restarting"
+	StateInterrupted     = "interrupted"
 	StateWaitingApproval = "waiting_approval"
 )

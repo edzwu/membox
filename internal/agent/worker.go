@@ -75,8 +75,12 @@ type worker struct {
 	closed atomic.Bool
 	wg     sync.WaitGroup
 
-	// onEvent is invoked for every normalized public event (optional).
+	// onSettled is invoked when a run settles (success or interrupted).
 	onSettled func(runID string, interrupted bool)
+	// onApprovalRequested is invoked synchronously when a write tool asks for
+	// confirmation — the manager registers it before Start, replacing any
+	// need to eavesdrop on the event stream.
+	onApprovalRequested func(approval ApprovalRequest)
 }
 
 func newWorker(parent context.Context, cfg workerConfig, stream *eventStream) *worker {
@@ -516,7 +520,7 @@ func (w *worker) dispatchEvents() {
 		case "message_end":
 			var msg struct {
 				Message struct {
-					Role    string `json:"role"`
+					Role    string          `json:"role"`
 					Content json.RawMessage `json:"content"`
 				} `json:"message"`
 			}
@@ -570,9 +574,9 @@ func (w *worker) dispatchEvents() {
 
 		case "tool_execution_end":
 			var body struct {
-				ToolCallID string `json:"toolCallId"`
-				ToolName   string `json:"toolName"`
-				IsError    bool   `json:"isError"`
+				ToolCallID string          `json:"toolCallId"`
+				ToolName   string          `json:"toolName"`
+				IsError    bool            `json:"isError"`
 				Result     json.RawMessage `json:"result"`
 			}
 			raw, _ := json.Marshal(event)
@@ -669,7 +673,19 @@ func (w *worker) handleExtensionUI(event rpcEvent, runID string) {
 		w.mu.Lock()
 		w.state = StateWaitingApproval
 		controller := w.clientID
+		cb := w.onApprovalRequested
 		w.mu.Unlock()
+		if cb != nil {
+			cb(ApprovalRequest{
+				ApprovalID:   approvalID,
+				SessionID:    w.cfg.SessionID,
+				RunID:        runID,
+				ControllerID: controller,
+				Title:        req.Title,
+				Message:      req.Message,
+				TimeoutMS:    req.Timeout,
+			})
+		}
 		w.stream.Publish(Event{
 			SessionID: w.cfg.SessionID,
 			RunID:     runID,
@@ -799,6 +815,33 @@ func (w *worker) IsBusy() bool {
 	return w.state == StateRunning || w.state == StateWaitingApproval
 }
 
+// SetController transfers run control to another client (Claim flow).
+func (w *worker) SetController(clientID string) {
+	w.mu.Lock()
+	w.clientID = clientID
+	w.mu.Unlock()
+}
+
+// Controller returns the client currently owning the run, if any.
+func (w *worker) Controller() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.clientID
+}
+
+// ResumeAfterApproval moves a waiting-for-approval worker back to running.
+func (w *worker) ResumeAfterApproval() {
+	w.mu.Lock()
+	if w.state == StateWaitingApproval {
+		w.state = StateRunning
+	}
+	w.mu.Unlock()
+}
+
+// Stream exposes the normalized event stream (used by the manager to route
+// approval events only; subscriptions belong to HTTP handlers).
+func (w *worker) Stream() *eventStream { return w.stream }
+
 func killProcessGroup(cmd *exec.Cmd) {
 	if cmd == nil || cmd.Process == nil {
 		return
@@ -816,10 +859,6 @@ func newCommandID() string {
 		return fmt.Sprintf("%d", time.Now().UnixNano())
 	}
 	return id.String()
-}
-
-func newEntityID() string {
-	return newCommandID()
 }
 
 func cloneModel(m *ModelRef) *ModelRef {

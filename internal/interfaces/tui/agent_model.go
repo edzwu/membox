@@ -22,11 +22,11 @@ type agentUIState struct {
 	status   agentStatusPayload
 	badge    string // OFF | CONNECTING | READY | RUNNING | ERROR
 
-	sessionID   string
-	sessionTitle string
-	lastEventID string
-	runID       string
-	documentID  string // attached on next prompt
+	sessionID     string
+	sessionTitle  string
+	lastEventID   string
+	runID         string
+	documentID    string // attached on next prompt
 	documentTitle string
 
 	// transcript lines (simple V1 rendering)

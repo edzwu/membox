@@ -98,11 +98,11 @@ func (j *jsonlWriter) WriteJSON(v any) error {
 // jsonlReader splits an input stream on byte 0x0A only.
 // It deliberately does not treat U+2028/U+2029 as record boundaries.
 type jsonlReader struct {
-	r          io.Reader
-	maxFrame   int
-	buf        []byte
-	pending    []byte
-	closed     atomic.Bool
+	r        io.Reader
+	maxFrame int
+	buf      []byte
+	pending  []byte
+	closed   atomic.Bool
 }
 
 func newJSONLReader(r io.Reader, maxFrame int) *jsonlReader {
@@ -173,11 +173,11 @@ func decodeRPCEvent(frame []byte) (rpcEvent, error) {
 
 // ringLog is a bounded stderr capture that never mixes into the protocol stream.
 type ringLog struct {
-	mu      sync.Mutex
-	lines   []string
+	mu       sync.Mutex
+	lines    []string
 	maxLines int
 	maxBytes int
-	bytes   int
+	bytes    int
 }
 
 func newRingLog(maxLines, maxBytes int) *ringLog {

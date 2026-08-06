@@ -19,18 +19,18 @@ const (
 
 // eventStream is a per-session normalized event ring with live subscribers.
 type eventStream struct {
-	mu         sync.Mutex
-	sessionID  string
-	epoch      string
-	seq        uint64
-	events     []Event
-	bytes      int
-	maxEvents  int
-	maxBytes   int
-	subQueue   int
-	subs       map[uint64]*subscriber
-	nextSubID  uint64
-	closed     bool
+	mu        sync.Mutex
+	sessionID string
+	epoch     string
+	seq       uint64
+	events    []Event
+	bytes     int
+	maxEvents int
+	maxBytes  int
+	subQueue  int
+	subs      map[uint64]*subscriber
+	nextSubID uint64
+	closed    bool
 }
 
 type subscriber struct {

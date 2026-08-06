@@ -11,11 +11,11 @@ import (
 )
 
 const (
-	headerIdempotencyKey   = "Idempotency-Key"
-	headerAgentClient      = "X-Membox-Agent-Client"
-	headerCSRF             = "X-Membox-CSRF"
-	agentAPIVersion        = 1
-	sseHeartbeatInterval   = 15 * time.Second
+	headerIdempotencyKey = "Idempotency-Key"
+	headerAgentClient    = "X-Membox-Agent-Client"
+	headerCSRF           = "X-Membox-CSRF"
+	agentAPIVersion      = 1
+	sseHeartbeatInterval = 15 * time.Second
 )
 
 // SetAgentManager wires the Companion-owned Agent control plane.
@@ -70,15 +70,15 @@ func (s *Server) handleAgentStatus(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	writeAgentJSON(writer, http.StatusOK, map[string]any{
-		"v":               agentAPIVersion,
-		"enabled":         status.Enabled,
-		"available":       status.Available,
-		"pi_version":      status.PiVersion,
-		"state":           status.State,
-		"loaded_workers":  status.LoadedWorkers,
-		"max_workers":     status.MaxWorkers,
-		"write_tools":     status.WriteTools,
-		"error":           status.Error,
+		"v":              agentAPIVersion,
+		"enabled":        status.Enabled,
+		"available":      status.Available,
+		"pi_version":     status.PiVersion,
+		"state":          status.State,
+		"loaded_workers": status.LoadedWorkers,
+		"max_workers":    status.MaxWorkers,
+		"write_tools":    status.WriteTools,
+		"error":          status.Error,
 	})
 }
 

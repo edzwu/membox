@@ -9,17 +9,17 @@ import (
 
 // SessionRecord is the SQLite catalog row for one Agent session.
 type SessionRecord struct {
-	ID             string
-	PiSessionID    string
-	SessionPath    string
-	Title          string
-	ModelProvider  string
-	ModelID        string
-	ThinkingLevel  string
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
-	LastUsedAt     time.Time
-	Archived       bool
+	ID            string
+	PiSessionID   string
+	SessionPath   string
+	Title         string
+	ModelProvider string
+	ModelID       string
+	ThinkingLevel string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+	LastUsedAt    time.Time
+	Archived      bool
 }
 
 // SessionCatalog persists membox-facing session metadata.

@@ -114,10 +114,10 @@ type scannable interface {
 
 func scanSession(row scannable) (agent.SessionRecord, error) {
 	var (
-		rec                                        agent.SessionRecord
-		created, updated, lastUsed                 int64
-		archived                                   int
-		piSID, modelProvider, modelID, thinking    string
+		rec                                     agent.SessionRecord
+		created, updated, lastUsed              int64
+		archived                                int
+		piSID, modelProvider, modelID, thinking string
 	)
 	err := row.Scan(
 		&rec.ID, &piSID, &rec.SessionPath, &rec.Title,

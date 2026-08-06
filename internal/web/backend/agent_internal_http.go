@@ -25,8 +25,8 @@ func (s *Server) requireAgentWorker(writer http.ResponseWriter, request *http.Re
 		http.Error(writer, "unauthorized", http.StatusUnauthorized)
 		return nil, false
 	}
-	mgr, ok := agent.LookupWorkerAuth(workerID, sessionID, token)
-	if !ok {
+	mgr := s.agentManager()
+	if mgr == nil || !mgr.ValidateWorker(workerID, sessionID, token) {
 		http.Error(writer, "unauthorized", http.StatusUnauthorized)
 		return nil, false
 	}
@@ -42,7 +42,7 @@ func (s *Server) handleAgentInternalContext(writer http.ResponseWriter, request 
 	if !ok {
 		return
 	}
-	entry, found := agent.TakeRunContext(handle.SessionID)
+	entry, found := handle.Manager.TakeRunContext(handle.SessionID)
 	if !found {
 		// No document context for this turn is valid.
 		writeAgentJSON(writer, http.StatusOK, map[string]any{"v": agentAPIVersion})

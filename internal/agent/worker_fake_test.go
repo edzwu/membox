@@ -192,12 +192,12 @@ func TestManagerCreateAndPromptIdempotent(t *testing.T) {
 	// Make fake-pi appear as "pi" for probe? Manager uses configured PiPath.
 	cat := &memCatalog{recs: map[string]SessionRecord{}}
 	mgr := NewManager(Config{
-		Home:        home,
-		Enabled:     true,
-		PiPath:      fake,
-		MaxWorkers:  2,
-		IdleTimeout: time.Hour,
-		Catalog:     cat,
+		Home:            home,
+		Enabled:         true,
+		PiPath:          fake,
+		MaxWorkers:      2,
+		IdleTimeout:     time.Hour,
+		Catalog:         cat,
 		ExtensionSource: []byte("// fake\nexport default function() {}\n"),
 	}).(*manager)
 
