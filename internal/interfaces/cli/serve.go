@@ -19,9 +19,18 @@ func newServeCommand(runtime *runtime) *cobra.Command {
 		Short: "Start the local Miru web server and browser-bridge endpoint",
 		Args:  noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			// --no-token is a dev escape hatch: run an in-process server without
-			// auth or the companion lock. Never use this for real data.
+			home, err := resolveHome(runtime)
+			if err != nil {
+				return err
+			}
+			// --no-token skips HTTP auth only. It cannot share a home with a
+			// companion; all data mutations still use the home mutation lock.
 			if noToken {
+				releaseOwnership, lockErr := companion.AcquireLock(home)
+				if lockErr != nil {
+					return fmt.Errorf("claiming web ownership for --no-token: %w", lockErr)
+				}
+				defer releaseOwnership()
 				box, err := runtime.get()
 				if err != nil {
 					return err
@@ -41,10 +50,6 @@ func newServeCommand(runtime *runtime) *cobra.Command {
 				return nil
 			}
 
-			home, err := resolveHome(runtime)
-			if err != nil {
-				return err
-			}
 			if status, _ := companion.Probe(cmd.Context(), home); status.Running {
 				return fmt.Errorf("a web companion is already running: %s (stop it with: mm web stop)", status.BaseURL)
 			}

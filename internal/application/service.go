@@ -26,13 +26,41 @@ type Service struct {
 	ids     port.IDGenerator
 	clock   port.Clock
 	history port.GitHistory
+	// mutations serializes every mutating operation across all processes
+	// sharing this membox home. Nil in unit tests without a home directory.
+	mutations port.MutationLocker
 }
 
 func NewService(store port.CatalogStore, scanner port.MarkdownScanner, reader port.ContentReader, writer port.ContentWriter, ids port.IDGenerator, clock port.Clock, history port.GitHistory) *Service {
 	return &Service{store: store, scanner: scanner, reader: reader, writer: writer, ids: ids, clock: clock, history: history}
 }
 
-func (s *Service) Close() error { return s.store.Close() }
+// SetMutationLocker installs the cross-process mutation lock. Bootstrap wires
+// it immediately after construction; callers that never share the home (unit
+// tests) can skip it.
+func (s *Service) SetMutationLocker(locker port.MutationLocker) { s.mutations = locker }
+
+func (s *Service) Close() error {
+	var err error
+	if s.mutations != nil {
+		err = s.mutations.Close()
+	}
+	return errors.Join(s.store.Close(), err)
+}
+
+// beginMutation takes the cross-process mutation lock; the returned release
+// function must be called exactly once. The lock is reentrant per goroutine,
+// so composed operations (e.g. SaveAnnotationNote → CreateNote) serialize
+// once for the whole resolve → file write → observe → commit sequence.
+func (s *Service) beginMutation() (func(), error) {
+	if s.mutations == nil {
+		return func() {}, nil
+	}
+	if err := s.mutations.Lock(); err != nil {
+		return nil, err
+	}
+	return func() { _ = s.mutations.Unlock() }, nil
+}
 
 type AddPathResult struct {
 	Path          port.PathSummary
@@ -76,6 +104,11 @@ func (r *ScanReport) Add(other ScanReport) {
 }
 
 func (s *Service) AddPath(ctx context.Context, directory string) (AddPathResult, error) {
+	release, lockErr := s.beginMutation()
+	if lockErr != nil {
+		return AddPathResult{}, lockErr
+	}
+	defer release()
 	canonical, err := s.scanner.Canonicalize(directory)
 	if err != nil {
 		return AddPathResult{}, err
@@ -118,6 +151,11 @@ type RemovePathResult struct {
 }
 
 func (s *Service) RemovePath(ctx context.Context, selector string) (RemovePathResult, error) {
+	release, lockErr := s.beginMutation()
+	if lockErr != nil {
+		return RemovePathResult{}, lockErr
+	}
+	defer release()
 	indexedPath, err := s.resolvePath(ctx, selector)
 	if err != nil {
 		return RemovePathResult{}, err
@@ -131,6 +169,11 @@ func (s *Service) RemovePath(ctx context.Context, selector string) (RemovePathRe
 }
 
 func (s *Service) ScanPaths(ctx context.Context, opts ScanOptions) (ScanReport, error) {
+	release, lockErr := s.beginMutation()
+	if lockErr != nil {
+		return ScanReport{}, lockErr
+	}
+	defer release()
 	timestampSource := strings.ToLower(strings.TrimSpace(opts.TimestampSource))
 	if timestampSource == "" {
 		timestampSource = "filesystem"
@@ -454,6 +497,11 @@ type ToggleDocumentPinResult struct {
 }
 
 func (s *Service) ToggleDocumentPin(ctx context.Context, selector string) (ToggleDocumentPinResult, error) {
+	release, lockErr := s.beginMutation()
+	if lockErr != nil {
+		return ToggleDocumentPinResult{}, lockErr
+	}
+	defer release()
 	document, _, err := s.ResolveDocument(ctx, selector)
 	if err != nil {
 		return ToggleDocumentPinResult{}, err
@@ -468,6 +516,11 @@ func (s *Service) ToggleDocumentPin(ctx context.Context, selector string) (Toggl
 // SaveAnnotations is the legacy-sidecar migration adapter. New note content
 // must use SaveAnnotationNote; an empty value clears the compatibility blob.
 func (s *Service) SaveAnnotations(ctx context.Context, selector string, sidecar string) (catalog.DocumentID, error) {
+	release, lockErr := s.beginMutation()
+	if lockErr != nil {
+		return "", lockErr
+	}
+	defer release()
 	document, _, err := s.ResolveDocument(ctx, selector)
 	if err != nil {
 		return "", err
@@ -510,6 +563,11 @@ type SaveAnnotationNoteResult struct {
 // SaveAnnotationNote creates or updates the Markdown document that contains a
 // selection note, then stores only its target/anchor metadata in SQLite.
 func (s *Service) SaveAnnotationNote(ctx context.Context, opts SaveAnnotationNoteOptions) (SaveAnnotationNoteResult, error) {
+	release, lockErr := s.beginMutation()
+	if lockErr != nil {
+		return SaveAnnotationNoteResult{}, lockErr
+	}
+	defer release()
 	target, _, err := s.ResolveDocument(ctx, opts.TargetSelector)
 	if err != nil {
 		return SaveAnnotationNoteResult{}, err
@@ -610,6 +668,11 @@ func (s *Service) GetAnnotationNote(ctx context.Context, noteSelector string) (p
 }
 
 func (s *Service) DeleteAnnotationNote(ctx context.Context, targetSelector, noteSelector string) error {
+	release, lockErr := s.beginMutation()
+	if lockErr != nil {
+		return lockErr
+	}
+	defer release()
 	target, _, err := s.ResolveDocument(ctx, targetSelector)
 	if err != nil {
 		return err
@@ -634,6 +697,11 @@ func (s *Service) DeleteAnnotationNote(ctx context.Context, targetSelector, note
 }
 
 func (s *Service) SaveDocumentReadState(ctx context.Context, selector string, progressY int, progressAt string) error {
+	release, lockErr := s.beginMutation()
+	if lockErr != nil {
+		return lockErr
+	}
+	defer release()
 	document, _, err := s.ResolveDocument(ctx, selector)
 	if err != nil {
 		return err
@@ -655,6 +723,11 @@ func (s *Service) GetDocumentReadState(ctx context.Context, selector string) (po
 // MarkDocumentOpened updates recency without disturbing the reader's saved
 // scroll position.
 func (s *Service) MarkDocumentOpened(ctx context.Context, selector string) error {
+	release, lockErr := s.beginMutation()
+	if lockErr != nil {
+		return lockErr
+	}
+	defer release()
 	document, _, err := s.ResolveDocument(ctx, selector)
 	if err != nil {
 		return err
@@ -699,6 +772,11 @@ type SyncDocumentResult struct {
 // refreshes its catalog/FTS observation. Annotation notes are separate Markdown
 // documents and are reconciled by the annotation application flow.
 func (s *Service) SyncDocument(ctx context.Context, selector, body string) (SyncDocumentResult, error) {
+	release, lockErr := s.beginMutation()
+	if lockErr != nil {
+		return SyncDocumentResult{}, lockErr
+	}
+	defer release()
 	document, absolute, err := s.ResolveDocument(ctx, selector)
 	if err != nil {
 		return SyncDocumentResult{}, err
@@ -726,6 +804,11 @@ func (s *Service) SyncDocument(ctx context.Context, selector, body string) (Sync
 }
 
 func (s *Service) ReindexDocument(ctx context.Context, selector string) error {
+	release, lockErr := s.beginMutation()
+	if lockErr != nil {
+		return lockErr
+	}
+	defer release()
 	document, absolute, err := s.ResolveDocument(ctx, selector)
 	if err != nil {
 		return err
@@ -744,6 +827,11 @@ func (s *Service) ReindexDocument(ctx context.Context, selector string) error {
 }
 
 func (s *Service) DeleteDocumentFile(ctx context.Context, selector string) (catalog.Document, string, error) {
+	release, lockErr := s.beginMutation()
+	if lockErr != nil {
+		return catalog.Document{}, "", lockErr
+	}
+	defer release()
 	document, absolute, err := s.ResolveDocument(ctx, selector)
 	if err != nil {
 		return catalog.Document{}, "", err
@@ -769,6 +857,11 @@ func (s *Service) DeleteDocumentFile(ctx context.Context, selector string) (cata
 // from listings, search, graphs, and annotation DTOs. UUID, relations, index,
 // and FTS entries stay intact so RestoreDocument is a plain move back.
 func (s *Service) TrashDocumentFile(ctx context.Context, selector string) (catalog.Document, string, error) {
+	release, lockErr := s.beginMutation()
+	if lockErr != nil {
+		return catalog.Document{}, "", lockErr
+	}
+	defer release()
 	document, absolute, err := s.ResolveDocument(ctx, selector)
 	if err != nil {
 		return catalog.Document{}, "", err
@@ -812,6 +905,11 @@ func (s *Service) TrashDocumentFile(ctx context.Context, selector string) (catal
 // RestoreDocument moves a trashed document back to its original location and
 // unhides it. Fails when the origin path is occupied again.
 func (s *Service) RestoreDocument(ctx context.Context, selector string) (catalog.Document, string, error) {
+	release, lockErr := s.beginMutation()
+	if lockErr != nil {
+		return catalog.Document{}, "", lockErr
+	}
+	defer release()
 	document, absolute, err := s.ResolveDocument(ctx, selector)
 	if err != nil {
 		return catalog.Document{}, "", err
@@ -850,6 +948,11 @@ func (s *Service) RestoreDocument(ctx context.Context, selector string) (catalog
 // olderThan purges everything; otherwise only items trashed strictly before
 // it. Returns how many documents were removed and how many bytes were freed.
 func (s *Service) PurgeTrashedDocuments(ctx context.Context, olderThan time.Time) (int, int64, error) {
+	release, lockErr := s.beginMutation()
+	if lockErr != nil {
+		return 0, 0, lockErr
+	}
+	defer release()
 	records, trashRecords, err := s.store.ListTrashedDocuments(ctx)
 	if err != nil {
 		return 0, 0, err
@@ -923,6 +1026,11 @@ type RenameDocumentResult struct {
 // stable UUID, graph links, source URLs, and annotation relations survive
 // untouched because only the location changes.
 func (s *Service) RenameDocument(ctx context.Context, selector, newFilename string) (RenameDocumentResult, error) {
+	release, lockErr := s.beginMutation()
+	if lockErr != nil {
+		return RenameDocumentResult{}, lockErr
+	}
+	defer release()
 	document, absolute, err := s.ResolveDocument(ctx, selector)
 	if err != nil {
 		return RenameDocumentResult{}, err
@@ -993,6 +1101,11 @@ type CreateNoteResult struct {
 }
 
 func (s *Service) CreateNote(ctx context.Context, opts CreateNoteOptions) (CreateNoteResult, error) {
+	release, lockErr := s.beginMutation()
+	if lockErr != nil {
+		return CreateNoteResult{}, lockErr
+	}
+	defer release()
 	title := strings.TrimSpace(opts.Title)
 	if title == "" {
 		return CreateNoteResult{}, errors.New("note title is required")
@@ -1194,6 +1307,11 @@ func contentNameFragment(body string, length int) string {
 }
 
 func (s *Service) AddDocumentTopic(ctx context.Context, documentSelector, topicSelector string) (bool, error) {
+	release, lockErr := s.beginMutation()
+	if lockErr != nil {
+		return false, lockErr
+	}
+	defer release()
 	document, _, err := s.ResolveDocument(ctx, documentSelector)
 	if err != nil {
 		return false, err
@@ -1210,6 +1328,11 @@ func (s *Service) AddDocumentTopic(ctx context.Context, documentSelector, topicS
 }
 
 func (s *Service) RemoveDocumentTopic(ctx context.Context, documentSelector, topicSelector string) (bool, error) {
+	release, lockErr := s.beginMutation()
+	if lockErr != nil {
+		return false, lockErr
+	}
+	defer release()
 	document, _, err := s.ResolveDocument(ctx, documentSelector)
 	if err != nil {
 		return false, err
@@ -1227,6 +1350,11 @@ type DocumentLinkResult struct {
 }
 
 func (s *Service) LinkDocuments(ctx context.Context, fromSelector, toSelector string) (DocumentLinkResult, error) {
+	release, lockErr := s.beginMutation()
+	if lockErr != nil {
+		return DocumentLinkResult{}, lockErr
+	}
+	defer release()
 	fromDocument, _, err := s.ResolveDocument(ctx, fromSelector)
 	if err != nil {
 		return DocumentLinkResult{}, err
@@ -1247,6 +1375,11 @@ func (s *Service) LinkDocuments(ctx context.Context, fromSelector, toSelector st
 }
 
 func (s *Service) UnlinkDocuments(ctx context.Context, fromSelector, toSelector string) (bool, error) {
+	release, lockErr := s.beginMutation()
+	if lockErr != nil {
+		return false, lockErr
+	}
+	defer release()
 	fromDocument, _, err := s.ResolveDocument(ctx, fromSelector)
 	if err != nil {
 		return false, err
@@ -1437,6 +1570,11 @@ func (s *Service) GetSetting(ctx context.Context, key string) (string, error) {
 
 // SetViewer persists the viewer mode after validating it.
 func (s *Service) SetViewer(ctx context.Context, viewer string) error {
+	release, lockErr := s.beginMutation()
+	if lockErr != nil {
+		return lockErr
+	}
+	defer release()
 	return s.SetSetting(ctx, "viewer", viewer)
 }
 
@@ -1497,6 +1635,11 @@ func (s *Service) mainPathSetting(ctx context.Context) (Setting, error) {
 
 // SetSetting validates and persists one configurable option.
 func (s *Service) SetSetting(ctx context.Context, key, value string) error {
+	release, lockErr := s.beginMutation()
+	if lockErr != nil {
+		return lockErr
+	}
+	defer release()
 	spec, ok := findSettingSpec(key)
 	if !ok {
 		return fmt.Errorf("unknown setting %q", key)

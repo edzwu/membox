@@ -125,6 +125,15 @@ type ModifiedDocument struct {
 	ModifiedAt time.Time
 }
 
+// MutationLocker serializes document mutations across every process that
+// shares one membox home (TUI, CLI, Web Companion). Implementations must be
+// reentrant per goroutine so composed service operations lock once.
+type MutationLocker interface {
+	Lock() error
+	Unlock() error
+	Close() error
+}
+
 // TrashRecord marks a document as soft-deleted. Rows and relations survive;
 // the file sits in the path's trash directory until restore or purge.
 type TrashRecord struct {
