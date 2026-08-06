@@ -192,7 +192,11 @@ func (m Model) beginQuit() (tea.Model, tea.Cmd) {
 	case application.OnExitStop:
 		return m, webStopAndQuitCmd(m.ctx, m.app)
 	case application.OnExitKeep:
-		return m, tea.Quit
+		// Promote before quitting: the companion may still be in session mode
+		// if the setting changed after startup, and the parent watcher would
+		// otherwise kill it the moment the TUI dies.
+		notify := m.web.status.Tabs > 0 && m.web.owned() && m.web.status.Mode != "keep"
+		return m, webKeepAndQuitCmd(m.ctx, m.app, notify, m.web.status.URL)
 	default: // ask
 		m.webQuitPrompt = true
 		return m, nil

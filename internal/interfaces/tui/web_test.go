@@ -159,13 +159,23 @@ func TestModel_QuitWithKeepPolicyQuitsSilently(t *testing.T) {
 	app := &fakeApp{webTabs: 1}
 	model := runningWebModel(app, "keep")
 
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlD})
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyCtrlD})
 	model = updated.(Model)
 	if model.webQuitPrompt {
 		t.Fatal("keep policy must not open the prompt")
 	}
+	if command == nil {
+		t.Fatal("keep policy must promote the companion before quitting")
+	}
+	message := command()
+	if _, ok := message.(tea.QuitMsg); !ok {
+		t.Fatalf("keep policy should quit, got %T", message)
+	}
 	if app.webStopCalls != 0 {
 		t.Fatal("keep policy must not stop the companion")
+	}
+	if app.webLifecycle != "keep" {
+		t.Fatalf("keep policy must promote a session companion, got %q", app.webLifecycle)
 	}
 }
 

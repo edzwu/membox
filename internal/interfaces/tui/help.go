@@ -46,8 +46,13 @@ func helpSections() []helpSection {
 			{"ctrl+k", "agent input"},
 		}},
 		{title: "General", entries: []helpEntry{
-			{"ctrl+o / ctrl+d", "settings / quit"},
+			{"ctrl+o / ctrl+d", "settings · web / quit (asks about web)"},
 			{"esc", "close panels / this help"},
+		}},
+		{title: "Web Companion", entries: []helpEntry{
+			{"WEB badge", "status bar: port · tabs · unsaved"},
+			{"ctrl+o: o / x", "open reader / stop or start web"},
+			{":web", "status · open · start · stop · keep"},
 		}},
 	}
 }

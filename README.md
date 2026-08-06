@@ -164,7 +164,7 @@ A document can belong to multiple topics, and a topic can contain multiple docum
 
 ## Web view
 
-Render any indexed Markdown in the browser with the embedded [Miru](https://github.com/fivetiaowuu/miru) reader. The default viewer is configurable and persists across sessions — set it with `ctrl+o` in the TUI (settings panel):
+Render any indexed Markdown in the browser with the embedded [Miru](https://github.com/fivetiaowuu/miru) reader, served by the **Web Companion** — a single background process per membox home that owns the HTTP reader, the browser bridge, and web-originated saves. The default viewer is configurable and persists across sessions — set it with `ctrl+o` in the TUI (settings panel):
 
 ```bash
 # open a note with the configured viewer
@@ -173,23 +173,48 @@ Render any indexed Markdown in the browser with the embedded [Miru](https://gith
 # one-off overrides (do not change the configured viewer)
 ./mm note view <document-id> --web
 ./mm note view <document-id> --leaf
-./mm note view <document-id> --web --no-open --port 8080
+./mm note view <document-id> --web --no-open
 ```
 
 The same applies in the TUI: pressing `enter` on a document opens it with the configured viewer. The current viewer is shown in the status bar.
 
-The icon beside **New Paste** shows whether Miru is connected to membox; click it to toggle the connection. While connected, the lower-right Markdown arrow syncs both Markdown and annotations to membox (updating the current UUID, or creating a note when the paste is new). While disconnected, the same arrow keeps Miru's normal local download behavior. Every synced annotation is an individual `*-note.md` document: its blockquote/explanation is Markdown content, while SQLite stores the target UUID and anchoring hints. Miru assembles its annotation JSON only when the document is opened; it is not a second persisted note copy. Reading progress is separate DB UI state, so scrolling never rewrites note files. Notes and progress auto-save in the background for any document bound to membox; taking the first note on pasted (not yet synced) content automatically creates the membox source document while connected. The explicit arrow sync additionally writes the Markdown source.
+### Web Companion lifecycle
+
+One companion runs per membox home; the TUI, CLI, and browser extension all share it instead of starting their own servers. The TUI starts it automatically and shows a permanent badge in the status bar:
+
+```text
+WEB ● :8787 · 2 tabs · saved      running, all notes synced
+WEB ● :8787 · 1 tab · 1 unsaved   a browser tab holds unsaved notes
+WEB ◐ starting                     spawning
+WEB ○ off                          stopped
+WEB ! unavailable                  start failed (see ~/.membox/companion.log)
+```
+
+What happens to the companion when the TUI quits is the `web on exit` setting (`ctrl+o`, or `:web keep`): `ask` (default) shows a prompt when browser tabs are connected, `stop` shuts the companion down with the TUI, and `keep` leaves it running. Choosing `keep` in the prompt promotes a running companion so it survives.
+
+```bash
+./mm web status   # show companion state, tabs, unsaved counts
+./mm web start    # start it detached (survives the terminal)
+./mm web stop     # stop it
+./mm web open     # open the reader in the browser
+./mm serve        # run the companion in the foreground instead
+```
+
+Inside the TUI, `:web status / open / start / stop / keep` do the same, and `ctrl+o` adds `o` (open reader) and `x` (stop/start). Browser tabs heartbeat their unsaved state, so the badge and `mm web status` always reflect what is actually open.
+
+The connection icon in the Miru top bar shows whether the reader is connected to membox; click it to toggle the connection. While connected, the lower-right Markdown arrow syncs both Markdown and annotations to membox (updating the current UUID, or creating a note when the paste is new). While disconnected, the same arrow keeps Miru's normal local download behavior. Every synced annotation is an individual `*-note.md` document: its blockquote/explanation is Markdown content, while SQLite stores the target UUID and anchoring hints. Miru assembles its annotation JSON only when the document is opened; it is not a second persisted note copy. Reading progress is separate DB UI state, so scrolling never rewrites note files. Notes and progress auto-save in the background for any document bound to membox; taking the first note on pasted (not yet synced) content automatically creates the membox source document while connected. The explicit arrow sync additionally writes the Markdown source.
 
 ### Settings panel
 
-Press `ctrl+o` in the TUI to open the settings panel. Use ↑/↓ to select a setting and ←/→ (or space) to change its value — changes are saved immediately. Current settings:
+Press `ctrl+o` in the TUI to open the settings panel. Use ↑/↓ to select a setting and ←/→ (or space) to change its value — changes are saved immediately. The panel also shows the live Web Companion state (`o` opens the reader, `x` stops or starts it). Current settings:
 
 - **viewer**: `leaf` or `web` — how `enter` opens documents
 - **model**: `k3` or `grok-4.5` — the model used by the agent (reserved for the upcoming AI agent mode)
+- **web on exit**: `ask`, `stop`, or `keep` — what happens to the Web Companion when the TUI quits
 
 Settings persist in the membox database.
 
-The server listens on `127.0.0.1` only. New synced notes are created under the first configured path.
+The companion listens on `127.0.0.1` only (preferring port `8787`, written to `~/.membox/bridge.json` for the browser extension). New synced notes are created under the first configured path.
 
 ## Development
 

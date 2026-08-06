@@ -1,13 +1,12 @@
 package cli
 
 import (
-	"context"
 	"fmt"
-	"time"
 
 	"github.com/spf13/cobra"
 
 	"membox"
+	"membox/internal/web/companion"
 )
 
 func newNoteCommand(runtime *runtime) *cobra.Command {
@@ -60,12 +59,10 @@ func newNoteNewCommand(runtime *runtime) *cobra.Command {
 
 func newNoteViewCommand(runtime *runtime) *cobra.Command {
 	var webFlag, leafFlag, noOpen bool
-	var port int
 	command := &cobra.Command{Use: "view <document-id>", Short: "Open a note with the configured viewer (see 'mm config viewer')", Args: exactArgs(1, "document ID")}
 	command.Flags().BoolVar(&webFlag, "web", false, "open in the browser this time (does not change the configured viewer)")
 	command.Flags().BoolVar(&leafFlag, "leaf", false, "open with the leaf viewer this time (does not change the configured viewer)")
 	command.Flags().BoolVar(&noOpen, "no-open", false, "with the web viewer, do not open the browser automatically")
-	command.Flags().IntVar(&port, "port", 0, "with the web viewer, port to listen on (0 picks a free port)")
 	command.RunE = func(cmd *cobra.Command, args []string) error {
 		box, err := runtime.get()
 		if err != nil {
@@ -88,27 +85,24 @@ func newNoteViewCommand(runtime *runtime) *cobra.Command {
 			viewer = "leaf"
 		}
 		if viewer == "web" {
-			server := box.WebServer()
-			if _, err := server.Start(cmd.Context(), port); err != nil {
+			// The Web Companion owns the port; never spin up a second server.
+			// Ensure with keep mode first: a CLI one-shot must not spawn a
+			// session companion that dies the moment the command returns,
+			// leaving the browser reader stranded. A running companion (e.g.
+			// the TUI's) is reused as-is.
+			if _, err := box.EnsureWebCompanion(cmd.Context(), companion.LifecycleKeep); err != nil {
 				return err
 			}
-			defer func() {
-				shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-				defer cancel()
-				_ = server.Shutdown(shutdownCtx)
-			}()
-
-			viewURL := server.ViewURL(location.DocumentID)
+			viewURL, err := box.OpenDocumentWeb(cmd.Context(), location.DocumentID)
+			if err != nil {
+				return err
+			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Serving %s\n", viewURL)
-
 			if !noOpen {
 				if opener, openErr := runtime.launcher.OpenCommand(cmd.Context(), viewURL); openErr == nil {
 					_ = opener.Run()
 				}
 			}
-
-			fmt.Fprintln(cmd.OutOrStdout(), "Press Ctrl+C to stop.")
-			<-cmd.Context().Done()
 			return nil
 		}
 
