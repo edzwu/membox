@@ -62,8 +62,10 @@ type App interface {
 	ListSettings(context.Context) ([]membox.SettingView, error)
 	SetSetting(context.Context, string, string) error
 	OpenDocumentWeb(context.Context, string) (string, error)
-	StartWebServer(context.Context, int) (string, error)
-	BridgeInfo() (baseURL, token string)
+	WebStatus(context.Context) (membox.WebStatusView, error)
+	EnsureWebCompanion(context.Context, string) (membox.WebStatusView, error)
+	StopWeb(context.Context) error
+	SetWebLifecycle(context.Context, string) error
 	ScanPaths(context.Context, membox.ScanPathsCommand) (membox.ScanReport, error)
 	ListPaths(context.Context) ([]membox.PathView, error)
 	GetIndexStatus(context.Context) (membox.IndexStatusView, error)
@@ -178,6 +180,10 @@ type Model struct {
 	graphSearchHits     map[string]bool
 	helpVisible         bool
 	helpScroll          int
+
+	// Web Companion control plane mirror plus the quit-time lifecycle prompt.
+	web           webState
+	webQuitPrompt bool
 }
 
 type searchMsg struct {
@@ -241,10 +247,7 @@ type openWebMsg struct {
 	url string
 	err error
 }
-type bridgeReadyMsg struct {
-	url string
-	err error
-}
+
 type noteCreatedMsg struct {
 	document membox.DocumentView
 	command  *exec.Cmd
@@ -287,6 +290,7 @@ func New(ctx context.Context, app App, launcher host.Launcher) Model {
 	spin.Spinner = spinner.Dot
 	vp := viewport.New(40, 10)
 	model := Model{ctx: ctx, app: app, launcher: launcher, input: input, spinner: spin, preview: vp, searchMode: searchModeName, inputMode: inputModeSearch, viewMode: viewTree, sortMode: sortModeTime, viewerMode: "leaf"}
+	model.web.starting = true
 	model.preview.SetContent(previewPlaceholder("Loading documents…"))
 	return model
 }
@@ -305,7 +309,7 @@ func (m Model) Init() tea.Cmd {
 		listDocumentsCmd(m.ctx, m.app, m.listSequence),
 		viewerModeCmd(m.ctx, m.app),
 		settingsCmd(m.ctx, m.app),
-		startBridgeCmd(m.ctx, m.app),
+		webEnsureCmd(m.ctx, m.app),
 	)
 }
 
@@ -316,8 +320,11 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		m.resize()
 	case tea.KeyMsg:
+		if m.webQuitPrompt {
+			return m.updateWebQuitPrompt(msg)
+		}
 		if msg.String() == "ctrl+d" {
-			return m, tea.Quit
+			return m.beginQuit()
 		}
 		if m.helpVisible {
 			return m.updateHelp(msg)
@@ -353,12 +360,11 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateFilterInput(msg)
 		}
 		return m.updateNavigation(msg)
-	case bridgeReadyMsg:
-		if msg.err != nil {
-			// Non-fatal: leaf viewer and CLI still work without the bridge.
-			m.statusMessage = "bridge offline: " + msg.err.Error()
-		} else if msg.url != "" {
-			m.statusMessage = "bridge " + msg.url
+	case webStatusMsg:
+		// Non-fatal when the companion is down: leaf viewer and CLI keep
+		// working; the badge shows the degraded state permanently.
+		if next := m.applyWebStatus(msg); next != nil {
+			commands = append(commands, next)
 		}
 	case settingsMsg:
 		if msg.err != nil {
@@ -875,6 +881,7 @@ func (m Model) commandSuggestions() []commandSuggestion {
 			{Value: "topic", Display: "topic", Description: "Manage topic documents"},
 			{Value: "link", Display: "link", Description: "Manage document links"},
 			{Value: "rename", Display: "rename", Description: "Rename selected file (keeps UUID)"},
+			{Value: "web", Display: "web", Description: "Control the Web Companion"},
 		}, partial)
 	}
 	if index == 1 {
@@ -897,6 +904,14 @@ func (m Model) commandSuggestions() []commandSuggestion {
 				{Value: "add", Display: "add", Description: "Link two documents"},
 				{Value: "remove", Display: "remove", Description: "Remove a document link"},
 				{Value: "list", Display: "list", Description: "Show links and topics"},
+			}, partial)
+		case "web":
+			return filterCommandSuggestions([]commandSuggestion{
+				{Value: "status", Display: "status", Description: "Show Web Companion state"},
+				{Value: "open", Display: "open", Description: "Open the reader in the browser"},
+				{Value: "start", Display: "start", Description: "Start the Web Companion"},
+				{Value: "stop", Display: "stop", Description: "Stop the Web Companion"},
+				{Value: "keep", Display: "keep", Description: "Keep web running after TUI exit"},
 			}, partial)
 		}
 		return nil
@@ -1165,6 +1180,8 @@ func (m Model) commandAction(tokens []string) (func() tea.Msg, string, error) {
 			}
 			return renamedMsg{documentID: result.DocumentID, path: result.Path}
 		}, "rename <new-filename>", nil
+	case "web":
+		return m.webCommandAction(tokens)
 	}
 	return nil, strings.Join(tokens, " "), fmt.Errorf("unknown command %q", tokens[0])
 }
@@ -1497,6 +1514,9 @@ func (m Model) visibleRows() int {
 	if m.deleteConfirm {
 		reserved += 3
 	}
+	if m.webQuitPrompt {
+		reserved += 8
+	}
 	if m.configVisible {
 		reserved += m.configPanelRows()
 	}
@@ -1507,8 +1527,8 @@ func (m Model) configPanelRows() int {
 	if !m.configVisible {
 		return 0
 	}
-	// title + one row per setting + hint + top border
-	return len(m.settings) + 3
+	// title + web section + one row per setting + hint + top border
+	return m.webPanelRows() + len(m.settings) + 3
 }
 
 func (m Model) pinnedCount() int {
@@ -2048,6 +2068,9 @@ func (m Model) View() string {
 	if m.deleteConfirm {
 		parts = append(parts, m.deleteConfirmView())
 	}
+	if m.webQuitPrompt {
+		parts = append(parts, m.webQuitPromptView())
+	}
 	if m.configVisible {
 		parts = append(parts, m.configPanelView())
 	}
@@ -2109,8 +2132,29 @@ func (m Model) updateConfigPanel(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.cycleSetting(-1)
 	case "right", "l", "space", " ":
 		return m, m.cycleSetting(1)
+	case "o":
+		if !m.web.running() {
+			return m, nil
+		}
+		return m, tea.ExecProcess(openCommand(m.ctx, m.launcher, m.web.status.URL), func(err error) tea.Msg { return openWebMsg{url: m.web.status.URL, err: err} })
+	case "x":
+		if m.web.running() {
+			return m, tea.Batch(m.spinner.Tick, webStopCmd(m.ctx, m.app))
+		}
+		m.web.starting = true
+		return m, tea.Batch(m.spinner.Tick, webEnsureCmd(m.ctx, m.app))
 	}
 	return m, nil
+}
+
+// openCommand builds the platform browser opener, ignoring errors until the
+// returned command runs (tea.ExecProcess surfaces them there).
+func openCommand(ctx context.Context, launcher host.Launcher, url string) *exec.Cmd {
+	command, err := launcher.OpenCommand(ctx, url)
+	if err != nil {
+		return exec.Command("false")
+	}
+	return command
 }
 
 func (m Model) cycleSetting(direction int) tea.Cmd {
@@ -2140,7 +2184,8 @@ func (m Model) cycleSetting(direction int) tea.Cmd {
 func (m Model) configPanelView() string {
 	width := max(10, m.width-2)
 	border := lipgloss.NewStyle().Width(width).MaxWidth(width).Border(lipgloss.NormalBorder(), true, false, false, false).BorderForeground(colors.BorderAccent)
-	lines := []string{accentStyle.Render("settings")}
+	lines := m.webPanelLines(width)
+	lines = append(lines, accentStyle.Render("settings"))
 	for index, setting := range m.settings {
 		label := fitWidth(setting.Label, 10)
 		var options []string
@@ -2166,7 +2211,7 @@ func (m Model) configPanelView() string {
 		}
 		lines = append(lines, row)
 	}
-	lines = append(lines, dimStyle.Render("↑↓ select • ←→ change • esc close"))
+	lines = append(lines, dimStyle.Render("↑↓ select • ←→ change • o open web • x stop/start • esc close"))
 	return border.Render(strings.Join(lines, "\n"))
 }
 
@@ -2995,7 +3040,7 @@ func (m Model) commandMenuView() string {
 
 func (m Model) statusBar() string {
 	width := max(20, m.width)
-	left := dimStyle.Render(m.hints())
+	left := dimStyle.Render(m.hints()) + "  " + m.webBadge()
 	right := ""
 	if m.loading {
 		right = m.spinner.View() + " " + right
@@ -3273,12 +3318,6 @@ func settingsCmd(ctx context.Context, app App) tea.Cmd {
 	return func() tea.Msg {
 		settings, err := app.ListSettings(ctx)
 		return settingsMsg{settings: settings, err: err}
-	}
-}
-func startBridgeCmd(ctx context.Context, app App) tea.Cmd {
-	return func() tea.Msg {
-		url, err := app.StartWebServer(ctx, 0)
-		return bridgeReadyMsg{url: url, err: err}
 	}
 }
 func setSettingCmd(ctx context.Context, app App, key, value string) tea.Cmd {

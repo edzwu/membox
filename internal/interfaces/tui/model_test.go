@@ -40,6 +40,18 @@ type fakeApp struct {
 	graph         membox.DocumentGraphView
 	searchResults []membox.SearchResult
 	renamedTo     string
+
+	// Web Companion control knobs for tests.
+	webRunning     bool
+	webDirtyTabs   int
+	webTabs        int
+	webMode        string
+	webOnExit      string
+	webEnsureErr   error
+	webStopErr     error
+	webEnsureCalls int
+	webStopCalls   int
+	webLifecycle   string
 }
 
 func (f *fakeApp) AddPath(context.Context, membox.AddPathCommand) (membox.AddPathResult, error) {
@@ -147,10 +159,15 @@ func (f *fakeApp) ListSettings(context.Context) ([]membox.SettingView, error) {
 	if mainPath == "" {
 		mainPath = "/tmp/notes"
 	}
+	webOnExit := f.webOnExit
+	if webOnExit == "" {
+		webOnExit = "ask"
+	}
 	return []membox.SettingView{
 		{Key: "viewer", Label: "viewer", Value: viewer, Options: []string{"leaf", "web"}},
 		{Key: "model", Label: "model", Value: model, Options: []string{"k3", "grok-4.5"}},
 		{Key: "main_path", Label: "main path", Value: mainPath, Options: []string{"/tmp/notes", "/tmp/other"}},
+		{Key: "web_on_exit", Label: "web on exit", Value: webOnExit, Options: []string{"ask", "stop", "keep"}},
 	}, nil
 }
 func (f *fakeApp) SetSetting(_ context.Context, key, value string) error {
@@ -166,6 +183,12 @@ func (f *fakeApp) SetSetting(_ context.Context, key, value string) error {
 	case "main_path":
 		f.mainPath = value
 		return nil
+	case "web_on_exit":
+		if value != "ask" && value != "stop" && value != "keep" {
+			return fmt.Errorf("invalid web_on_exit %q", value)
+		}
+		f.webOnExit = value
+		return nil
 	default:
 		return fmt.Errorf("unknown setting %q", key)
 	}
@@ -174,11 +197,42 @@ func (f *fakeApp) OpenDocumentWeb(_ context.Context, selector string) (string, e
 	f.webOpened = append(f.webOpened, selector)
 	return "http://127.0.0.1:9999/?id=" + selector, nil
 }
-func (f *fakeApp) StartWebServer(context.Context, int) (string, error) {
-	return "http://127.0.0.1:8787", nil
+func (f *fakeApp) webStatusView() membox.WebStatusView {
+	return membox.WebStatusView{
+		Running:   f.webRunning,
+		URL:       "http://127.0.0.1:8787",
+		Port:      8787,
+		Mode:      f.webMode,
+		PID:       1234,
+		Tabs:      f.webTabs,
+		DirtyTabs: f.webDirtyTabs,
+	}
 }
-func (f *fakeApp) BridgeInfo() (string, string) {
-	return "http://127.0.0.1:8787", "test-token"
+func (f *fakeApp) WebStatus(context.Context) (membox.WebStatusView, error) {
+	return f.webStatusView(), nil
+}
+func (f *fakeApp) EnsureWebCompanion(_ context.Context, _ string) (membox.WebStatusView, error) {
+	f.webEnsureCalls++
+	if f.webEnsureErr != nil {
+		return membox.WebStatusView{}, f.webEnsureErr
+	}
+	f.webRunning = true
+	view := f.webStatusView()
+	view.Started = true
+	return view, nil
+}
+func (f *fakeApp) StopWeb(context.Context) error {
+	f.webStopCalls++
+	if f.webStopErr != nil {
+		return f.webStopErr
+	}
+	f.webRunning = false
+	return nil
+}
+func (f *fakeApp) SetWebLifecycle(_ context.Context, mode string) error {
+	f.webLifecycle = mode
+	f.webMode = mode
+	return nil
 }
 
 func TestModel_DefaultShowsTreeAndPreview(t *testing.T) {
