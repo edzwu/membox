@@ -2022,7 +2022,7 @@ func TestModel_HideNotesFiltersClippedNotes(t *testing.T) {
 	}
 }
 
-func TestModel_HTogglesHiddenNotesAndPersists(t *testing.T) {
+func TestModel_CtrlHTogglesHiddenNotesAndPersists(t *testing.T) {
 	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
 	model.width, model.height = 120, 24
 	model.items = documentItems([]membox.DocumentView{
@@ -2032,13 +2032,21 @@ func TestModel_HTogglesHiddenNotesAndPersists(t *testing.T) {
 	model.hideNotes = false
 	model.refreshFilter()
 
-	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	// Plain h remains available for Vim-style graph navigation and must not
+	// toggle the global note visibility setting.
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	model = updated.(Model)
+	if model.hideNotes || len(model.filtered) != 2 {
+		t.Fatalf("plain h toggled notes: hideNotes=%v filtered=%d", model.hideNotes, len(model.filtered))
+	}
+
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyCtrlH})
 	model = updated.(Model)
 	if !model.hideNotes || len(model.filtered) != 1 {
-		t.Fatalf("h did not hide notes: hideNotes=%v filtered=%d", model.hideNotes, len(model.filtered))
+		t.Fatalf("ctrl+h did not hide notes: hideNotes=%v filtered=%d", model.hideNotes, len(model.filtered))
 	}
 	if command == nil {
-		t.Fatal("h did not persist the setting")
+		t.Fatal("ctrl+h did not persist the setting")
 	}
 	message := command()
 	if batch, ok := message.(tea.BatchMsg); ok {
@@ -2048,10 +2056,10 @@ func TestModel_HTogglesHiddenNotesAndPersists(t *testing.T) {
 		t.Fatalf("unexpected setting save: %+v", message)
 	}
 
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlH})
 	model = updated.(Model)
 	if model.hideNotes || len(model.filtered) != 2 {
-		t.Fatalf("second h did not unhide notes: hideNotes=%v filtered=%d", model.hideNotes, len(model.filtered))
+		t.Fatalf("second ctrl+h did not unhide notes: hideNotes=%v filtered=%d", model.hideNotes, len(model.filtered))
 	}
 }
 

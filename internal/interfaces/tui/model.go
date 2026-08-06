@@ -331,8 +331,8 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if m.helpVisible {
 			return m.updateHelp(msg)
 		}
-		// "?" opens help. Plain "h" toggles hidden notes, except while walking
-		// a graph where h/l navigate.
+		// "?" opens help. Ctrl+H toggles hidden selection notes; plain h stays
+		// available for graph navigation.
 		if msg.String() == "?" && !m.configVisible && !m.inputActive && m.graphFocusID == "" {
 			m.helpVisible, m.helpScroll = true, 0
 			return m, nil
@@ -1343,7 +1343,7 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if document, ok := m.selectedDocument(); ok {
 			commands = append(commands, openCmd(m.ctx, m.app, m.launcher, document.ID))
 		}
-	case "h":
+	case "ctrl+h":
 		// Toggle selection-note (*-note.md) visibility; persisted as hide_notes.
 		m.hideNotes = !m.hideNotes
 		m.refreshFilter()

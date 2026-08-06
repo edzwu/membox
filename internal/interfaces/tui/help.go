@@ -37,7 +37,7 @@ func helpSections() []helpSection {
 			{"enter / tab", "open document / tree ⇄ board"},
 			{"space", "details · ×2 opens filter input"},
 			{"e / o / d", "edit / open app / move to trash"},
-			{"p / s / h", "pin / sort / toggle *-note.md"},
+			{"p / s / ctrl+h", "pin / sort / toggle *-note.md"},
 			{"q", "back"},
 		}},
 		{title: "Filter & commands", entries: []helpEntry{

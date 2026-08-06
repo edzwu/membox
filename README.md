@@ -92,7 +92,7 @@ The TUI opens in modified-time order: the newest documents come first, and docum
 
 Press `p` to toggle the selected document's pinned state. Pinned documents stay visible in a marked, sticky section at the top regardless of scrolling, details height, or the active sort mode, and pins persist across TUI restarts.
 
-Press `h` to toggle whether selection notes (`*-note.md`) appear in the list; the preference persists as the `hide notes` setting (also in the settings panel via `ctrl+o`). Press `?` to open the keyboard help overlay.
+Press `ctrl+h` to toggle whether selection notes (`*-note.md`) appear in the list; the preference persists as the `hide notes` setting (also in the settings panel via `ctrl+o`). Press `?` to open the keyboard help overlay.
 
 Press `d` to move the focused Markdown file to the trash after a `y/n` confirmation. This is a soft delete: the file moves into the path's hidden `.membox-trash/` directory and the document keeps its UUID, links, topics, and annotations but disappears from listings, search, graphs, and the Miru annotation DTO. Restore it with `mm trash restore <document-id>`; empty the trash with `mm trash purge` (by default only items older than 30 days, `--all` for everything).
 
