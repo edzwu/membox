@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"membox"
 )
@@ -366,6 +367,10 @@ func TestRenameDocumentKeepsUUID(t *testing.T) {
 	if err := os.WriteFile(original, []byte("# Original\n\ncontent\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	oldModified := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(original, oldModified, oldModified); err != nil {
+		t.Fatal(err)
+	}
 	box, err := membox.Open(membox.Config{Home: home})
 	if err != nil {
 		t.Fatal(err)
@@ -379,6 +384,7 @@ func TestRenameDocumentKeepsUUID(t *testing.T) {
 		t.Fatalf("expected one document, got %d (err=%v)", len(docs), err)
 	}
 	id := docs[0].ID
+	previousModified := docs[0].UpdatedAt
 
 	result, err := box.RenameDocument(ctx, membox.RenameDocumentCommand{Selector: id, NewFilename: "renamed.md"})
 	if err != nil {
@@ -398,6 +404,9 @@ func TestRenameDocumentKeepsUUID(t *testing.T) {
 	doc, err := box.GetDocument(ctx, membox.GetDocumentQuery{Selector: id})
 	if err != nil || doc.RelativePath != "renamed.md" {
 		t.Fatalf("document location not updated: %+v err=%v", doc, err)
+	}
+	if !doc.UpdatedAt.After(previousModified) {
+		t.Fatalf("rename did not advance modified time: before=%v after=%v", previousModified, doc.UpdatedAt)
 	}
 
 	// Renaming onto an existing file is rejected.

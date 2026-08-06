@@ -951,12 +951,15 @@ func (s *Service) RenameDocument(ctx context.Context, selector, newFilename stri
 		return RenameDocumentResult{}, err
 	}
 	relative := filepath.ToSlash(filepath.Join(filepath.Dir(filepath.FromSlash(document.Location.RelativePath)), newFilename))
-	document.Location.RelativePath = relative
-	observation, err := s.scanner.ObserveFile(ctx, document.Location, target)
+	location, err := catalog.NewLocation(document.Location.PathID, relative)
 	if err != nil {
 		return RenameDocumentResult{}, err
 	}
-	if err := document.Observe(observation, s.clock.Now()); err != nil {
+	observation, err := s.scanner.ObserveFile(ctx, location, target)
+	if err != nil {
+		return RenameDocumentResult{}, err
+	}
+	if err := document.Relocate(location, observation, s.clock.Now()); err != nil {
 		return RenameDocumentResult{}, err
 	}
 	if err := s.store.SaveDocument(ctx, port.ScanSave{Document: document, Body: observation.Body, Reindex: true}); err != nil {

@@ -154,6 +154,9 @@ func (d *Document) Relocate(location Location, observation Observation, now time
 	}
 	d.Location = location
 	d.applyObservation(observation, now)
+	// A path/name change is a user-visible modification even when the Markdown
+	// bytes and filesystem mtime are unchanged.
+	d.Index.SourceUpdatedAt = now
 	return nil
 }
 
@@ -188,7 +191,8 @@ func (d *Document) applyObservation(observation Observation, now time.Time) {
 	if sourceCreatedAt.IsZero() {
 		sourceCreatedAt = fileTime
 	}
-	// Preserve historical dates across no-op scans and renames. If content
+	// Preserve historical dates across no-op scans. Relocate explicitly raises
+	// the modified time because a path/name change is user-visible. If content
 	// changes before it is committed, filesystem mtime is the best fallback
 	// until the user syncs Git history again.
 	if sourceUpdatedAt.IsZero() || d.Index.SHA256 != observation.SHA256 {

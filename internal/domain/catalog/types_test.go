@@ -34,6 +34,22 @@ func TestDocument_ID002_ContentChangePreservesID(t *testing.T) {
 	}
 }
 
+func TestDocument_RelocateCountsAsSourceModification(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	document, err := NewDocument("019-test", testObservation(1, "a.md", strings.Repeat("a", 64), "1:1"), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	modifiedAt := now.Add(time.Hour)
+	relocated := testObservation(1, "renamed.md", strings.Repeat("a", 64), "1:1")
+	if err := document.Relocate(relocated.Location, relocated, modifiedAt); err != nil {
+		t.Fatal(err)
+	}
+	if document.Location.RelativePath != "renamed.md" || !document.Index.SourceUpdatedAt.Equal(modifiedAt) {
+		t.Fatalf("relocate did not update source modification time: %+v", document)
+	}
+}
+
 func TestDocument_ID003_MissingAndUntrackedPreserveID(t *testing.T) {
 	now := time.Now().UTC()
 	document, err := NewDocument("019-test", testObservation(1, "a.md", strings.Repeat("a", 64), "1:1"), now)
