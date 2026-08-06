@@ -7,10 +7,11 @@
   "scripts": {
     "dev": "wxt",
     "dev:firefox": "wxt -b firefox",
-    "build": "wxt build",
-    "build:firefox": "wxt build -b firefox",
+    "build": "wxt build && node scripts/fix-popup-paths.mjs",
+    "build:firefox": "wxt build -b firefox && node scripts/fix-popup-paths.mjs",
     "zip": "wxt zip",
-    "postinstall": "wxt prepare"
+    "postinstall": "wxt prepare",
+    "fix-popup-paths": "node scripts/fix-popup-paths.mjs"
   },
   "dependencies": {
     "@mozilla/readability": "^0.6.0",

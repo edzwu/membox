@@ -56,10 +56,38 @@ extension. In the popup:
 - Esc / click outside / scroll dismisses the card
 - ⌘/Ctrl+Enter saves
 
-## Build
+## Build / reload the installed extension
 
 ```bash
+cd extensions/clipper
+npm install
 npm run build
+```
+
+Then in Chrome → Extensions → **Load unpacked** → select:
+
+```text
+extensions/clipper/dist/chrome-mv3
+```
+
+**Do not** load `dist/chrome-mv3-dev` unless `npm run dev` is running — that
+build points at `localhost:3000` and the popup stays stuck on `checking…`
+with no styles.
+
+After every rebuild click **Reload** on the extension card.
+
+Pairing in the popup:
+
+```bash
+mm web status   # prints URL + Token
+```
+
+1. Server URL = printed URL (usually `http://127.0.0.1:8787`)
+2. Bridge token = printed Token (not the placeholder text)
+3. **Save settings** → status becomes `connected · auth`
+4. **Save page**
+
+```bash
 npm run zip
 ```
 

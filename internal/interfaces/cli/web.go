@@ -17,11 +17,12 @@ import (
 // web-originated writes; these commands probe, start, stop, and open it
 // without needing the TUI.
 func newWebCommand(runtime *runtime) *cobra.Command {
-	command := parentCommand("web", "Control the membox Web Companion", "web command is required: status, start, stop, open")
+	command := parentCommand("web", "Control the membox Web Companion", "web command is required: status, start, stop, restart, open")
 	command.AddCommand(
 		newWebStatusCommand(runtime),
 		newWebStartCommand(runtime),
 		newWebStopCommand(runtime),
+		newWebRestartCommand(runtime),
 		newWebOpenCommand(runtime),
 		newWebRunCommand(runtime),
 	)
@@ -66,6 +67,10 @@ func newWebStatusCommand(runtime *runtime) *cobra.Command {
 				fmt.Fprintf(out, " · %d unsaved", status.DirtyTabs)
 			}
 			fmt.Fprintln(out)
+			if status.Token != "" {
+				fmt.Fprintf(out, "  Token:    %s\n", status.Token)
+				fmt.Fprintln(out, "Paste URL + Token into the browser extension popup, then Save settings.")
+			}
 			return nil
 		},
 	}
@@ -116,6 +121,28 @@ func newWebStartCommand(runtime *runtime) *cobra.Command {
 		},
 	}
 	return command
+}
+
+func newWebRestartCommand(runtime *runtime) *cobra.Command {
+	return &cobra.Command{
+		Use:   "restart",
+		Short: "Restart the Web Companion (stop orphans, bind preferred port)",
+		Args:  noArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			home, err := resolveHome(runtime)
+			if err != nil {
+				return err
+			}
+			// Keep mode so the companion survives this CLI command exiting;
+			// the TUI applies its own session/keep policy on entry.
+			status, err := companion.Restart(cmd.Context(), home, companion.LifecycleKeep, 0, nil)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "web companion restarted\n  URL:  %s\n  PID:  %d\n", status.BaseURL, status.PID)
+			return nil
+		},
+	}
 }
 
 func newWebStopCommand(runtime *runtime) *cobra.Command {

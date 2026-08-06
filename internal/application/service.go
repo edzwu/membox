@@ -40,6 +40,10 @@ func NewService(store port.CatalogStore, scanner port.MarkdownScanner, reader po
 // tests) can skip it.
 func (s *Service) SetMutationLocker(locker port.MutationLocker) { s.mutations = locker }
 
+// Store returns the outbound catalog port. Used by composition roots (Companion)
+// to access optional store capabilities such as the Agent session catalog.
+func (s *Service) Store() port.CatalogStore { return s.store }
+
 func (s *Service) Close() error {
 	var err error
 	if s.mutations != nil {

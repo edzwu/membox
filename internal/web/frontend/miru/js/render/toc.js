@@ -35,6 +35,14 @@ export function appendHeadingContent(target, heading) {
   const clone = heading.cloneNode(true);
   clone.removeAttribute('id');
   clone.querySelectorAll('.section-copy, .section-download').forEach((el) => el.remove());
+  // Never nest <a> inside the TOC link — invalid HTML and click targets steal
+  // the event with the wrong (source-site) hash, so jump-to-heading fails.
+  clone.querySelectorAll('a').forEach((link) => {
+    const parent = link.parentNode;
+    if (!parent) return;
+    while (link.firstChild) parent.insertBefore(link.firstChild, link);
+    parent.removeChild(link);
+  });
   while (clone.firstChild) {
     target.appendChild(clone.firstChild);
   }
@@ -65,7 +73,9 @@ export function assignHeadingIds() {
 function makeTocLink(heading) {
   const a = document.createElement('a');
   const label = heading.dataset.headingLabel || getHeadingLabel(heading);
-  a.href = `#${heading.id}`;
+  // Prefer setAttribute so getAttribute stays a bare "#id" (assigning .href
+  // can expand to an absolute URL in some browsers).
+  a.setAttribute('href', `#${heading.id}`);
   a.className = `toc-${heading.tagName.toLowerCase()}`;
   a.dataset.target = heading.id;
   a.setAttribute('aria-label', label);
@@ -167,19 +177,37 @@ export function observeHeadings(headings) {
 }
 
 export function onTocClick(event) {
-  const link = event.target.closest('a');
-  if (!link) return;
-
-  const href = link.getAttribute('href');
-  if (!href || !href.startsWith('#')) return;
+  const link = event.target.closest('a[data-target], a[href^="#"]');
+  if (!link || !elements.tocNav.contains(link)) return;
 
   event.preventDefault();
-  const target = document.getElementById(href.slice(1));
+  event.stopPropagation();
+
+  // data-target is authoritative (assigned heading id). Fall back to hash only
+  // for exported/static TOC markup that may omit the dataset.
+  const id = (link.dataset.target || '').trim() ||
+    (() => {
+      const href = link.getAttribute('href') || '';
+      const hash = href.includes('#') ? href.slice(href.indexOf('#') + 1) : '';
+      try {
+        return decodeURIComponent(hash);
+      } catch {
+        return hash;
+      }
+    })();
+  if (!id) return;
+
+  const target = document.getElementById(id);
   if (!target) return;
 
   expandSectionForHeading(target);
 
   const behavior = prefersReducedMotion() ? 'auto' : 'smooth';
   target.scrollIntoView({ behavior, block: 'start' });
+  try {
+    history.replaceState(null, '', `#${id}`);
+  } catch {
+    // history may be unavailable in some embedded contexts
+  }
   closeToc();
 }

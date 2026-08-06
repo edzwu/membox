@@ -62,7 +62,10 @@ func newWebControllerID() string {
 
 func webEnsureCmd(ctx context.Context, app App, controller string) tea.Cmd {
 	return func() tea.Msg {
-		view, err := app.EnsureWebCompanion(ctx, "")
+		// TUI entry restarts the companion so an orphaned mm serve / ephemeral
+		// fallback from a previous session cannot steal :8787 from the extension
+		// or leave Agent workers attached to a dead control plane.
+		view, err := app.RestartWebCompanion(ctx, "")
 		if err == nil && view.Running {
 			err = app.RenewWebLease(ctx, controller)
 		}

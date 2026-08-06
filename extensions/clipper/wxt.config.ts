@@ -3,6 +3,8 @@ import { defineConfig } from 'wxt';
 export default defineConfig({
   srcDir: 'src',
   outDir: 'dist',
+  // Keep Vite defaults; a postbuild step rewrites popup.html asset hrefs to
+  // extension-root-relative paths (see scripts/fix-popup-paths.mjs).
   manifest: {
     name: 'membox clipper',
     description: 'Save the current page to membox and open it in Miru',

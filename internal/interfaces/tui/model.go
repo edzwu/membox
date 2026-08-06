@@ -64,6 +64,7 @@ type App interface {
 	OpenDocumentWeb(context.Context, string) (string, error)
 	WebStatus(context.Context) (membox.WebStatusView, error)
 	EnsureWebCompanion(context.Context, string) (membox.WebStatusView, error)
+	RestartWebCompanion(context.Context, string) (membox.WebStatusView, error)
 	StopWeb(context.Context) error
 	RenewWebLease(context.Context, string) error
 	ReleaseWebLease(context.Context, string) error
@@ -186,6 +187,9 @@ type Model struct {
 	// Web Companion control plane mirror plus the quit-time lifecycle prompt.
 	web           webState
 	webQuitPrompt bool
+
+	// Pi Agent workspace (Companion HTTP/SSE client). Independent of filterErr.
+	agent agentUIState
 }
 
 type searchMsg struct {
@@ -291,7 +295,7 @@ func New(ctx context.Context, app App, launcher host.Launcher) Model {
 	spin := spinner.New()
 	spin.Spinner = spinner.Dot
 	vp := viewport.New(40, 10)
-	model := Model{ctx: ctx, app: app, launcher: launcher, input: input, spinner: spin, preview: vp, searchMode: searchModeName, inputMode: inputModeSearch, viewMode: viewTree, sortMode: sortModeTime, viewerMode: "leaf", web: webState{controllerID: newWebControllerID()}}
+	model := Model{ctx: ctx, app: app, launcher: launcher, input: input, spinner: spin, preview: vp, searchMode: searchModeName, inputMode: inputModeSearch, viewMode: viewTree, sortMode: sortModeTime, viewerMode: "leaf", web: webState{controllerID: newWebControllerID()}, agent: newAgentUIState()}
 	model.web.starting = true
 	model.preview.SetContent(previewPlaceholder("Loading documents…"))
 	return model
@@ -368,6 +372,18 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if next := m.applyWebStatus(msg); next != nil {
 			commands = append(commands, next)
 		}
+	case agentReadyMsg:
+		return m.handleAgentReady(msg)
+	case agentSessionMsg:
+		return m.handleAgentSession(msg)
+	case agentPromptMsg:
+		return m.handleAgentPrompt(msg)
+	case agentStreamReadyMsg:
+		return m.handleAgentStreamReady(msg)
+	case agentEventMsg:
+		return m.handleAgentEvent(msg)
+	case agentErrMsg:
+		return m.handleAgentErr(msg)
 	case webQuitResultMsg:
 		if msg.err != nil {
 			m.err = fmt.Errorf("%s web companion before quit: %w", msg.action, msg.err)
@@ -738,8 +754,23 @@ func (m Model) updateAgentInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if strings.TrimSpace(m.input.Value()) == "" {
 			return m, nil
 		}
-		m.filterErr = fmt.Errorf("agent is not connected yet")
-		return m, nil
+		// Attach current document as optional turn context.
+		if doc, ok := m.selectedDocument(); ok {
+			m.agent.documentID = doc.ID
+			m.agent.documentTitle = displayTitle(doc.Title, doc.Path)
+		} else {
+			m.agent.documentID = ""
+			m.agent.documentTitle = ""
+		}
+		return m.submitAgentPrompt()
+	case "ctrl+c":
+		if m.agent.runID != "" {
+			return m.abortAgentRun()
+		}
+		msg = tea.KeyMsg{Type: tea.KeyBackspace}
+		var command tea.Cmd
+		m.input, command = m.input.Update(msg)
+		return m, command
 	case "ctrl+u":
 		m.input.SetValue("")
 		return m, nil
@@ -1598,6 +1629,13 @@ func (m *Model) openInput(mode string) tea.Cmd {
 	m.cmdMenuVisible = false
 	m.filterErr = nil
 	m.keepSelectionVisible()
+	if mode == inputModeAgent {
+		// Ensure Companion + Agent session while focusing the composer.
+		m.agent.sequence++
+		m.agent.badge = "CONNECTING"
+		m.agent.err = nil
+		return tea.Batch(textinput.Blink, ensureAgentClientCmd(m.ctx, m.app, m.agent.clientID, m.agent.sequence))
+	}
 	return textinput.Blink
 }
 
@@ -3111,7 +3149,18 @@ func (m Model) modeBadge() string {
 		background = lipgloss.AdaptiveColor{Dark: "#555555", Light: "#dddddd"}
 		foreground = lipgloss.AdaptiveColor{Dark: "#ffffff", Light: "#333333"}
 	case inputModeAgent:
-		mode = " AGENT "
+		switch m.agent.badge {
+		case "READY":
+			mode = " AGENT READY "
+		case "RUNNING":
+			mode = " AGENT RUNNING "
+		case "CONNECTING":
+			mode = " AGENT CONNECTING "
+		case "ERROR":
+			mode = " AGENT ERROR "
+		default:
+			mode = " AGENT OFF "
+		}
 		background = lipgloss.AdaptiveColor{Dark: "#7048a8", Light: "#eadcff"}
 		foreground = lipgloss.AdaptiveColor{Dark: "#ffffff", Light: "#3c1f63"}
 	default:

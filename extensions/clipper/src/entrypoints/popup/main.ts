@@ -63,23 +63,45 @@ async function refreshStatus() {
   const settings = readForm();
   statusEl.textContent = 'checking…';
   statusEl.className = 'status status-unknown';
-  const status = await fetchBridgeStatus(settings);
-  if (status.connected) {
-    statusEl.textContent = status.auth_required ? 'connected · auth' : 'connected';
-    statusEl.className = 'status status-ok';
-  } else {
-    statusEl.textContent = 'offline';
-    statusEl.className = 'status status-bad';
-    if (status.error) {
-      showMessage(`Cannot reach membox.\nRun: mm serve --port 8787\n${status.error}`);
+  try {
+    const status = await fetchBridgeStatus(settings);
+    if (status.connected) {
+      const needsToken = status.auth_required && !settings.token;
+      statusEl.textContent = needsToken
+        ? 'connected · need token'
+        : status.auth_required
+          ? 'connected · auth'
+          : 'connected';
+      statusEl.className = needsToken ? 'status status-bad' : 'status status-ok';
+      if (needsToken) {
+        showMessage(
+          'Server is up, but Bridge token is empty.\n' +
+            'Run: mm web status\n' +
+            'Copy the token into this field, then Save settings.',
+        );
+      }
+    } else {
+      statusEl.textContent = 'offline';
+      statusEl.className = 'status status-bad';
+      if (status.error) {
+        showMessage(
+          `Cannot reach membox at ${settings.baseUrl || '(empty URL)'}.\n` +
+            'Start it with: mm   (or mm web restart)\n' +
+            status.error,
+        );
+      }
     }
+  } catch (err) {
+    statusEl.textContent = 'error';
+    statusEl.className = 'status status-bad';
+    showMessage(err instanceof Error ? err.message : String(err));
   }
 }
 
 saveSettingsBtn.addEventListener('click', async () => {
   const settings = readForm();
   await saveSettings(settings);
-  showMessage('Settings saved.');
+  showMessage(settings.token ? 'Settings saved.' : 'Saved — token still empty; paste token from mm web status.');
   await refreshStatus();
 });
 
@@ -87,7 +109,16 @@ clipBtn.addEventListener('click', async () => {
   clipBtn.disabled = true;
   showMessage('Clipping…');
   try {
-    await saveSettings(readForm());
+    const settings = readForm();
+    if (!settings.token) {
+      showMessage(
+        'Bridge token is required.\n' +
+          'Run: mm web status\n' +
+          'Paste token here → Save settings → try again.',
+      );
+      return;
+    }
+    await saveSettings(settings);
     const response = await browser.runtime.sendMessage({ type: 'membox.ingest-active-tab' });
     if (!response?.ok) {
       showMessage(response?.error || 'Clip failed');
@@ -224,9 +255,15 @@ floatRestoreBtn.addEventListener('click', async () => {
   }
 });
 
-loadSettings().then(async (settings) => {
-  fillForm(settings);
-  await refreshStatus();
-  await refreshFloatStatus();
-});
+loadSettings()
+  .then(async (settings) => {
+    fillForm(settings);
+    await refreshStatus();
+    await refreshFloatStatus();
+  })
+  .catch((err) => {
+    statusEl.textContent = 'error';
+    statusEl.className = 'status status-bad';
+    showMessage(err instanceof Error ? err.message : String(err));
+  });
 

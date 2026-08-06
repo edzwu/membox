@@ -43,11 +43,36 @@ function isHeadingHeaderLink(link) {
   return false;
 }
 
+// mdbook / GitBook / many static sites emit headings as
+//   ## [Full title](#slug)
+// which markdown-it turns into <h2><a href="#slug">Full title</a></h2>.
+// Those in-heading hash links are not Miru ids (we assign our own), and if
+// left in place they nest inside TOC <a> tags and steal clicks so jump fails.
+function unwrapHeadingHashLink(link) {
+  const href = (link.getAttribute('href') || '').trim();
+  if (!href.startsWith('#')) return false;
+  // Keep real external/content links that happen to sit in a heading.
+  // Only unwrap pure in-document anchors (relative hash).
+  const parent = link.parentNode;
+  if (!parent) return false;
+  while (link.firstChild) {
+    parent.insertBefore(link.firstChild, link);
+  }
+  parent.removeChild(link);
+  return true;
+}
+
 export function stripHeadingHeaderLinks() {
   const headings = elements.article.querySelectorAll('h1, h2, h3, h4, h5, h6');
   headings.forEach((heading) => {
-    heading.querySelectorAll('a').forEach((link) => {
-      if (isHeadingHeaderLink(link)) link.remove();
+    // Collect first — unwrapping mutates the live NodeList walk.
+    const links = Array.from(heading.querySelectorAll('a'));
+    links.forEach((link) => {
+      if (isHeadingHeaderLink(link)) {
+        link.remove();
+        return;
+      }
+      unwrapHeadingHashLink(link);
     });
     heading.normalize();
   });

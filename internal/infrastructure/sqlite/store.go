@@ -337,6 +337,30 @@ CREATE TABLE IF NOT EXISTS document_trash (
 `); err != nil {
 		return fmt.Errorf("migrating document_trash: %w", err)
 	}
+	return s.migrateAgentSessions()
+}
+
+func (s *Store) migrateAgentSessions() error {
+	_, err := s.db.Exec(`
+CREATE TABLE IF NOT EXISTS agent_sessions (
+    id TEXT PRIMARY KEY,
+    pi_session_id TEXT UNIQUE,
+    session_path TEXT NOT NULL UNIQUE,
+    title TEXT NOT NULL DEFAULT '',
+    model_provider TEXT,
+    model_id TEXT,
+    thinking_level TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    last_used_at INTEGER NOT NULL,
+    archived INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS agent_sessions_last_used ON agent_sessions(last_used_at DESC);
+CREATE INDEX IF NOT EXISTS agent_sessions_archived ON agent_sessions(archived);
+`)
+	if err != nil {
+		return fmt.Errorf("migrating agent_sessions: %w", err)
+	}
 	return nil
 }
 

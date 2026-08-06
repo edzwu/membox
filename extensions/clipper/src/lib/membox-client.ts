@@ -9,11 +9,17 @@ function headers(settings: BridgeSettings, json = false): HeadersInit {
 }
 
 export async function fetchBridgeStatus(settings: BridgeSettings): Promise<BridgeStatus> {
-  const base = settings.baseUrl.replace(/\/$/, '');
+  const base = (settings.baseUrl || '').replace(/\/$/, '');
+  if (!base) {
+    return { connected: false, error: 'Server URL is empty' };
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 4000);
   try {
     const response = await fetch(`${base}/api/bridge/status`, {
       method: 'GET',
       headers: headers(settings),
+      signal: controller.signal,
     });
     if (!response.ok) {
       return { connected: false, error: `HTTP ${response.status}` };
@@ -21,10 +27,13 @@ export async function fetchBridgeStatus(settings: BridgeSettings): Promise<Bridg
     const data = (await response.json()) as BridgeStatus;
     return { connected: !!data.connected, auth_required: data.auth_required };
   } catch (err) {
-    return {
-      connected: false,
-      error: err instanceof Error ? err.message : String(err),
-    };
+    const message = err instanceof Error ? err.message : String(err);
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      return { connected: false, error: 'timed out after 4s — is membox running on that URL?' };
+    }
+    return { connected: false, error: message };
+  } finally {
+    clearTimeout(timer);
   }
 }
 

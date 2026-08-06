@@ -133,6 +133,18 @@ func (b *Box) EnsureWebCompanion(ctx context.Context, lifecycle string) (WebStat
 	return webStatusView(status), err
 }
 
+// RestartWebCompanion stops any existing companion for this home (including
+// orphans on the preferred extension port) and starts a fresh one. The TUI
+// calls this on entry so the browser extension keeps a stable :8787 pairing
+// and Agent workers are owned by the current process generation.
+func (b *Box) RestartWebCompanion(ctx context.Context, lifecycle string) (WebStatusView, error) {
+	if strings.TrimSpace(lifecycle) == "" {
+		lifecycle = b.webLifecycleFromSetting(ctx)
+	}
+	status, err := companion.Restart(ctx, b.home, lifecycle, 0, nil)
+	return webStatusView(status), err
+}
+
 // StopWeb asks the Web Companion to shut down gracefully and waits for it.
 func (b *Box) StopWeb(ctx context.Context) error {
 	return companion.Stop(ctx, b.home)

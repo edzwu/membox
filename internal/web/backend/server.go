@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"membox/internal/agent"
 	"membox/internal/application"
 	"membox/internal/domain/catalog"
 )
@@ -50,6 +51,10 @@ type Server struct {
 	companionEverLeased  bool
 	onCompanionStop      func()
 	onCompanionLifecycle func(mode string)
+
+	// Agent control plane (Pi RPC workers). Optional; nil outside Companion.
+	agentMu sync.Mutex
+	agent   agent.Manager
 }
 
 // NewServer receives frontend files from the composition root rather than
@@ -95,6 +100,7 @@ func (s *Server) Start(ctx context.Context, port int) (string, error) {
 	mux.HandleFunc("/api/doc/", s.handleDocument)
 	mux.HandleFunc("/api/save", s.handleSave)
 	mux.HandleFunc("/api/sync", s.handleSync)
+	s.registerAgentRoutes(mux)
 	mux.Handle("/membox/", noStore{http.StripPrefix("/membox/", http.FileServer(http.FS(s.integrationFS)))})
 	mux.HandleFunc("/", s.handleFrontend)
 
@@ -116,6 +122,9 @@ func (s *Server) ViewURL(selector string) string {
 
 // Shutdown stops the server gracefully.
 func (s *Server) Shutdown(ctx context.Context) error {
+	if mgr := s.agentManager(); mgr != nil {
+		_ = mgr.Shutdown(ctx)
+	}
 	if s.httpServer == nil {
 		return nil
 	}

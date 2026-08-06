@@ -132,6 +132,7 @@ func newRoot(ctx context.Context, runtime *runtime, in io.Reader, out, stderr io
 		newIndexCommand(runtime),
 		newServeCommand(runtime),
 		newWebCommand(runtime),
+		newAgentCommand(runtime),
 	)
 	root.SetVersionTemplate("{{printf \"%s\" .Version}}\n")
 	return root

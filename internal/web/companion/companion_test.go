@@ -95,6 +95,56 @@ func TestProbeMissingBridgeReportsNotRunning(t *testing.T) {
 	}
 }
 
+func TestRestartStopsThenSpawns(t *testing.T) {
+	home := t.TempDir()
+	var stopCount atomic.Int32
+	var statusHits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/companion/status":
+			statusHits.Add(1)
+			if stopCount.Load() > 0 {
+				writer.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			_ = json.NewEncoder(writer).Encode(map[string]any{"running": true, "pid": 9, "mode": "session", "port": 8787})
+		case "/api/companion/stop":
+			stopCount.Add(1)
+			_ = json.NewEncoder(writer).Encode(map[string]any{"stopping": true})
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+	writeBridge(t, home, server.URL, "tok")
+
+	spawned := false
+	status, err := Restart(context.Background(), home, LifecycleSession, 0, func(context.Context, string, string, int) (int, error) {
+		spawned = true
+		// Point bridge at a fresh fake that answers ready.
+		fresh := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			if request.URL.Path == "/api/companion/status" {
+				_ = json.NewEncoder(writer).Encode(map[string]any{"running": true, "pid": 11, "mode": "session", "port": 8787})
+				return
+			}
+			http.NotFound(writer, request)
+		}))
+		t.Cleanup(fresh.Close)
+		writeBridge(t, home, fresh.URL, "tok")
+		return 11, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stopCount.Load() == 0 {
+		t.Fatal("Restart must stop the previous companion")
+	}
+	if !spawned || !status.Running || !status.Started || status.PID != 11 {
+		t.Fatalf("restart result=%+v spawned=%v", status, spawned)
+	}
+	_ = statusHits
+}
+
 func TestEnsureConnectsToRunningWithoutSpawning(t *testing.T) {
 	fake := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")

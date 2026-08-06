@@ -215,6 +215,10 @@ func (f *fakeApp) webStatusView() membox.WebStatusView {
 func (f *fakeApp) WebStatus(context.Context) (membox.WebStatusView, error) {
 	return f.webStatusView(), nil
 }
+func (f *fakeApp) RestartWebCompanion(ctx context.Context, lifecycle string) (membox.WebStatusView, error) {
+	return f.EnsureWebCompanion(ctx, lifecycle)
+}
+
 func (f *fakeApp) EnsureWebCompanion(_ context.Context, _ string) (membox.WebStatusView, error) {
 	f.webEnsureCalls++
 	if f.webEnsureErr != nil {
@@ -804,7 +808,7 @@ func TestModel_AgentModeUsesBadgeAndPlaceholderError(t *testing.T) {
 	model = updated.(Model)
 	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
 	model = updated.(Model)
-	if model.inputMode != inputModeAgent || !strings.Contains(model.modeBadge(), " AGENT ") {
+	if model.inputMode != inputModeAgent || !strings.Contains(model.modeBadge(), "AGENT") {
 		t.Fatalf("ctrl+p did not cycle to agent mode: mode=%s badge=%q", model.inputMode, model.modeBadge())
 	}
 	if !strings.Contains(model.input.Placeholder, "agent") {
@@ -822,8 +826,8 @@ func TestModel_AgentModeUsesBadgeAndPlaceholderError(t *testing.T) {
 	model.input.SetValue("summarize current document")
 	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(Model)
-	if model.filterErr == nil || !strings.Contains(model.filterErr.Error(), "not connected") {
-		t.Fatalf("agent placeholder error missing: %v", model.filterErr)
+	if model.filterErr == nil || !strings.Contains(model.filterErr.Error(), "not ready") {
+		t.Fatalf("agent not-ready error missing: %v", model.filterErr)
 	}
 }
 

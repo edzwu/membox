@@ -1,6 +1,6 @@
 # membox × Pi Agent 集成设计
 
-> 状态：Proposed
+> 状态：In progress (Phase 0–2 foundation landed; write tools / Web drawer / full TUI workspace still open)
 > 
 > 目标：把 TUI 中现有的 `AGENT` 输入模式实现为真正可用、可流式显示、可恢复会话的 Pi Agent 客户端，并在 Web Companion 阅读器中提供同一套会话和聊天窗口。
 > 

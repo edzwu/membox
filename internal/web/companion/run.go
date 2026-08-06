@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"membox/internal/agent"
 	"membox/internal/bootstrap"
 	"membox/internal/web"
 	"membox/internal/web/backend"
@@ -81,10 +82,54 @@ func Run(ctx context.Context, options Options) error {
 		rewriteBridgeMode(options.Home, mode)
 	})
 
+	// Agent manager is lazy: first status/session request probes Pi.
+	// Free-form agent.* keys live in settings without the typed TUI settingSpecs.
+	storeGet := func(ctx context.Context, key string) (string, error) {
+		return service.Store().GetSetting(ctx, key)
+	}
+	agentEnabled := true
+	if v, _ := storeGet(runCtx, "agent.enabled"); v == "false" {
+		agentEnabled = false
+	}
+	maxWorkers := 2
+	if v, _ := storeGet(runCtx, "agent.max_workers"); v != "" {
+		if n, convErr := strconv.Atoi(v); convErr == nil && n > 0 {
+			maxWorkers = n
+		}
+	}
+	idleTimeout := 10 * time.Minute
+	if v, _ := storeGet(runCtx, "agent.idle_timeout"); v != "" {
+		if d, convErr := time.ParseDuration(v); convErr == nil && d > 0 {
+			idleTimeout = d
+		}
+	}
+	piPath, _ := storeGet(runCtx, "agent.pi_path")
+	var catalog agent.SessionCatalog
+	if c, ok := service.Store().(agent.SessionCatalog); ok {
+		catalog = c
+	}
+	var baseURLOnce string
+	agentMgr := agent.NewManager(agent.Config{
+		Home:            options.Home,
+		Enabled:         agentEnabled,
+		PiPath:          piPath,
+		MaxWorkers:      maxWorkers,
+		IdleTimeout:     idleTimeout,
+		WriteTools:      false, // Phase 4 gate
+		ExtensionSource: agent.ExtensionSource,
+		Catalog:         catalog,
+		Tools:           &agent.ServiceDocumentTools{Service: service},
+		GetSetting:      storeGet,
+		InternalBaseURL: func() string { return baseURLOnce },
+	})
+	server.SetAgentManager(agentMgr)
+
 	baseURL, listenPort, err := startWithPortPreference(runCtx, server, options.Port)
 	if err != nil {
+		_ = agentMgr.Shutdown(runCtx)
 		return err
 	}
+	baseURLOnce = baseURL
 	if _, err := backend.WriteBridgeFile(options.Home, backend.BridgeFile{
 		BaseURL:     baseURL,
 		Token:       token,

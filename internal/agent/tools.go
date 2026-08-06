@@ -1,0 +1,289 @@
+package agent
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"unicode/utf8"
+
+	"membox/internal/application"
+	"membox/internal/domain/catalog"
+)
+
+// Default body chunk size returned by read tool (characters, not bytes).
+const defaultReadLimit = 12000
+
+// DocumentTools is the application-port surface used by the membox Pi extension
+// through internal HTTP endpoints. Write methods exist for Phase 4 but are
+// gated by Manager.WriteToolsEnabled.
+type DocumentTools interface {
+	SearchDocuments(ctx context.Context, query string, limit int) ([]DocumentHit, error)
+	ReadDocument(ctx context.Context, id string, cursor string, limit int) (DocumentChunk, error)
+	GetDocument(ctx context.Context, id string) (DocumentView, error)
+	ListRelated(ctx context.Context, id string) (RelatedView, error)
+	// Write tools (Phase 4) — registered only when write tools are enabled.
+	CreateNote(ctx context.Context, cmd CreateNoteCommand) (MutationResult, error)
+	UpdateDocument(ctx context.Context, cmd UpdateDocumentCommand) (MutationResult, error)
+	RenameDocument(ctx context.Context, cmd RenameDocumentCommand) (MutationResult, error)
+}
+
+// DocumentHit is one search result.
+type DocumentHit struct {
+	ID      string `json:"id"`
+	Title   string `json:"title"`
+	Snippet string `json:"snippet,omitempty"`
+	Path    string `json:"path,omitempty"`
+}
+
+// DocumentChunk is a bounded body read.
+type DocumentChunk struct {
+	ID           string `json:"id"`
+	Title        string `json:"title"`
+	Revision     string `json:"revision"`
+	Text         string `json:"text"`
+	Offset       int    `json:"offset"`
+	NextCursor   string `json:"next_cursor,omitempty"`
+	TotalRunes   int    `json:"total_runes"`
+	Truncated    bool   `json:"truncated"`
+}
+
+// DocumentView is metadata for one document.
+type DocumentView struct {
+	ID       string `json:"id"`
+	Title    string `json:"title"`
+	Status   string `json:"status"`
+	Revision string `json:"revision"`
+	Summary  string `json:"summary,omitempty"`
+	Pinned   bool   `json:"pinned"`
+	Path     string `json:"path,omitempty"`
+}
+
+// RelatedView summarizes neighborhood links.
+type RelatedView struct {
+	ID      string        `json:"id"`
+	Notes   []DocumentHit `json:"notes"`
+	Links   []DocumentHit `json:"links"`
+	Topics  []DocumentHit `json:"topics"`
+}
+
+// CreateNoteCommand creates a plain note (Phase 4).
+type CreateNoteCommand struct {
+	Title      string `json:"title"`
+	Body       string `json:"body"`
+	TargetID   string `json:"target_id,omitempty"`
+	PreviewOK  bool   `json:"-"`
+}
+
+// UpdateDocumentCommand replaces document body with revision check (Phase 4).
+type UpdateDocumentCommand struct {
+	ID               string `json:"id"`
+	ExpectedRevision string `json:"expected_revision"`
+	Body             string `json:"body"`
+}
+
+// RenameDocumentCommand renames while preserving UUID (Phase 4).
+type RenameDocumentCommand struct {
+	ID               string `json:"id"`
+	ExpectedRevision string `json:"expected_revision"`
+	NewFilename      string `json:"new_filename"`
+}
+
+// MutationResult is returned by write tools.
+type MutationResult struct {
+	ID       string `json:"id"`
+	Title    string `json:"title,omitempty"`
+	Revision string `json:"revision,omitempty"`
+	Denied   bool   `json:"denied,omitempty"`
+	Reason   string `json:"reason,omitempty"`
+}
+
+// ServiceDocumentTools adapts application.Service for agent tools.
+type ServiceDocumentTools struct {
+	Service *application.Service
+}
+
+func (t *ServiceDocumentTools) SearchDocuments(ctx context.Context, query string, limit int) ([]DocumentHit, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	if limit > 50 {
+		limit = 50
+	}
+	hits, err := t.Service.Search(ctx, query, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]DocumentHit, 0, len(hits))
+	for _, hit := range hits {
+		out = append(out, DocumentHit{
+			ID:      string(hit.DocumentID),
+			Title:   hit.Title,
+			Snippet: hit.Snippet,
+			Path:    hit.Path,
+		})
+	}
+	return out, nil
+}
+
+func (t *ServiceDocumentTools) GetDocument(ctx context.Context, id string) (DocumentView, error) {
+	doc, abs, err := t.Service.ResolveDocument(ctx, id)
+	if err != nil {
+		return DocumentView{}, err
+	}
+	return documentView(doc, abs), nil
+}
+
+func (t *ServiceDocumentTools) ReadDocument(ctx context.Context, id string, cursor string, limit int) (DocumentChunk, error) {
+	if limit <= 0 {
+		limit = defaultReadLimit
+	}
+	if limit > 40000 {
+		limit = 40000
+	}
+	doc, _, err := t.Service.ResolveDocument(ctx, id)
+	if err != nil {
+		return DocumentChunk{}, err
+	}
+	body, err := t.Service.ReadDocument(ctx, id)
+	if err != nil {
+		return DocumentChunk{}, err
+	}
+	text := string(body)
+	total := utf8.RuneCountInString(text)
+	offset := 0
+	if cursor != "" {
+		if _, err := fmt.Sscanf(cursor, "%d", &offset); err != nil || offset < 0 {
+			return DocumentChunk{}, fmtError(CodeInvalidRequest, "invalid read cursor")
+		}
+	}
+	runes := []rune(text)
+	if offset > len(runes) {
+		offset = len(runes)
+	}
+	end := offset + limit
+	if end > len(runes) {
+		end = len(runes)
+	}
+	chunk := string(runes[offset:end])
+	next := ""
+	truncated := end < len(runes)
+	if truncated {
+		next = fmt.Sprintf("%d", end)
+	}
+	return DocumentChunk{
+		ID:         string(doc.ID),
+		Title:      doc.Index.Title,
+		Revision:   documentRevision(doc),
+		Text:       chunk,
+		Offset:     offset,
+		NextCursor: next,
+		TotalRunes: total,
+		Truncated:  truncated,
+	}, nil
+}
+
+func (t *ServiceDocumentTools) ListRelated(ctx context.Context, id string) (RelatedView, error) {
+	doc, graph, err := t.Service.GetDocumentGraph(ctx, id)
+	if err != nil {
+		return RelatedView{}, err
+	}
+	view := RelatedView{ID: string(doc.ID)}
+	for _, link := range graph.Outgoing {
+		if link.Document == nil {
+			continue
+		}
+		view.Links = append(view.Links, DocumentHit{ID: string(link.Document.ID), Title: link.Document.Index.Title})
+	}
+	for _, link := range graph.Incoming {
+		if link.Document == nil {
+			continue
+		}
+		view.Links = append(view.Links, DocumentHit{ID: string(link.Document.ID), Title: link.Document.Index.Title})
+	}
+	for _, topic := range graph.Topics {
+		if topic.Document == nil {
+			continue
+		}
+		view.Topics = append(view.Topics, DocumentHit{ID: string(topic.Document.ID), Title: topic.Document.Index.Title})
+	}
+	// Also list annotation notes via dedicated API.
+	if _, notes, noteErr := t.Service.ListAnnotationNotes(ctx, id); noteErr == nil {
+		seen := map[string]bool{}
+		for _, n := range view.Notes {
+			seen[n.ID] = true
+		}
+		for _, note := range notes {
+			nid := string(note.NoteDocumentID)
+			if seen[nid] {
+				continue
+			}
+			if noteDoc, _, rerr := t.Service.ResolveDocument(ctx, nid); rerr == nil {
+				view.Notes = append(view.Notes, DocumentHit{ID: nid, Title: noteDoc.Index.Title})
+			} else {
+				view.Notes = append(view.Notes, DocumentHit{ID: nid})
+			}
+		}
+	}
+	return view, nil
+}
+
+func (t *ServiceDocumentTools) CreateNote(ctx context.Context, cmd CreateNoteCommand) (MutationResult, error) {
+	return MutationResult{Denied: true, Reason: CodeWriteToolsDisabled}, fmtError(CodeWriteToolsDisabled, "write tools are disabled until mutation coordinator Phase 4")
+}
+
+func (t *ServiceDocumentTools) UpdateDocument(ctx context.Context, cmd UpdateDocumentCommand) (MutationResult, error) {
+	return MutationResult{Denied: true, Reason: CodeWriteToolsDisabled}, fmtError(CodeWriteToolsDisabled, "write tools are disabled until mutation coordinator Phase 4")
+}
+
+func (t *ServiceDocumentTools) RenameDocument(ctx context.Context, cmd RenameDocumentCommand) (MutationResult, error) {
+	return MutationResult{Denied: true, Reason: CodeWriteToolsDisabled}, fmtError(CodeWriteToolsDisabled, "write tools are disabled until mutation coordinator Phase 4")
+}
+
+func documentView(doc *catalog.Document, abs string) DocumentView {
+	return DocumentView{
+		ID:       string(doc.ID),
+		Title:    doc.Index.Title,
+		Status:   string(doc.Status),
+		Revision: documentRevision(doc),
+		Summary:  doc.Index.Summary,
+		Pinned:   doc.Pinned,
+		Path:     abs,
+	}
+}
+
+// documentRevision is a stable content identity the agent can round-trip.
+func documentRevision(doc *catalog.Document) string {
+	if doc.Index.SHA256 != "" {
+		return doc.Index.SHA256
+	}
+	return fmt.Sprintf("mtime:%d:size:%d", doc.Index.MTime, doc.Index.Size)
+}
+
+// ToolNamesReadOnly is the V1 allowlist passed to pi --tools.
+func ToolNamesReadOnly() []string {
+	return []string{
+		"membox_search_documents",
+		"membox_read_document",
+		"membox_list_related",
+		"membox_get_document",
+	}
+}
+
+// ToolNamesAll includes write tools (Phase 4).
+func ToolNamesAll() []string {
+	return append(ToolNamesReadOnly(),
+		"membox_create_note",
+		"membox_create_annotation_note",
+		"membox_update_document",
+		"membox_rename_document",
+	)
+}
+
+// MarshalToolResult is a helper for extension-facing JSON payloads.
+func MarshalToolResult(v any) json.RawMessage {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return json.RawMessage(`{"error":"marshal_failed"}`)
+	}
+	return raw
+}
