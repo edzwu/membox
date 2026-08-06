@@ -1023,13 +1023,19 @@ func fileExists(path string) bool {
 type RenameDocumentResult struct {
 	DocumentID catalog.DocumentID
 	Path       string
+	Title      string
 }
 
 // RenameDocument moves an active source file to a new filename in the same
 // directory and re-points the existing Document at the new location. The
 // stable UUID, graph links, source URLs, and annotation relations survive
 // untouched because only the location changes.
-func (s *Service) RenameDocument(ctx context.Context, selector, newFilename string) (RenameDocumentResult, error) {
+//
+// displayTitle, when non-empty, is written into YAML front matter (title:)
+// and the first ATX H1 so the index title, file basename, and body stay
+// aligned. Without this, a UI rename that only moved the file would appear
+// to "snap back" on reopen because extractTitle still read the old H1.
+func (s *Service) RenameDocument(ctx context.Context, selector, newFilename, displayTitle string) (RenameDocumentResult, error) {
 	release, lockErr := s.beginMutation()
 	if lockErr != nil {
 		return RenameDocumentResult{}, lockErr
@@ -1050,19 +1056,42 @@ func (s *Service) RenameDocument(ctx context.Context, selector, newFilename stri
 	if ext := strings.ToLower(filepath.Ext(newFilename)); ext != ".md" && ext != ".markdown" {
 		return RenameDocumentResult{}, errors.New("renamed files must stay Markdown (.md or .markdown)")
 	}
-	if filepath.Base(absolute) == newFilename {
-		return RenameDocumentResult{DocumentID: document.ID, Path: absolute}, nil
+	displayTitle = strings.TrimSpace(displayTitle)
+	if displayTitle == "" {
+		displayTitle = strings.TrimSuffix(newFilename, filepath.Ext(newFilename))
 	}
-	target := filepath.Join(filepath.Dir(absolute), newFilename)
-	if _, err := os.Stat(target); err == nil {
-		return RenameDocumentResult{}, fmt.Errorf("%s already exists", target)
-	} else if !errors.Is(err, os.ErrNotExist) {
+
+	target := absolute
+	moved := false
+	if filepath.Base(absolute) != newFilename {
+		target = filepath.Join(filepath.Dir(absolute), newFilename)
+		if _, err := os.Stat(target); err == nil {
+			return RenameDocumentResult{}, fmt.Errorf("%s already exists", target)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return RenameDocumentResult{}, err
+		}
+		if err := s.writer.Move(ctx, absolute, target); err != nil {
+			return RenameDocumentResult{}, err
+		}
+		moved = true
+	}
+
+	body, err := s.reader.Read(ctx, target)
+	if err != nil {
 		return RenameDocumentResult{}, err
 	}
-	if err := s.writer.Move(ctx, absolute, target); err != nil {
-		return RenameDocumentResult{}, err
+	rewritten, changed := rewriteMarkdownDisplayTitle(body, displayTitle)
+	if changed {
+		if err := s.writer.Write(ctx, target, rewritten); err != nil {
+			return RenameDocumentResult{}, err
+		}
+		body = rewritten
 	}
-	relative := filepath.ToSlash(filepath.Join(filepath.Dir(filepath.FromSlash(document.Location.RelativePath)), newFilename))
+
+	relative := document.Location.RelativePath
+	if moved {
+		relative = filepath.ToSlash(filepath.Join(filepath.Dir(filepath.FromSlash(document.Location.RelativePath)), newFilename))
+	}
 	location, err := catalog.NewLocation(document.Location.PathID, relative)
 	if err != nil {
 		return RenameDocumentResult{}, err
@@ -1071,13 +1100,104 @@ func (s *Service) RenameDocument(ctx context.Context, selector, newFilename stri
 	if err != nil {
 		return RenameDocumentResult{}, err
 	}
-	if err := document.Relocate(location, observation, s.clock.Now()); err != nil {
-		return RenameDocumentResult{}, err
+	// ObserveFile re-reads disk; ensure title matches even if body rewrite
+	// and scanner disagree on edge cases (e.g. title only in code fence).
+	if strings.TrimSpace(observation.Title) == "" || observation.Title != displayTitle {
+		observation.Title = displayTitle
+		observation.Body = body
+	}
+	if moved {
+		if err := document.Relocate(location, observation, s.clock.Now()); err != nil {
+			return RenameDocumentResult{}, err
+		}
+	} else {
+		if err := document.Observe(observation, s.clock.Now()); err != nil {
+			return RenameDocumentResult{}, err
+		}
 	}
 	if err := s.store.SaveDocument(ctx, port.ScanSave{Document: document, Body: observation.Body, Reindex: true}); err != nil {
 		return RenameDocumentResult{}, err
 	}
-	return RenameDocumentResult{DocumentID: document.ID, Path: target}, nil
+	return RenameDocumentResult{DocumentID: document.ID, Path: target, Title: displayTitle}, nil
+}
+
+// rewriteMarkdownDisplayTitle updates YAML front matter title: and the first
+// ATX H1 so display name, filename, and body stay consistent after a rename.
+func rewriteMarkdownDisplayTitle(body []byte, title string) ([]byte, bool) {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return body, false
+	}
+	text := string(body)
+	lines := strings.Split(text, "\n")
+	changed := false
+	quoted := strconv.Quote(title)
+
+	// Front matter title:
+	if len(lines) > 0 && strings.TrimSpace(lines[0]) == "---" {
+		for i := 1; i < len(lines); i++ {
+			trim := strings.TrimSpace(lines[i])
+			if trim == "---" || trim == "..." {
+				break
+			}
+			raw := lines[i]
+			indentLen := len(raw) - len(strings.TrimLeft(raw, " \t"))
+			indent, rest := raw[:indentLen], raw[indentLen:]
+			key, _, ok := strings.Cut(rest, ":")
+			if !ok || !strings.EqualFold(strings.TrimSpace(key), "title") {
+				continue
+			}
+			next := indent + "title: " + quoted
+			if lines[i] != next {
+				lines[i] = next
+				changed = true
+			}
+			break
+		}
+	}
+
+	// First ATX H1 outside fences/front matter.
+	inFrontmatter := len(lines) > 0 && strings.TrimSpace(lines[0]) == "---"
+	inFence := false
+	fenceMarker := ""
+	for i, line := range lines {
+		trim := strings.TrimSpace(line)
+		if i == 0 && trim == "---" {
+			continue
+		}
+		if inFrontmatter {
+			if trim == "---" || trim == "..." {
+				inFrontmatter = false
+			}
+			continue
+		}
+		if strings.HasPrefix(trim, "```") || strings.HasPrefix(trim, "~~~") {
+			mark := trim[:3]
+			if !inFence {
+				inFence, fenceMarker = true, mark
+			} else if strings.HasPrefix(trim, fenceMarker) {
+				inFence, fenceMarker = false, ""
+			}
+			continue
+		}
+		if inFence {
+			continue
+		}
+		if strings.HasPrefix(trim, "# ") && !strings.HasPrefix(trim, "##") {
+			next := "# " + title
+			if line != next {
+				// Keep leading indentation if any.
+				indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+				lines[i] = indent + next
+				changed = true
+			}
+			break
+		}
+	}
+	if !changed {
+		return body, false
+	}
+	return []byte(strings.Join(lines, "\n")), true
 }
 
 func (s *Service) ListTopics(ctx context.Context) ([]port.DocumentRecord, error) {

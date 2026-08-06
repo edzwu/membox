@@ -224,6 +224,13 @@ func (s *Server) handleDocument(writer http.ResponseWriter, request *http.Reques
 	// HTTP header values do not have a browser-portable Unicode encoding.
 	// Keep the custom header ASCII-only and let the frontend decode UTF-8.
 	writer.Header().Set("X-Membox-Filename", url.PathEscape(filepath.Base(document.Location.RelativePath)))
+	// Display title from the catalog (front matter / H1), not just the basename.
+	// The reader prefers this so a rename that updated body title survives reopen.
+	title := strings.TrimSpace(document.Index.Title)
+	if title == "" {
+		title = strings.TrimSuffix(filepath.Base(document.Location.RelativePath), filepath.Ext(document.Location.RelativePath))
+	}
+	writer.Header().Set("X-Membox-Title", url.PathEscape(title))
 	writer.Header().Set("X-Membox-Path", absolute)
 	_, _ = writer.Write(body)
 }
@@ -245,11 +252,12 @@ func (s *Server) handleDocumentRename(writer http.ResponseWriter, request *http.
 	defer s.documentMu.Unlock()
 	var payload struct {
 		Filename string `json:"filename"`
+		Title    string `json:"title"`
 	}
 	if !decodeJSON(writer, request, &payload) {
 		return
 	}
-	result, err := s.service.RenameDocument(request.Context(), selector, payload.Filename)
+	result, err := s.service.RenameDocument(request.Context(), selector, payload.Filename, payload.Title)
 	if err != nil {
 		http.Error(writer, err.Error(), http.StatusBadRequest)
 		return
@@ -260,6 +268,7 @@ func (s *Server) handleDocumentRename(writer http.ResponseWriter, request *http.
 		"id":       string(result.DocumentID),
 		"path":     result.Path,
 		"filename": filepath.Base(result.Path),
+		"title":    result.Title,
 	})
 }
 

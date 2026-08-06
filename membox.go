@@ -759,21 +759,26 @@ func (b *Box) TrashSummary(ctx context.Context) (TrashSummaryResult, error) {
 type RenameDocumentCommand struct {
 	Selector    string
 	NewFilename string
+	// Title is the human display name. When set, front matter and the first H1
+	// are updated so reopen/list UIs do not snap back to the old body title.
+	Title string
 }
 type RenameDocumentResult struct {
 	DocumentID string `json:"document_id"`
 	Path       string `json:"path"`
+	Title      string `json:"title,omitempty"`
 }
 
 // RenameDocument moves a document's Markdown file to a new filename in the
 // same directory without changing its stable UUID. Links, source URLs, and
-// annotation relations are preserved.
+// annotation relations are preserved. Display title in the body is updated
+// when command.Title is set (or derived from the new filename).
 func (b *Box) RenameDocument(ctx context.Context, command RenameDocumentCommand) (RenameDocumentResult, error) {
-	result, err := b.service.RenameDocument(ctx, command.Selector, command.NewFilename)
+	result, err := b.service.RenameDocument(ctx, command.Selector, command.NewFilename, command.Title)
 	if err != nil {
 		return RenameDocumentResult{}, err
 	}
-	return RenameDocumentResult{DocumentID: string(result.DocumentID), Path: result.Path}, nil
+	return RenameDocumentResult{DocumentID: string(result.DocumentID), Path: result.Path, Title: result.Title}, nil
 }
 
 type ReindexDocumentCommand struct{ Selector string }

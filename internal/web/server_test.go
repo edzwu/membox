@@ -124,29 +124,52 @@ func TestServerRenamesDocumentWithoutChangingIdentity(t *testing.T) {
 
 	body := postJSON(t, baseURL+"/api/doc/"+docID+"/rename", map[string]string{
 		"filename": "renamed-article.md",
+		"title":    "Renamed Article",
 	})
 	var result struct {
 		ID       string `json:"id"`
 		Filename string `json:"filename"`
+		Title    string `json:"title"`
 	}
 	mustUnmarshal(t, body, &result)
-	if result.ID != docID || result.Filename != "renamed-article.md" {
+	if result.ID != docID || result.Filename != "renamed-article.md" || result.Title != "Renamed Article" {
 		t.Fatalf("unexpected rename result: %+v", result)
 	}
 	if _, err := os.Stat(filepath.Join(notesDir, "flash.md")); !os.IsNotExist(err) {
 		t.Fatalf("old filename still exists: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(notesDir, "renamed-article.md")); err != nil {
+	renamedPath := filepath.Join(notesDir, "renamed-article.md")
+	if _, err := os.Stat(renamedPath); err != nil {
 		t.Fatalf("renamed file missing: %v", err)
+	}
+	saved, err := os.ReadFile(renamedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(saved), "# Renamed Article") {
+		t.Fatalf("body H1 not updated after rename: %s", saved)
 	}
 
 	resp, err := http.Get(baseURL + "/api/doc/" + docID)
 	if err != nil {
 		t.Fatal(err)
 	}
+	docBody, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	if got := resp.Header.Get("X-Membox-Filename"); got != "renamed-article.md" {
 		t.Fatalf("renamed filename header = %q", got)
+	}
+	if titleHdr := resp.Header.Get("X-Membox-Title"); titleHdr != "" {
+		decoded, decErr := url.PathUnescape(titleHdr)
+		if decErr != nil {
+			decoded = titleHdr
+		}
+		if decoded != "Renamed Article" {
+			t.Fatalf("X-Membox-Title = %q", titleHdr)
+		}
+	}
+	if !strings.Contains(string(docBody), "# Renamed Article") {
+		t.Fatalf("reopened body missing new H1: %s", docBody)
 	}
 }
 

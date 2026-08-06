@@ -151,19 +151,42 @@ async function renameCurrentDocument(titleElement, previousTitle, nextTitle) {
     const response = await fetch(`/api/doc/${encodeURIComponent(renamedDocumentID)}/rename`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ filename }),
+      // Send both filename and display title so the server can update the body
+      // H1/front matter. Filename-only renames used to snap back on reopen.
+      body: JSON.stringify({ filename, title: nextTitle }),
     });
     if (!response.ok) throw new Error((await response.text()).trim() || `HTTP ${response.status}`);
     const result = await response.json();
     if (documentID !== renamedDocumentID) return;
     const savedFilename = result.filename || filename;
-    const savedTitle = savedFilename.replace(/\.(?:md|markdown)$/i, '') || nextTitle;
+    const savedTitle = (result.title || '').trim() || nextTitle;
     state.droppedFilename = savedFilename;
     state.docTitle = savedTitle;
     titleElement.textContent = savedTitle;
     document.title = `${savedTitle} — membox`;
+    // Body H1/front matter may have changed server-side — refresh the article
+    // so the in-document heading matches the chrome title.
+    if (connected) {
+      try {
+        const fresh = await fetch(`/api/doc/${encodeURIComponent(renamedDocumentID)}`, { cache: 'no-store' });
+        if (fresh.ok) {
+          const markdown = await fresh.text();
+          loadedMarkdown = markdown;
+          // Preserve scroll while re-rendering title-bearing content.
+          const y = window.scrollY;
+          loadDocument(markdown);
+          state.droppedFilename = savedFilename;
+          state.docTitle = savedTitle;
+          const live = document.getElementById('doc-title');
+          if (live) live.textContent = savedTitle;
+          window.scrollTo(0, y);
+        }
+      } catch {
+        /* non-fatal: chrome title already updated */
+      }
+    }
     renderDocumentSwitcher();
-    showToast(`Renamed document to ${savedFilename}`);
+    showToast(`Renamed document to ${savedTitle}`);
   } catch (err) {
     if (documentID !== renamedDocumentID) return;
     state.docTitle = previousTitle;
@@ -1405,12 +1428,22 @@ async function loadFromMembox() {
     if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
     const markdown = await response.text();
     const filename = decodeFilenameHeader(response.headers.get('X-Membox-Filename'));
+    const catalogTitle = decodeFilenameHeader(response.headers.get('X-Membox-Title'));
     if (filename) {
       state.droppedFilename = filename;
-      document.title = `${filename.replace(/\.[^.]+$/, '')} — membox`;
     }
     loadedMarkdown = markdown;
     loadDocument(markdown);
+    // Prefer the catalog display title (front matter / H1 after rename) over
+    // the raw basename so reopen matches what the user typed.
+    if (catalogTitle) {
+      state.docTitle = catalogTitle;
+      const live = document.getElementById('doc-title');
+      if (live) live.textContent = catalogTitle;
+      document.title = `${catalogTitle} — membox`;
+    } else if (filename) {
+      document.title = `${filename.replace(/\.[^.]+$/, '')} — membox`;
+    }
     // Notes before progress: note cards change the layout, so the saved
     // scroll position only means something once they are in place.
     await restoreReadingState(documentID, markdown);
