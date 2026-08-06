@@ -394,6 +394,43 @@
   outline: none;
 }
 
+/* Long saved comments stay readable in the rail without taking over the page.
+   Only presentation is clamped; the model and edit textarea retain all text. */
+.annotation-layer.membox-notes-relayout {
+  overflow-anchor: none;
+}
+
+.annot-note.membox-note-preview .annot-note-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 6;
+  max-height: 8.4em;
+  overflow: hidden;
+}
+
+.membox-open-note {
+  grid-column: 2;
+  justify-self: start;
+  margin-top: 5px;
+  color: var(--accent);
+  font-family: var(--font-sans);
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1.2;
+  text-decoration: none;
+  text-underline-offset: 2px;
+}
+
+.membox-open-note:hover,
+.membox-open-note:focus-visible {
+  text-decoration: underline;
+  outline: none;
+}
+
+.annot-note:has(.annot-note-edit-input) .membox-open-note {
+  display: none;
+}
+
 /* The bottom-left cluster now contains persistence and relation actions only. */
 .membox-add-related {
   appearance: none;

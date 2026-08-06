@@ -66,7 +66,11 @@ function cleanExportClone(source, mode = 'site') {
     n.removeAttribute('aria-label');
     n.removeAttribute('aria-multiline');
   });
-  clone.querySelectorAll('.section-copy, .section-download, .lead-copy, .code-copy, .code-lang, .annot-note-edit, .annot-note-del, .snippet-copy, .snippet-langselect').forEach((n) => n.remove());
+  clone.querySelectorAll('.section-copy, .section-download, .lead-copy, .code-copy, .code-lang, .annot-note-edit, .annot-note-del, .snippet-copy, .snippet-langselect, [data-export-remove]').forEach((n) => n.remove());
+  clone.querySelectorAll('[data-export-remove-class]').forEach((n) => {
+    n.classList.remove(...n.dataset.exportRemoveClass.split(/\s+/).filter(Boolean));
+    delete n.dataset.exportRemoveClass;
+  });
   if (clone.matches('.fold-section.is-collapsed')) {
     clone.classList.remove('is-collapsed');
   }

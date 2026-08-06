@@ -91,8 +91,9 @@ func TestServerServesReaderAndMarkdown(t *testing.T) {
 	}
 	if !strings.Contains(string(adapterBody), "membox-document-navigation") ||
 		!strings.Contains(string(adapterBody), "membox-browse-notes") ||
-		!strings.Contains(string(adapterBody), "Notes in this document") {
-		t.Fatal("membox adapter does not inject the topbar note picker")
+		!strings.Contains(string(adapterBody), "Notes in this document") ||
+		!strings.Contains(string(adapterBody), "Open full note") {
+		t.Fatal("membox adapter does not inject the topbar note picker and saved-note links")
 	}
 
 	docResp, err := http.Get(baseURL + "/api/doc/" + docID)

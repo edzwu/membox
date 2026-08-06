@@ -11,6 +11,7 @@ import { showToast, flashButton, writeClipboard } from '../js/ui/feedback.js';
 import { updateMarkdownDownloadControl } from '../js/ui/chrome.js';
 import { markAnnotationsSaved } from '../js/annotations/session.js';
 import { focusNote } from '../js/annotations/focus.js';
+import { layoutMarginNotes } from '../js/annotations/layout.js';
 import {
   buildAnnotationSidecar,
   parseAnnotationSidecar,
@@ -247,8 +248,95 @@ function createBrowseNotesButton() {
 
 const browseNotesButton = createBrowseNotesButton();
 
+const NOTE_PREVIEW_LINES = 6;
+
 function noteCount() {
   return state.annotations.filter((entry) => typeof entry.note === 'string' && entry.note.trim()).length;
+}
+
+function noteDocumentURL(ref) {
+  const url = new URL(window.location.href);
+  url.searchParams.set('id', ref);
+  url.hash = '';
+  return url.href;
+}
+
+function captureReadingAnchor() {
+  const viewportTop = document.querySelector('.topbar')?.getBoundingClientRect().bottom || 0;
+  const candidates = [
+    ...elements.article.querySelectorAll('.fold-heading, p, li, pre, blockquote, table, img'),
+    ...elements.annotationLayer.querySelectorAll('.annot-note'),
+  ];
+  let best = null;
+  for (const element of candidates) {
+    const rect = element.getBoundingClientRect();
+    if (rect.bottom <= viewportTop || rect.top >= window.innerHeight) continue;
+    const score = Math.abs(rect.top - viewportTop);
+    if (!best || score < best.score) best = { element, top: rect.top, score };
+  }
+  return best;
+}
+
+function restoreReadingAnchor(anchor) {
+  if (!anchor || !anchor.element.isConnected) return;
+  const delta = anchor.element.getBoundingClientRect().top - anchor.top;
+  if (Math.abs(delta) > 0.5) window.scrollBy({ top: delta, behavior: 'auto' });
+}
+
+// Saved comments are regular Markdown documents. Keep long rail cards compact
+// while preserving the full text in the model/editor, and link to that source
+// document only after the backend has assigned its durable UUID. Lock a visible
+// content anchor across the synchronous relayout so previewing cannot move the
+// reader to a different paragraph or note.
+function renderLongNotePreviews() {
+  const readingAnchor = captureReadingAnchor();
+  elements.annotationLayer.classList.add('membox-notes-relayout');
+  const entries = new Map(state.annotations.map((entry) => [String(entry.id), entry]));
+  elements.annotationLayer.querySelectorAll('.annot-note[data-annot-id]').forEach((card) => {
+    const entry = entries.get(String(card.dataset.annotId));
+    const body = card.querySelector('.annot-note-body');
+    const text = body && body.querySelector('.annot-note-text');
+    let link = body && body.querySelector('.membox-open-note');
+    card.classList.remove('membox-note-preview');
+    delete card.dataset.exportRemoveClass;
+    if (!entry || !entry.ref || !text) {
+      if (link) link.remove();
+      return;
+    }
+    const lineHeight = parseFloat(getComputedStyle(text).lineHeight) || 16.8;
+    const isLong = text.scrollHeight > lineHeight * NOTE_PREVIEW_LINES + 8;
+    if (!isLong) {
+      if (link) link.remove();
+      return;
+    }
+    card.classList.add('membox-note-preview');
+    card.dataset.exportRemoveClass = 'membox-note-preview';
+    if (!link) {
+      link = document.createElement('a');
+      link.className = 'membox-open-note';
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.dataset.exportRemove = 'true';
+      link.textContent = 'Open full note ↗';
+      link.addEventListener('click', (event) => event.stopPropagation());
+      body.appendChild(link);
+    }
+    link.href = noteDocumentURL(entry.ref);
+    link.setAttribute('aria-label', 'Open full note in a new tab');
+  });
+  layoutMarginNotes();
+  restoreReadingAnchor(readingAnchor);
+  elements.annotationLayer.classList.remove('membox-notes-relayout');
+}
+
+let notePreviewTimer = null;
+
+function scheduleLongNotePreviews() {
+  if (notePreviewTimer !== null) return;
+  notePreviewTimer = window.setTimeout(() => {
+    notePreviewTimer = null;
+    renderLongNotePreviews();
+  }, 0);
 }
 
 function renderBrowseNotesButton() {
@@ -442,12 +530,15 @@ function onNoteOptionKeydown(event) {
 
 window.addEventListener('miru-annotations-changed', () => {
   renderBrowseNotesButton();
+  scheduleLongNotePreviews();
   if (!notesModal.backdrop.hidden) renderNoteOptions();
 });
 window.addEventListener('miru-annotations-saved', () => {
   renderBrowseNotesButton();
+  scheduleLongNotePreviews();
   if (!notesModal.backdrop.hidden) renderNoteOptions();
 });
+window.addEventListener('resize', scheduleLongNotePreviews);
 
 // ---------------------------------------------------------------------------
 // Related documents: a tile grid under the TOC showing the one-hop

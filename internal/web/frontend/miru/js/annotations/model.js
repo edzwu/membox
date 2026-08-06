@@ -189,7 +189,10 @@ export function applyAnnotationRange(range, flags) {
     notifyAnnotationsChanged();
   }
   scheduleNoteLayout();
-  if (flags.note) {
+  // Focus only a note the user just created. Restored notes are applied with
+  // notify:false; scrolling each of those into view would override the saved
+  // reading position and make document load jump through the note list.
+  if (flags.note && flags.notify !== false) {
     requestAnimationFrame(() => focusNote(id, { scrollTo: 'card', duration: 1600 }));
   }
   return span;
