@@ -189,11 +189,11 @@ export function applyAnnotationRange(range, flags) {
     notifyAnnotationsChanged();
   }
   scheduleNoteLayout();
-  // Focus only a note the user just created. Restored notes are applied with
-  // notify:false; scrolling each of those into view would override the saved
-  // reading position and make document load jump through the note list.
+  // Pulse only a note the user just created. The selection is already visible,
+  // so automatically scrolling to its rail/stack card can drag a long page all
+  // the way to the bottom. Restored notes use notify:false and do not pulse.
   if (flags.note && flags.notify !== false) {
-    requestAnimationFrame(() => focusNote(id, { scrollTo: 'card', duration: 1600 }));
+    requestAnimationFrame(() => focusNote(id, { duration: 1600 }));
   }
   return span;
 }
@@ -223,7 +223,9 @@ export function setNoteOnPassage(entry, annotEl, text) {
     annotEl.classList.add('annot-note-ref');
     attachNoteBadge(annotEl, entry.id);
     insertNoteCard(entry.id, text);
-    requestAnimationFrame(() => focusNote(entry.id, { scrollTo: 'card', duration: 1600 }));
+    // The annotated passage is already in view. Highlight the new pair without
+    // moving the document to a rail/stack card that may sit near the page end.
+    requestAnimationFrame(() => focusNote(entry.id, { duration: 1600 }));
   }
   refreshNoteNumbers();
   scheduleNoteLayout();
