@@ -1,9 +1,11 @@
-import { fetchClipsBySource, ingestClip } from '../lib/membox-client';
+import { fetchClipsBySource, ingestClip, IngestConflictError } from '../lib/membox-client';
 import { loadSettings } from '../lib/settings';
 import { getNotesEnabled } from '../lib/float-notes';
-import type { ClipPayload, IngestResult, SourceClip } from '../lib/types';
+import type { ClipPayload, IngestConflict, IngestResult, SourceClip } from '../lib/types';
 
-type IngestResponse = { ok: true; result: IngestResult } | { ok: false; error: string };
+type IngestResponse =
+  | { ok: true; result: IngestResult }
+  | { ok: false; error: string; conflict?: IngestConflict };
 
 async function syncBadge() {
   try {
@@ -28,12 +30,13 @@ export default defineBackground(() => {
 
   browser.runtime.onMessage.addListener((message, sender) => {
     if (message?.type === 'membox.ingest-active-tab') {
-      return ingestActiveTab();
+      return ingestActiveTab({ overwrite: message.overwrite === true });
     }
     if (message?.type === 'membox.ingest-payload') {
       return ingestPayload(message.payload as ClipPayload, {
         open: message.open !== false,
         tabId: sender?.tab?.id,
+        overwrite: message.overwrite === true,
       });
     }
     if (message?.type === 'membox.clips-for-url') {
@@ -58,7 +61,7 @@ async function clipsForUrl(
 
 async function ingestPayload(
   payload: ClipPayload,
-  opts: { open: boolean; tabId?: number },
+  opts: { open: boolean; tabId?: number; overwrite?: boolean },
 ): Promise<IngestResponse> {
   try {
     if (!payload?.body?.trim()) {
@@ -70,13 +73,16 @@ async function ingestPayload(
     if (payload.clipMode === 'selection' && payload.sourceUrl && opts.tabId) {
       await ensurePageClip(settings, opts.tabId, payload.sourceUrl);
     }
-    const result = await ingestClip(settings, payload);
+    const result = await ingestClip(settings, payload, { overwrite: opts.overwrite });
     const shouldOpen = opts.open && settings.autoOpen && result.view_url;
     if (shouldOpen) {
       await browser.tabs.create({ url: result.view_url });
     }
     return { ok: true, result };
   } catch (err) {
+    if (err instanceof IngestConflictError) {
+      return { ok: false, error: err.message, conflict: err.conflict };
+    }
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
@@ -100,7 +106,7 @@ async function ensurePageClip(
   }
 }
 
-async function ingestActiveTab(): Promise<IngestResponse> {
+async function ingestActiveTab(opts: { overwrite?: boolean } = {}): Promise<IngestResponse> {
   try {
     const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
     if (!tab?.id) {
@@ -120,8 +126,11 @@ async function ingestActiveTab(): Promise<IngestResponse> {
     }
 
     const clip = await clipTab(tab.id);
-    return ingestPayload(clip, { open: true });
+    return ingestPayload(clip, { open: true, overwrite: opts.overwrite });
   } catch (err) {
+    if (err instanceof IngestConflictError) {
+      return { ok: false, error: err.message, conflict: err.conflict };
+    }
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
 }

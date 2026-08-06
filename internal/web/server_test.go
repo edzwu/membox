@@ -503,6 +503,68 @@ func TestServerSaveCreatesDocumentWithUUID(t *testing.T) {
 	}
 }
 
+func TestServerIngestPageOverwriteKeepsUUID(t *testing.T) {
+	baseURL, _, _ := startServer(t)
+	source := "https://example.com/idempotent"
+	first := postJSON(t, baseURL+"/api/ingest", map[string]any{
+		"title": "First", "body": "# First\n\nv1\n", "source_url": source, "clip_mode": "page",
+	})
+	var created struct {
+		ID      string `json:"id"`
+		Created bool   `json:"created"`
+	}
+	mustUnmarshal(t, first, &created)
+	if created.ID == "" || !created.Created {
+		t.Fatalf("first ingest: %+v", created)
+	}
+
+	// Second save without overwrite must conflict.
+	data, _ := json.Marshal(map[string]any{
+		"title": "Second", "body": "# Second\n\nv2\n", "source_url": source, "clip_mode": "page",
+	})
+	resp, err := http.Post(baseURL+"/api/ingest", "application/json", strings.NewReader(string(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("expected 409, got %d %s", resp.StatusCode, body)
+	}
+	var conflict struct {
+		Error    struct{ Code string `json:"code"` } `json:"error"`
+		Existing struct{ ID string `json:"id"` }     `json:"existing"`
+	}
+	mustUnmarshal(t, body, &conflict)
+	if conflict.Error.Code != "clip_exists" || conflict.Existing.ID != created.ID {
+		t.Fatalf("conflict payload: %s", body)
+	}
+
+	// Overwrite keeps UUID and replaces content.
+	updated := postJSON(t, baseURL+"/api/ingest", map[string]any{
+		"title": "Second", "body": "# Second\n\nv2-final\n", "source_url": source, "clip_mode": "page",
+		"overwrite": true,
+	})
+	var result struct {
+		ID      string `json:"id"`
+		Created bool   `json:"created"`
+		Updated bool   `json:"updated"`
+	}
+	mustUnmarshal(t, updated, &result)
+	if result.ID != created.ID || result.Created || !result.Updated {
+		t.Fatalf("overwrite result: %+v want id=%s updated", result, created.ID)
+	}
+	docResp, err := http.Get(baseURL + "/api/doc/" + result.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer docResp.Body.Close()
+	docBody, _ := io.ReadAll(docResp.Body)
+	if !strings.Contains(string(docBody), "v2-final") {
+		t.Fatalf("body not overwritten: %s", docBody)
+	}
+}
+
 func TestServerIngestCreatesDocumentAndViewURL(t *testing.T) {
 	baseURL, _, notesDir := startServer(t)
 

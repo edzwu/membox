@@ -471,14 +471,28 @@ type ingestRequest struct {
 	// clip with the same source_url already exists), the new note is graph-linked
 	// from that document via CreateNote's FromSelector.
 	From string `json:"from"`
+	// Overwrite replaces an existing clip for the same source_url + clip_mode
+	// while keeping its Document UUID. Without this flag, a conflict is returned
+	// so the client can ask the user before mutating.
+	Overwrite bool `json:"overwrite"`
 }
 
 type ingestResponse struct {
-	ID      string `json:"id"`
-	Path    string `json:"path"`
-	Created bool   `json:"created"`
-	ViewURL string `json:"view_url"`
-	Linked  string `json:"linked,omitempty"`
+	ID        string `json:"id"`
+	Path      string `json:"path"`
+	Created   bool   `json:"created"`
+	Updated   bool   `json:"updated,omitempty"`
+	ViewURL   string `json:"view_url"`
+	Linked    string `json:"linked,omitempty"`
+	Title     string `json:"title,omitempty"`
+}
+
+type ingestConflictResponse struct {
+	Error struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	} `json:"error"`
+	Existing ingestResponse `json:"existing"`
 }
 
 // handleIngest creates a new indexed Markdown note from a browser clip and
@@ -515,6 +529,63 @@ func (s *Server) handleIngest(writer http.ResponseWriter, request *http.Request)
 	}
 
 	ctx := request.Context()
+
+	// Idempotent page clips: same source_url keeps one UUID. Without overwrite
+	// the client must confirm; with overwrite we SyncDocument in place.
+	if sourceURL != "" && clipMode == "page" {
+		if existingID := s.findPageDocumentID(ctx, sourceURL); existingID != "" {
+			if !payload.Overwrite {
+				doc, abs, _ := s.service.ResolveDocument(ctx, existingID)
+				existingTitle := title
+				if doc != nil && strings.TrimSpace(doc.Index.Title) != "" {
+					existingTitle = doc.Index.Title
+				}
+				path := abs
+				writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+				writer.WriteHeader(http.StatusConflict)
+				resp := ingestConflictResponse{}
+				resp.Error.Code = "clip_exists"
+				resp.Error.Message = "A page clip for this URL already exists. Confirm overwrite to replace its content and keep the same UUID."
+				resp.Existing = ingestResponse{
+					ID:      existingID,
+					Path:    path,
+					Created: false,
+					ViewURL: s.ViewURL(existingID),
+					Title:   existingTitle,
+				}
+				_ = json.NewEncoder(writer).Encode(resp)
+				return
+			}
+			synced, syncErr := s.service.SyncDocument(ctx, existingID, body)
+			if syncErr != nil {
+				http.Error(writer, syncErr.Error(), http.StatusInternalServerError)
+				return
+			}
+			// Re-link any selection notes for this URL onto the preserved page UUID.
+			linked := ""
+			for _, sel := range s.listClipsBySourceURL(ctx, sourceURL, true) {
+				if sel.ID == existingID {
+					continue
+				}
+				if _, linkErr := s.service.LinkDocuments(ctx, existingID, sel.ID); linkErr == nil {
+					linked = existingID
+				}
+			}
+			s.backfillPageAnnotations(ctx, existingID, sourceURL)
+			writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+			_ = json.NewEncoder(writer).Encode(ingestResponse{
+				ID:      string(synced.DocumentID),
+				Path:    synced.Path,
+				Created: false,
+				Updated: true,
+				ViewURL: s.ViewURL(string(synced.DocumentID)),
+				Linked:  linked,
+				Title:   title,
+			})
+			return
+		}
+	}
+
 	// Resolve graph parent up front for selection notes (page clip of same URL).
 	pageID := strings.TrimSpace(payload.From)
 	if pageID == "" && sourceURL != "" && clipMode == "selection" {
@@ -591,6 +662,7 @@ func (s *Server) handleIngest(writer http.ResponseWriter, request *http.Request)
 		Created: true,
 		ViewURL: s.ViewURL(id),
 		Linked:  linked,
+		Title:   title,
 	}
 	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
 	_ = json.NewEncoder(writer).Encode(resp)

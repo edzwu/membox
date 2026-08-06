@@ -1,5 +1,21 @@
-import type { BridgeSettings, BridgeStatus, ClipPayload, IngestResult, SourceClip } from './types';
+import type {
+  BridgeSettings,
+  BridgeStatus,
+  ClipPayload,
+  IngestConflict,
+  IngestResult,
+  SourceClip,
+} from './types';
 import { normalizeSourceURL } from './url';
+
+export class IngestConflictError extends Error {
+  readonly conflict: IngestConflict;
+  constructor(conflict: IngestConflict) {
+    super(conflict.message);
+    this.name = 'IngestConflictError';
+    this.conflict = conflict;
+  }
+}
 
 function headers(settings: BridgeSettings, json = false): HeadersInit {
   const h: Record<string, string> = {};
@@ -40,6 +56,7 @@ export async function fetchBridgeStatus(settings: BridgeSettings): Promise<Bridg
 export async function ingestClip(
   settings: BridgeSettings,
   clip: ClipPayload,
+  opts: { overwrite?: boolean } = {},
 ): Promise<IngestResult> {
   const base = settings.baseUrl.replace(/\/$/, '');
   const response = await fetch(`${base}/api/ingest`, {
@@ -51,9 +68,36 @@ export async function ingestClip(
       source_url: normalizeSourceURL(clip.sourceUrl) || clip.sourceUrl,
       clip_mode: clip.clipMode || undefined,
       excerpt_raw: clip.excerptRaw || undefined,
+      overwrite: opts.overwrite === true ? true : undefined,
     }),
   });
   const text = await response.text();
+  if (response.status === 409) {
+    let parsed: {
+      error?: { code?: string; message?: string };
+      existing?: IngestResult;
+    } = {};
+    try {
+      parsed = JSON.parse(text) as typeof parsed;
+    } catch {
+      /* plain text */
+    }
+    if (parsed.error?.code === 'clip_exists' && parsed.existing?.id) {
+      throw new IngestConflictError({
+        code: 'clip_exists',
+        message: parsed.error.message || 'A clip for this URL already exists',
+        existing: {
+          ...parsed.existing,
+          // Server uses view_url in JSON via encoding of ViewURL field — check both.
+          view_url:
+            parsed.existing.view_url ||
+            (parsed.existing as { ViewURL?: string }).ViewURL ||
+            '',
+        },
+      });
+    }
+    throw new Error(text || 'conflict');
+  }
   if (!response.ok) {
     if (response.status === 401) {
       throw new Error(

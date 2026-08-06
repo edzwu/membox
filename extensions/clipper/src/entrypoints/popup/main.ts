@@ -119,13 +119,38 @@ clipBtn.addEventListener('click', async () => {
       return;
     }
     await saveSettings(settings);
-    const response = await browser.runtime.sendMessage({ type: 'membox.ingest-active-tab' });
+    let response = await browser.runtime.sendMessage({ type: 'membox.ingest-active-tab' });
+    if (!response?.ok && response?.conflict?.code === 'clip_exists') {
+      const existing = response.conflict.existing;
+      const shortId = (existing?.id || '').slice(0, 8);
+      const title = existing?.title || 'existing note';
+      const ok = window.confirm(
+        `This URL is already in membox.\n\n` +
+          `${title}\n` +
+          `id ${shortId}…\n\n` +
+          `Overwrite the note content and keep the same UUID?`,
+      );
+      if (!ok) {
+        showMessage(
+          `Kept existing clip ${shortId}…\n` +
+            (existing?.path || '') +
+            (existing?.view_url ? `\n${existing.view_url}` : ''),
+        );
+        return;
+      }
+      showMessage('Overwriting…');
+      response = await browser.runtime.sendMessage({
+        type: 'membox.ingest-active-tab',
+        overwrite: true,
+      });
+    }
     if (!response?.ok) {
       showMessage(response?.error || 'Clip failed');
       return;
     }
-    const { id, path, view_url: viewUrl } = response.result;
-    showMessage(`Saved ${id.slice(0, 8)}…\n${path}\n${viewUrl}`);
+    const { id, path, view_url: viewUrl, created, updated } = response.result;
+    const action = updated ? 'Updated' : created === false ? 'Saved' : 'Created';
+    showMessage(`${action} ${String(id).slice(0, 8)}…\n${path}\n${viewUrl}`);
     await refreshStatus();
   } catch (err) {
     showMessage(err instanceof Error ? err.message : String(err));

@@ -24,8 +24,17 @@ export type IngestResult = {
   id: string;
   path: string;
   created: boolean;
+  updated?: boolean;
   view_url: string;
   linked?: string;
+  title?: string;
+};
+
+/** Returned when a page clip for the URL already exists and overwrite was not set. */
+export type IngestConflict = {
+  code: 'clip_exists';
+  message: string;
+  existing: IngestResult;
 };
 
 export type SourceClip = {
