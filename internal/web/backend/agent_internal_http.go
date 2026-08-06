@@ -175,15 +175,93 @@ func (s *Server) handleAgentInternalRelated(writer http.ResponseWriter, request 
 	writeAgentJSON(writer, http.StatusOK, map[string]any{"v": agentAPIVersion, "related": view})
 }
 
-func (s *Server) handleAgentInternalWriteDisabled(writer http.ResponseWriter, request *http.Request) {
+func (s *Server) handleAgentInternalWrite(writer http.ResponseWriter, request *http.Request, kind string) {
 	if request.Method != http.MethodPost {
 		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := s.requireAgentWorker(writer, request); !ok {
+	handle, ok := s.requireAgentWorker(writer, request)
+	if !ok {
 		return
 	}
-	writeAgentError(writer, agent.NewWriteDisabled())
+	if !handle.Manager.WriteToolsEnabled() {
+		writeAgentError(writer, agent.NewWriteDisabled())
+		return
+	}
+	tools := handle.Manager.ToolsFor()
+	if tools == nil {
+		writeAgentError(writer, agent.NewInvalid("tools unavailable"))
+		return
+	}
+	ctx := request.Context()
+	switch kind {
+	case "create_note":
+		var body agent.CreateNoteCommand
+		if err := decodeJSONBody(request, &body); err != nil {
+			writeAgentError(writer, agent.NewInvalid(err.Error()))
+			return
+		}
+		if body.TargetID != "" && !looksLikeUUID(body.TargetID) {
+			writeAgentError(writer, agent.NewInvalid("target_id must be a UUID"))
+			return
+		}
+		result, err := tools.CreateNote(ctx, body)
+		if err != nil {
+			writeAgentError(writer, err)
+			return
+		}
+		writeAgentJSON(writer, http.StatusOK, map[string]any{"v": agentAPIVersion, "result": result})
+	case "update":
+		var body agent.UpdateDocumentCommand
+		if err := decodeJSONBody(request, &body); err != nil {
+			writeAgentError(writer, agent.NewInvalid(err.Error()))
+			return
+		}
+		if !looksLikeUUID(body.ID) {
+			writeAgentError(writer, agent.NewInvalid("document id must be a UUID"))
+			return
+		}
+		result, err := tools.UpdateDocument(ctx, body)
+		if err != nil {
+			writeAgentError(writer, err)
+			return
+		}
+		writeAgentJSON(writer, http.StatusOK, map[string]any{"v": agentAPIVersion, "result": result})
+	case "rename":
+		var body agent.RenameDocumentCommand
+		if err := decodeJSONBody(request, &body); err != nil {
+			writeAgentError(writer, agent.NewInvalid(err.Error()))
+			return
+		}
+		if !looksLikeUUID(body.ID) {
+			writeAgentError(writer, agent.NewInvalid("document id must be a UUID"))
+			return
+		}
+		result, err := tools.RenameDocument(ctx, body)
+		if err != nil {
+			writeAgentError(writer, err)
+			return
+		}
+		writeAgentJSON(writer, http.StatusOK, map[string]any{"v": agentAPIVersion, "result": result})
+	case "link":
+		var body agent.LinkDocumentsCommand
+		if err := decodeJSONBody(request, &body); err != nil {
+			writeAgentError(writer, agent.NewInvalid(err.Error()))
+			return
+		}
+		if !looksLikeUUID(body.FromID) || !looksLikeUUID(body.ToID) {
+			writeAgentError(writer, agent.NewInvalid("from_id and to_id must be UUIDs"))
+			return
+		}
+		result, err := tools.LinkDocuments(ctx, body)
+		if err != nil {
+			writeAgentError(writer, err)
+			return
+		}
+		writeAgentJSON(writer, http.StatusOK, map[string]any{"v": agentAPIVersion, "result": result})
+	default:
+		writeAgentError(writer, agent.NewInvalid("unknown write tool"))
+	}
 }
 
 func looksLikeUUID(id string) bool {

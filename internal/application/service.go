@@ -1764,6 +1764,11 @@ func (s *Service) SetSetting(ctx context.Context, key, value string) error {
 		return lockErr
 	}
 	defer release()
+	// agent.* keys are free-form Agent control-plane settings (pi_path,
+	// write_tools, max_workers, …). They are not part of the typed TUI spec.
+	if strings.HasPrefix(key, "agent.") {
+		return s.store.SetSetting(ctx, key, strings.TrimSpace(value))
+	}
 	spec, ok := findSettingSpec(key)
 	if !ok {
 		return fmt.Errorf("unknown setting %q", key)

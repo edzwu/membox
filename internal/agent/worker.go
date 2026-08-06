@@ -36,6 +36,8 @@ type workerConfig struct {
 	ModelID       string
 	ThinkingLevel string
 	Title         string
+	// WriteTools controls whether the embedded extension registers write tools.
+	WriteTools bool
 }
 
 // worker is one Pi RPC process bound to a single membox session.
@@ -124,6 +126,7 @@ func (w *worker) Start() error {
 		"MEMBOX_AGENT_TOKEN="+w.cfg.InternalToken,
 		"MEMBOX_AGENT_WORKER_ID="+w.cfg.WorkerID,
 		"MEMBOX_AGENT_SESSION_ID="+w.cfg.SessionID,
+		"MEMBOX_AGENT_WRITE_TOOLS="+writeToolsFlag(w.cfg.WriteTools),
 		// Reduce ambient noise.
 		"PI_OFFLINE=1",
 	)

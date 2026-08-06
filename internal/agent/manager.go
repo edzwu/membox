@@ -829,6 +829,7 @@ func (m *manager) spawnWorker(ctx context.Context, sessionID string, rec Session
 		SessionID:       sessionID,
 		ThinkingLevel:   rec.ThinkingLevel,
 		Title:           rec.Title,
+		WriteTools:      m.cfg.WriteTools,
 	}
 	if model != nil {
 		cfg.ModelProvider = model.Provider
@@ -1165,4 +1166,12 @@ func nilString(s string) *string {
 		return nil
 	}
 	return &s
+}
+
+// writeToolsFlag formats the worker env var the embedded extension checks.
+func writeToolsFlag(enabled bool) string {
+	if enabled {
+		return "1"
+	}
+	return "0"
 }

@@ -276,5 +276,124 @@ export default function (pi: ExtensionAPI) {
         }
       },
     });
+
+    pi.registerTool({
+      name: "membox_link_documents",
+      label: "Link documents",
+      description:
+        "Create a manual graph edge from one document to another (from → to). Both are identified by stable Document UUID. Requires user confirmation.",
+      parameters: Type.Object({
+        from_id: Type.String({ description: "Source document UUID" }),
+        to_id: Type.String({ description: "Target document UUID" }),
+      }),
+      async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+        try {
+          const preview = `Link ${params.from_id} → ${params.to_id}`;
+          const ok = await ctx.ui.confirm("Allow document link?", preview);
+          if (!ok) {
+            return toolText({ denied: true, reason: "user_denied" });
+          }
+          const body = await internalFetch("/api/agent/internal/tools/link", {
+            method: "POST",
+            body: JSON.stringify(params),
+          });
+          return toolText(body);
+        } catch (err) {
+          return toolError(err);
+        }
+      },
+    });
   }
+
+  // /wiki — synthesize structured "wiki cards" from raw membox documents.
+  // The current document (if any) is already injected into the system prompt
+  // by before_agent_start as `document_id`; this command drives the workflow.
+  pi.registerCommand("wiki", {
+    description: "Extract knowledge from a document into structured wiki cards (create or update)",
+    handler: async (args, ctx) => {
+      const topic = (args || "").trim();
+      const kickoff = buildWikiPrompt(topic);
+      if (!ctx.isIdle()) {
+        // Mid-stream: queue as a follow-up instead of throwing.
+        await ctx.sendUserMessage(kickoff, { deliverAs: "followUp" });
+        return;
+      }
+      await ctx.sendUserMessage(kickoff);
+    },
+  });
+}
+
+// Wiki card synthesis prompt template. This is the single source of truth for
+// how raw membox documents are distilled into structured, updatable cards.
+function buildWikiPrompt(topic: string): string {
+  const topicLine = topic
+    ? `Focus topic: "${topic}". Extract and organize knowledge primarily about this topic.`
+    : `Extract the key concepts, entities, and claims from the current document (provided in your context as document_id).`;
+
+  return `You are running the membox wiki-card synthesis workflow.
+
+${topicLine}
+
+## Goal
+Turn raw membox documents into structured, durable "wiki cards" — one card per
+concept/entity. Cards are first-class membox documents that aggregate knowledge
+across many raw sources, and are UPDATED (not duplicated) when new input arrives.
+
+## Workflow
+1. Identify the source document. If a current document_id is in your context, use
+   it. Read it with membox_read_document (paginate with cursor if truncated).
+2. Extract candidate concepts: key entities, terms, mechanisms, decisions, and
+   stable claims worth remembering long-term. Prefer a small number of high-value
+   concepts over an exhaustive list.
+3. For EACH concept, search for an existing wiki card:
+   - Use membox_search_documents with the concept name.
+   - A wiki card is identified by front-matter \`membox_kind: wiki-card\` and a
+     \`wiki_topic\` slug. Confirm a candidate is a card by reading it
+     (membox_read_document) and checking that front-matter.
+4. DECIDE per concept:
+   - If a matching wiki card EXISTS: read it, merge the new facts from the source
+     into it (reconcile duplicates and contradictions, keep it coherent), then
+     UPDATE it with membox_update_document using the card's current revision
+     (expected_revision from membox_get_document). Add the source document to its
+     \`sources\` front-matter list if not already present. Then link source → card
+     with membox_link_documents.
+   - If NO card exists: CREATE one with membox_create_note using the card template
+     below, then link source → card with membox_link_documents.
+5. After all cards are handled, report a concise summary: which cards were created,
+   which were updated, and the membox://doc/<uuid> reference for each.
+
+## Wiki card template (for new cards)
+\`\`\`markdown
+---
+membox_kind: wiki-card
+wiki_topic: <kebab-case-slug>
+sources:
+  - <source-document-uuid>
+---
+
+# <Concept Title>
+
+## Summary
+<1–3 sentence definition of the concept.>
+
+## Key Points
+- <bullet>
+- <bullet>
+
+## Details
+<structured explanation, evidence, examples>
+
+## Related
+- membox://doc/<source-uuid>
+\`\`\`
+
+## Rules
+- Always use stable Document UUIDs; never guess file paths.
+- Read the latest revision before updating (expected_revision), and re-read on a
+  revision conflict.
+- Every write tool call requires user confirmation — present clear previews.
+- Keep cards focused: one concept per card. Link related cards via
+  membox_link_documents rather than merging unrelated topics.
+- Do not invent facts not present in the source documents.
+- Cite sources in the card's \`sources\` front-matter and Related section.`;
 }

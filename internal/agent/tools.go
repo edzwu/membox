@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"unicode/utf8"
 
 	"membox/internal/application"
@@ -25,6 +26,7 @@ type DocumentTools interface {
 	CreateNote(ctx context.Context, cmd CreateNoteCommand) (MutationResult, error)
 	UpdateDocument(ctx context.Context, cmd UpdateDocumentCommand) (MutationResult, error)
 	RenameDocument(ctx context.Context, cmd RenameDocumentCommand) (MutationResult, error)
+	LinkDocuments(ctx context.Context, cmd LinkDocumentsCommand) (MutationResult, error)
 }
 
 // DocumentHit is one search result.
@@ -86,6 +88,13 @@ type RenameDocumentCommand struct {
 	ID               string `json:"id"`
 	ExpectedRevision string `json:"expected_revision"`
 	NewFilename      string `json:"new_filename"`
+}
+
+// LinkDocumentsCommand connects two documents by UUID, preserving identity of
+// both sides (Phase 4, used by wiki synthesis to keep Raw → Card traceability).
+type LinkDocumentsCommand struct {
+	FromID string `json:"from_id"`
+	ToID   string `json:"to_id"`
 }
 
 // MutationResult is returned by write tools.
@@ -228,15 +237,106 @@ func (t *ServiceDocumentTools) ListRelated(ctx context.Context, id string) (Rela
 }
 
 func (t *ServiceDocumentTools) CreateNote(ctx context.Context, cmd CreateNoteCommand) (MutationResult, error) {
-	return MutationResult{Denied: true, Reason: CodeWriteToolsDisabled}, fmtError(CodeWriteToolsDisabled, "write tools are disabled until mutation coordinator Phase 4")
+	title := strings.TrimSpace(cmd.Title)
+	if title == "" {
+		return MutationResult{}, fmtError(CodeInvalidRequest, "note title is required")
+	}
+	if strings.TrimSpace(cmd.Body) == "" {
+		return MutationResult{}, fmtError(CodeInvalidRequest, "note body is required")
+	}
+	result, err := t.Service.CreateNote(ctx, application.CreateNoteOptions{
+		Title:        title,
+		Body:         cmd.Body,
+		FromSelector: strings.TrimSpace(cmd.TargetID),
+	})
+	if err != nil {
+		return MutationResult{}, err
+	}
+	return MutationResult{
+		ID:       string(result.Document.ID),
+		Title:    result.Document.Index.Title,
+		Revision: documentRevision(result.Document),
+	}, nil
 }
 
 func (t *ServiceDocumentTools) UpdateDocument(ctx context.Context, cmd UpdateDocumentCommand) (MutationResult, error) {
-	return MutationResult{Denied: true, Reason: CodeWriteToolsDisabled}, fmtError(CodeWriteToolsDisabled, "write tools are disabled until mutation coordinator Phase 4")
+	if strings.TrimSpace(cmd.ID) == "" {
+		return MutationResult{}, fmtError(CodeInvalidRequest, "document id is required")
+	}
+	if strings.TrimSpace(cmd.Body) == "" {
+		return MutationResult{}, fmtError(CodeInvalidRequest, "body is required")
+	}
+	current, _, err := t.Service.ResolveDocument(ctx, cmd.ID)
+	if err != nil {
+		return MutationResult{}, err
+	}
+	currentRev := documentRevision(current)
+	if strings.TrimSpace(cmd.ExpectedRevision) != "" && cmd.ExpectedRevision != currentRev {
+		return MutationResult{}, fmtError(CodeRevisionConflict, "revision conflict: expected %s, current %s", cmd.ExpectedRevision, currentRev)
+	}
+	result, err := t.Service.SyncDocument(ctx, cmd.ID, cmd.Body)
+	if err != nil {
+		return MutationResult{}, err
+	}
+	doc, _, err := t.Service.ResolveDocument(ctx, cmd.ID)
+	if err != nil {
+		return MutationResult{}, err
+	}
+	return MutationResult{
+		ID:       string(result.DocumentID),
+		Title:    doc.Index.Title,
+		Revision: documentRevision(doc),
+	}, nil
 }
 
 func (t *ServiceDocumentTools) RenameDocument(ctx context.Context, cmd RenameDocumentCommand) (MutationResult, error) {
-	return MutationResult{Denied: true, Reason: CodeWriteToolsDisabled}, fmtError(CodeWriteToolsDisabled, "write tools are disabled until mutation coordinator Phase 4")
+	if strings.TrimSpace(cmd.ID) == "" {
+		return MutationResult{}, fmtError(CodeInvalidRequest, "document id is required")
+	}
+	current, _, err := t.Service.ResolveDocument(ctx, cmd.ID)
+	if err != nil {
+		return MutationResult{}, err
+	}
+	currentRev := documentRevision(current)
+	if strings.TrimSpace(cmd.ExpectedRevision) != "" && cmd.ExpectedRevision != currentRev {
+		return MutationResult{}, fmtError(CodeRevisionConflict, "revision conflict: expected %s, current %s", cmd.ExpectedRevision, currentRev)
+	}
+	result, err := t.Service.RenameDocument(ctx, cmd.ID, cmd.NewFilename, "")
+	if err != nil {
+		return MutationResult{}, err
+	}
+	doc, _, err := t.Service.ResolveDocument(ctx, cmd.ID)
+	if err != nil {
+		return MutationResult{}, err
+	}
+	return MutationResult{
+		ID:       string(result.DocumentID),
+		Title:    doc.Index.Title,
+		Revision: documentRevision(doc),
+	}, nil
+}
+
+func (t *ServiceDocumentTools) LinkDocuments(ctx context.Context, cmd LinkDocumentsCommand) (MutationResult, error) {
+	from := strings.TrimSpace(cmd.FromID)
+	to := strings.TrimSpace(cmd.ToID)
+	if from == "" || to == "" {
+		return MutationResult{}, fmtError(CodeInvalidRequest, "from_id and to_id are required")
+	}
+	if from == to {
+		return MutationResult{}, fmtError(CodeInvalidRequest, "a document cannot link to itself")
+	}
+	_, err := t.Service.LinkDocuments(ctx, from, to)
+	if err != nil {
+		return MutationResult{}, err
+	}
+	toDoc, _, err := t.Service.ResolveDocument(ctx, to)
+	if err != nil {
+		return MutationResult{}, err
+	}
+	return MutationResult{
+		ID:    to,
+		Title: toDoc.Index.Title,
+	}, nil
 }
 
 func documentView(doc *catalog.Document, abs string) DocumentView {
@@ -273,9 +373,9 @@ func ToolNamesReadOnly() []string {
 func ToolNamesAll() []string {
 	return append(ToolNamesReadOnly(),
 		"membox_create_note",
-		"membox_create_annotation_note",
 		"membox_update_document",
 		"membox_rename_document",
+		"membox_link_documents",
 	)
 }
 

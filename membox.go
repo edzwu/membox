@@ -217,6 +217,15 @@ func (b *Box) ListSettings(ctx context.Context) ([]SettingView, error) {
 	return out, nil
 }
 
+// GetSetting returns the value for a setting key. Free-form agent.* keys are
+// read straight from the store; typed keys go through the spec-aware getter.
+func (b *Box) GetSetting(ctx context.Context, key string) (string, error) {
+	if strings.HasPrefix(key, "agent.") {
+		return b.service.Store().GetSetting(ctx, key)
+	}
+	return b.service.GetSetting(ctx, key)
+}
+
 // SetSetting validates and persists one configurable option.
 func (b *Box) SetSetting(ctx context.Context, key, value string) error {
 	return b.service.SetSetting(ctx, key, value)

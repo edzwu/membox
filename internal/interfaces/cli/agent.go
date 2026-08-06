@@ -19,8 +19,50 @@ func newAgentCommand(runtime *runtime) *cobra.Command {
 	command.AddCommand(
 		newAgentStatusCommand(runtime),
 		newAgentDoctorCommand(runtime),
+		newAgentConfigCommand(runtime),
 	)
 	return command
+}
+
+// newAgentConfigCommand gets/sets free-form agent.* settings (stored in the
+// SQLite settings table, read by the Companion when it (re)starts).
+func newAgentConfigCommand(runtime *runtime) *cobra.Command {
+	return &cobra.Command{
+		Use:   "config [key] [value]",
+		Short: "Get or set Agent settings (e.g. agent.write_tools true)",
+		Args:  maxArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			box, err := runtime.get()
+			if err != nil {
+				return err
+			}
+			ctx := cmd.Context()
+			if len(args) == 0 {
+				return fmt.Errorf("usage: mm agent config <key> [value]; keys: agent.enabled, agent.write_tools, agent.pi_path, agent.max_workers, agent.idle_timeout")
+			}
+			key := args[0]
+			if !strings.HasPrefix(key, "agent.") {
+				return fmt.Errorf("key must start with agent. (got %q)", key)
+			}
+			if len(args) == 1 {
+				value, err := box.GetSetting(ctx, key)
+				if err != nil {
+					return err
+				}
+				if value == "" {
+					fmt.Fprintf(cmd.OutOrStdout(), "%s: (unset)\n", key)
+				} else {
+					fmt.Fprintf(cmd.OutOrStdout(), "%s: %s\n", key, value)
+				}
+				return nil
+			}
+			if err := box.SetSetting(ctx, key, args[1]); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "%s = %s\nRestart the companion (mm web restart) for it to take effect.\n", key, args[1])
+			return nil
+		},
+	}
 }
 
 func newAgentStatusCommand(runtime *runtime) *cobra.Command {

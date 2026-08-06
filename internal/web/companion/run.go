@@ -104,6 +104,10 @@ func Run(ctx context.Context, options Options) error {
 		}
 	}
 	piPath, _ := storeGet(runCtx, "agent.pi_path")
+	writeTools := false
+	if v, _ := storeGet(runCtx, "agent.write_tools"); v == "true" || v == "1" {
+		writeTools = true
+	}
 	var catalog agent.SessionCatalog
 	if c, ok := service.Store().(agent.SessionCatalog); ok {
 		catalog = c
@@ -115,7 +119,7 @@ func Run(ctx context.Context, options Options) error {
 		PiPath:          piPath,
 		MaxWorkers:      maxWorkers,
 		IdleTimeout:     idleTimeout,
-		WriteTools:      false, // Phase 4 gate
+		WriteTools:      writeTools,
 		ExtensionSource: agent.ExtensionSource,
 		Catalog:         catalog,
 		Tools:           &agent.ServiceDocumentTools{Service: service},

@@ -42,9 +42,10 @@ func (s *Server) registerAgentRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/agent/internal/tools/read", s.handleAgentInternalRead)
 	mux.HandleFunc("/api/agent/internal/tools/get", s.handleAgentInternalGet)
 	mux.HandleFunc("/api/agent/internal/tools/related", s.handleAgentInternalRelated)
-	mux.HandleFunc("/api/agent/internal/tools/create_note", s.handleAgentInternalWriteDisabled)
-	mux.HandleFunc("/api/agent/internal/tools/update", s.handleAgentInternalWriteDisabled)
-	mux.HandleFunc("/api/agent/internal/tools/rename", s.handleAgentInternalWriteDisabled)
+	mux.HandleFunc("/api/agent/internal/tools/create_note", func(w http.ResponseWriter, r *http.Request) { s.handleAgentInternalWrite(w, r, "create_note") })
+	mux.HandleFunc("/api/agent/internal/tools/update", func(w http.ResponseWriter, r *http.Request) { s.handleAgentInternalWrite(w, r, "update") })
+	mux.HandleFunc("/api/agent/internal/tools/rename", func(w http.ResponseWriter, r *http.Request) { s.handleAgentInternalWrite(w, r, "rename") })
+	mux.HandleFunc("/api/agent/internal/tools/link", func(w http.ResponseWriter, r *http.Request) { s.handleAgentInternalWrite(w, r, "link") })
 }
 
 func (s *Server) handleAgentStatus(writer http.ResponseWriter, request *http.Request) {
