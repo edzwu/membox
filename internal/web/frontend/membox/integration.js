@@ -10,6 +10,7 @@ import { isEditableTarget, sanitizeFilename } from '../js/utils.js';
 import { showToast, flashButton, writeClipboard } from '../js/ui/feedback.js';
 import { updateMarkdownDownloadControl } from '../js/ui/chrome.js';
 import { markAnnotationsSaved } from '../js/annotations/session.js';
+import { focusNote } from '../js/annotations/focus.js';
 import {
   buildAnnotationSidecar,
   parseAnnotationSidecar,
@@ -162,9 +163,9 @@ async function renameCurrentDocument(titleElement, previousTitle, nextTitle) {
   }
 }
 
-// Bottom-left cluster: save/copy status plus the “add related document”
-// button. A hollow circle means there are changes to save; a filled circle
-// means the document is durable and can be clicked to copy its UUID.
+// Bottom-left cluster: save/copy status, add-related, and note navigation.
+// A hollow circle means there are changes to save; a filled circle means the
+// document is durable and can be clicked to copy its UUID.
 function createStatusCluster() {
   const cluster = document.createElement('div');
   cluster.className = 'membox-status-cluster';
@@ -213,11 +214,44 @@ function createAddRelatedButton() {
 
 const addRelatedButton = createAddRelatedButton();
 
+function createBrowseNotesButton() {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.id = 'membox-browse-notes';
+  button.className = 'membox-browse-notes';
+  button.hidden = true;
+  button.title = 'Browse notes';
+  button.setAttribute('aria-label', 'Browse notes in this document');
+  button.innerHTML = `
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M6 3h9l3 3v15H6z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+      <path d="M15 3v4h3M9 11h6M9 15h6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    <span class="membox-notes-count">0</span>`;
+  statusCluster.appendChild(button);
+  button.addEventListener('click', openNotesModal);
+  return button;
+}
+
+const browseNotesButton = createBrowseNotesButton();
+
+function noteCount() {
+  return state.annotations.filter((entry) => typeof entry.note === 'string' && entry.note.trim()).length;
+}
+
+function renderBrowseNotesButton() {
+  const count = noteCount();
+  browseNotesButton.querySelector('.membox-notes-count').textContent = String(count);
+  browseNotesButton.setAttribute('aria-label', `Browse ${count} note${count === 1 ? '' : 's'} in this document`);
+  browseNotesButton.title = count === 1 ? 'Browse 1 note' : `Browse ${count} notes`;
+}
+
 function renderDocStatus() {
   if (!connected) {
     statusCluster.hidden = true;
     statusBadge.hidden = true;
     addRelatedButton.hidden = true;
+    browseNotesButton.hidden = true;
     hideRelatedPanel();
     return;
   }
@@ -240,14 +274,165 @@ function renderDocStatus() {
     statusBadge.setAttribute('aria-label', saving ? 'Saving changes' : 'Save changes');
     statusBadge.title = saving ? 'Saving changes…' : 'Unsaved changes · click to save';
   }
+  renderBrowseNotesButton();
   if (documentID) {
     addRelatedButton.hidden = false;
+    browseNotesButton.hidden = false;
     void loadRelated();
   } else {
     addRelatedButton.hidden = true;
+    browseNotesButton.hidden = true;
     hideRelatedPanel();
   }
 }
+
+// ---------------------------------------------------------------------------
+// Note picker: a local, filterable index over the notes already restored into
+// Miru's annotation model. Selecting a result focuses its passage; no second
+// backend representation is introduced.
+// ---------------------------------------------------------------------------
+function createNotesModal() {
+  const backdrop = document.createElement('div');
+  backdrop.className = 'membox-modal-backdrop';
+  backdrop.hidden = true;
+  backdrop.innerHTML = `
+    <div class="membox-modal" role="dialog" aria-modal="true" aria-labelledby="membox-notes-dialog-title">
+      <div class="membox-modal-title" id="membox-notes-dialog-title">Notes in this document</div>
+      <div class="membox-related-picker">
+        <input class="membox-related-search" type="search" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="membox-note-options" placeholder="Filter notes or quoted text…" autocomplete="off" spellcheck="false">
+        <div class="membox-related-options" id="membox-note-options" role="listbox" aria-label="Notes in this document"></div>
+        <div class="membox-modal-hint">Select a note to jump to its passage.</div>
+      </div>
+      <div class="membox-modal-actions">
+        <button type="button" class="membox-modal-btn membox-modal-cancel">Close</button>
+      </div>
+    </div>`;
+  document.body.appendChild(backdrop);
+  const modal = backdrop.querySelector('.membox-modal');
+  const searchInput = backdrop.querySelector('.membox-related-search');
+  const options = backdrop.querySelector('.membox-related-options');
+  backdrop.addEventListener('mousedown', (event) => {
+    if (event.target === backdrop) closeNotesModal();
+  });
+  backdrop.querySelector('.membox-modal-cancel').addEventListener('click', () => closeNotesModal());
+  searchInput.addEventListener('input', renderNoteOptions);
+  searchInput.addEventListener('keydown', onNoteSearchKeydown);
+  modal.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      event.stopPropagation();
+      closeNotesModal();
+    }
+  });
+  return { backdrop, searchInput, options };
+}
+
+const notesModal = createNotesModal();
+
+function notePickerItems() {
+  const entries = new Map(state.annotations
+    .filter((entry) => typeof entry.note === 'string' && entry.note.trim())
+    .map((entry) => [String(entry.id), entry]));
+  const items = [];
+  const anchors = elements.article.querySelectorAll('span.annot-note-ref[data-annot-id]');
+  anchors.forEach((anchor, index) => {
+    const id = String(anchor.dataset.annotId);
+    const entry = entries.get(id);
+    if (!entry) return;
+    const clone = anchor.cloneNode(true);
+    clone.querySelectorAll('.annot-note-num').forEach((badge) => badge.remove());
+    const excerpt = clone.textContent.replace(/\s+/g, ' ').trim();
+    const note = entry.note.replace(/\s+/g, ' ').trim();
+    items.push({ id, number: index + 1, note, excerpt });
+  });
+  return items;
+}
+
+function renderNoteOptions() {
+  const query = notesModal.searchInput.value.trim().toLocaleLowerCase();
+  const allItems = notePickerItems();
+  const items = query
+    ? allItems.filter((item) => `${item.note}\n${item.excerpt}\n${item.number}`.toLocaleLowerCase().includes(query))
+    : allItems;
+  notesModal.options.textContent = '';
+  notesModal.searchInput.setAttribute('aria-expanded', String(items.length > 0));
+  if (!items.length) {
+    const status = document.createElement('div');
+    status.className = 'membox-related-option-status';
+    status.textContent = allItems.length ? 'No matching notes' : 'No notes in this document';
+    notesModal.options.appendChild(status);
+    return;
+  }
+  for (const item of items) {
+    const option = document.createElement('button');
+    option.type = 'button';
+    option.className = 'membox-related-option';
+    option.setAttribute('role', 'option');
+    option.setAttribute('aria-label', `Note ${item.number}: ${item.note}`);
+    const title = document.createElement('span');
+    title.className = 'membox-related-option-title';
+    title.textContent = item.note;
+    const number = document.createElement('code');
+    number.className = 'membox-related-option-id';
+    number.textContent = `#${item.number}`;
+    const excerpt = document.createElement('span');
+    excerpt.className = 'membox-related-option-path';
+    excerpt.textContent = item.excerpt ? `“${item.excerpt}”` : 'Quoted passage unavailable';
+    option.append(title, number, excerpt);
+    option.addEventListener('click', () => jumpToNote(item.id));
+    option.addEventListener('keydown', onNoteOptionKeydown);
+    notesModal.options.appendChild(option);
+  }
+}
+
+function openNotesModal() {
+  if (!connected || !documentID) return;
+  if (!relatedModal.backdrop.hidden) closeRelatedModal();
+  notesModal.searchInput.value = '';
+  renderNoteOptions();
+  notesModal.backdrop.hidden = false;
+  notesModal.searchInput.focus();
+}
+
+function closeNotesModal(restoreFocus = true) {
+  notesModal.backdrop.hidden = true;
+  if (restoreFocus && !browseNotesButton.hidden) browseNotesButton.focus();
+}
+
+function jumpToNote(id) {
+  closeNotesModal(false);
+  focusNote(id, { scrollTo: 'anchor', duration: 3000 });
+}
+
+function onNoteSearchKeydown(event) {
+  if (!['ArrowDown', 'Enter'].includes(event.key)) return;
+  const first = notesModal.options.querySelector('.membox-related-option');
+  if (!first) return;
+  event.preventDefault();
+  if (event.key === 'Enter') first.click();
+  else first.focus();
+}
+
+function onNoteOptionKeydown(event) {
+  if (!['ArrowDown', 'ArrowUp', 'Enter'].includes(event.key)) return;
+  event.preventDefault();
+  if (event.key === 'Enter') {
+    event.currentTarget.click();
+    return;
+  }
+  const options = Array.from(notesModal.options.querySelectorAll('.membox-related-option'));
+  const index = options.indexOf(event.currentTarget);
+  const next = event.key === 'ArrowDown' ? options[index + 1] : options[index - 1];
+  (next || notesModal.searchInput).focus();
+}
+
+window.addEventListener('miru-annotations-changed', () => {
+  renderBrowseNotesButton();
+  if (!notesModal.backdrop.hidden) renderNoteOptions();
+});
+window.addEventListener('miru-annotations-saved', () => {
+  renderBrowseNotesButton();
+  if (!notesModal.backdrop.hidden) renderNoteOptions();
+});
 
 // ---------------------------------------------------------------------------
 // Related documents: a tile grid under the TOC showing the one-hop
@@ -555,6 +740,7 @@ function onRelatedOptionKeydown(event) {
 
 function openPicker(purpose) {
   if (!connected || (purpose === 'related' && !documentID)) return;
+  if (!notesModal.backdrop.hidden) closeNotesModal(false);
   pickerPurpose = purpose === 'open' ? 'open' : 'related';
   relatedModal.dialogTitle.textContent = pickerPurpose === 'open' ? 'Open document' : 'Add related document';
   relatedModal.tablist.hidden = pickerPurpose === 'open';
