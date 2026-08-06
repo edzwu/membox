@@ -150,16 +150,14 @@ export default defineContentScript({
 
       if (message?.type === 'membox.clip') {
         // Full-page clip is an explicit popup action — always available,
-        // independent of the note-taking opt-in.
-        try {
-          const payload = clipCurrentDocument(pageUrl);
-          return Promise.resolve({ ok: true as const, payload });
-        } catch (err) {
-          return Promise.resolve({
+        // independent of the note-taking opt-in. Async: may re-fetch the
+        // pristine HTML so mermaid sources survive client-side rendering.
+        return clipCurrentDocument(pageUrl)
+          .then((payload) => ({ ok: true as const, payload }))
+          .catch((err: unknown) => ({
             ok: false as const,
             error: err instanceof Error ? err.message : String(err),
-          });
-        }
+          }));
       }
 
       if (message?.type?.startsWith('membox.floats.')) {

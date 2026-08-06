@@ -14,6 +14,7 @@ import { preprocessMath } from './markdown/math-preprocess.js';
 import { preprocessHtml } from './markdown/html-preprocess.js';
 import { wrapTables, markExternalLinks, wrapLeadingContent, addSectionActionButtons, stripHeadingHeaderLinks, attributeSectionSources } from './render/decorations.js';
 import { highlightCode, renderMath, addCopyButtons } from './render/code-math.js';
+import { renderMermaid } from './render/mermaid.js';
 import { renderAnnotationSyntax } from './render/annotations-syntax.js';
 import { foldSections, addFoldListeners, updateFoldToggleIcon } from './render/folding.js';
 import { assignHeadingIds, buildToc, observeHeadings, resetToc, getHeadingLabel } from './render/toc.js';
@@ -59,6 +60,9 @@ function processArticle() {
   wrapTables();
   highlightCode();
   renderMath();
+  // Mermaid is async (lazy-loads vendor). Diagrams replace fences after paint;
+  // fold/TOC already ran on the pre blocks, which is fine for navigation.
+  void renderMermaid();
   renderAnnotationSyntax();
   foldSections();
   wrapLeadingContent();

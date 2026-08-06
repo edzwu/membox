@@ -35,12 +35,27 @@ function addLanguageTag(pre, language) {
   pre.appendChild(tag);
 }
 
+function isMermaidFence(block) {
+  for (const cls of block.classList) {
+    if (cls === 'language-mermaid' || cls === 'lang-mermaid') return true;
+  }
+  const text = (block.textContent || '').trimStart();
+  return /^(flowchart|graph|sequenceDiagram|classDiagram|stateDiagram|erDiagram|journey|gantt|pie|gitGraph|mindmap|timeline)\b/.test(
+    text,
+  );
+}
+
 export function highlightCode() {
   if (typeof window.hljs !== 'object') return;
   const codeBlocks = elements.article.querySelectorAll('pre code');
   codeBlocks.forEach((block) => {
     // Skip if already highlighted by hljs.
     if (block.classList.contains('hljs')) return;
+    // Mermaid fences are rendered as diagrams — do not syntax-highlight them.
+    if (isMermaidFence(block)) {
+      addLanguageTag(block.parentElement, 'mermaid');
+      return;
+    }
 
     const language = detectLanguage(block);
     addLanguageTag(block.parentElement, language);
