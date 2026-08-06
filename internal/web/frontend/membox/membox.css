@@ -148,6 +148,11 @@
   to { transform: translateY(3px); }
 }
 
+.doc-title[data-saving="true"] {
+  opacity: 0.62;
+  cursor: wait;
+}
+
 /* Bottom-left document status cluster: visible only while connected. A hollow
    circle saves pending changes; after persistence it fills and copies the
    document ID. Hovering a saved circle reveals only its five-character suffix.

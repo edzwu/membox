@@ -33,7 +33,11 @@ type Server struct {
 	httpServer    *http.Server
 	baseURL       string
 	token         string // empty = auth disabled (same-origin Miru / tests)
-	annotationMu  sync.Mutex
+	// documentMu serializes source reads/mutations with annotation restore/save.
+	// The title is editable while restoreReadingState is still resolving paths,
+	// so rename must not split that operation between the old and new location.
+	documentMu   sync.Mutex
+	annotationMu sync.Mutex
 }
 
 // NewServer receives frontend files from the composition root rather than
@@ -174,6 +178,8 @@ func (s *Server) handleDocument(writer http.ResponseWriter, request *http.Reques
 		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	s.documentMu.Lock()
+	defer s.documentMu.Unlock()
 	document, absolute, err := s.service.ResolveDocument(request.Context(), selector)
 	if err != nil {
 		http.Error(writer, err.Error(), http.StatusNotFound)
@@ -209,6 +215,8 @@ func (s *Server) handleDocumentRename(writer http.ResponseWriter, request *http.
 		http.Error(writer, "document selector is required", http.StatusBadRequest)
 		return
 	}
+	s.documentMu.Lock()
+	defer s.documentMu.Unlock()
 	var payload struct {
 		Filename string `json:"filename"`
 	}
@@ -487,6 +495,8 @@ func (s *Server) handleAnnotations(writer http.ResponseWriter, request *http.Req
 		http.Error(writer, "missing document selector", http.StatusBadRequest)
 		return
 	}
+	s.documentMu.Lock()
+	defer s.documentMu.Unlock()
 	switch request.Method {
 	case http.MethodGet:
 		sidecar, present, err := s.liveAnnotationSidecar(request.Context(), selector)
@@ -601,6 +611,8 @@ func (s *Server) handleSync(writer http.ResponseWriter, request *http.Request) {
 		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	s.documentMu.Lock()
+	defer s.documentMu.Unlock()
 	var payload syncRequest
 	if !decodeJSON(writer, request, &payload) {
 		return

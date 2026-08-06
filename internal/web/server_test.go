@@ -110,6 +110,87 @@ func TestServerServesReaderAndMarkdown(t *testing.T) {
 	}
 }
 
+func TestServerRenamesDocumentWithoutChangingIdentity(t *testing.T) {
+	baseURL, docID, notesDir := startServer(t)
+
+	body := postJSON(t, baseURL+"/api/doc/"+docID+"/rename", map[string]string{
+		"filename": "renamed-article.md",
+	})
+	var result struct {
+		ID       string `json:"id"`
+		Filename string `json:"filename"`
+	}
+	mustUnmarshal(t, body, &result)
+	if result.ID != docID || result.Filename != "renamed-article.md" {
+		t.Fatalf("unexpected rename result: %+v", result)
+	}
+	if _, err := os.Stat(filepath.Join(notesDir, "flash.md")); !os.IsNotExist(err) {
+		t.Fatalf("old filename still exists: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(notesDir, "renamed-article.md")); err != nil {
+		t.Fatalf("renamed file missing: %v", err)
+	}
+
+	resp, err := http.Get(baseURL + "/api/doc/" + docID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if got := resp.Header.Get("X-Membox-Filename"); got != "renamed-article.md" {
+		t.Fatalf("renamed filename header = %q", got)
+	}
+}
+
+func TestServerSerializesAnnotationRestoreWithRename(t *testing.T) {
+	baseURL, docID, _ := startServer(t)
+
+	for index := 0; index < 12; index++ {
+		filename := fmt.Sprintf("concurrent-%02d.md", index)
+		start := make(chan struct{})
+		results := make(chan error, 2)
+		go func() {
+			<-start
+			resp, err := http.Get(baseURL + "/api/doc/" + docID + "/annotations")
+			if err == nil {
+				defer resp.Body.Close()
+				if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+					body, _ := io.ReadAll(resp.Body)
+					err = fmt.Errorf("annotation restore status=%d body=%q", resp.StatusCode, body)
+				}
+			}
+			results <- err
+		}()
+		go func() {
+			<-start
+			payload, _ := json.Marshal(map[string]string{"filename": filename})
+			resp, err := http.Post(baseURL+"/api/doc/"+docID+"/rename", "application/json", strings.NewReader(string(payload)))
+			if err == nil {
+				defer resp.Body.Close()
+				if resp.StatusCode != http.StatusOK {
+					body, _ := io.ReadAll(resp.Body)
+					err = fmt.Errorf("rename status=%d body=%q", resp.StatusCode, body)
+				}
+			}
+			results <- err
+		}()
+		close(start)
+		for range 2 {
+			if err := <-results; err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	resp, err := http.Get(baseURL + "/api/doc/" + docID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if got := resp.Header.Get("X-Membox-Filename"); got != "concurrent-11.md" {
+		t.Fatalf("final filename = %q, want concurrent-11.md", got)
+	}
+}
+
 func TestServerEncodesUnicodeFilenameHeader(t *testing.T) {
 	baseURL, _, _ := startServer(t)
 	body := postJSON(t, baseURL+"/api/save", map[string]string{

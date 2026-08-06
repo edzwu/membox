@@ -104,6 +104,64 @@ new MutationObserver(renderDocumentSwitcher).observe(elements.article, {
   characterData: true,
 });
 
+let titleBeforeEdit = '';
+elements.article.addEventListener('focusin', (event) => {
+  if (event.target.id !== 'doc-title') return;
+  titleBeforeEdit = event.target.textContent.replace(/\s+/g, ' ').trim() || state.docTitle || 'Untitled';
+});
+elements.article.addEventListener('focusout', (event) => {
+  if (event.target.id !== 'doc-title') return;
+  const nextTitle = (state.docTitle || '').trim() || 'Untitled';
+  if (nextTitle === titleBeforeEdit || !documentID) return;
+  if (!connected) {
+    state.docTitle = titleBeforeEdit;
+    event.target.textContent = titleBeforeEdit;
+    showToast('Connect to membox before renaming this document');
+    return;
+  }
+  void renameCurrentDocument(event.target, titleBeforeEdit, nextTitle);
+});
+
+async function renameCurrentDocument(titleElement, previousTitle, nextTitle) {
+  const renamedDocumentID = documentID;
+  const currentFilename = state.droppedFilename || '';
+  const extensionMatch = currentFilename.match(/\.(?:md|markdown)$/i);
+  const extension = extensionMatch ? extensionMatch[0] : '.md';
+  const filename = `${sanitizeFilename(nextTitle)}${extension}`;
+  titleElement.contentEditable = 'false';
+  titleElement.dataset.saving = 'true';
+  try {
+    const response = await fetch(`/api/doc/${encodeURIComponent(renamedDocumentID)}/rename`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename }),
+    });
+    if (!response.ok) throw new Error((await response.text()).trim() || `HTTP ${response.status}`);
+    const result = await response.json();
+    if (documentID !== renamedDocumentID) return;
+    const savedFilename = result.filename || filename;
+    const savedTitle = savedFilename.replace(/\.(?:md|markdown)$/i, '') || nextTitle;
+    state.droppedFilename = savedFilename;
+    state.docTitle = savedTitle;
+    titleElement.textContent = savedTitle;
+    document.title = `${savedTitle} — membox`;
+    renderDocumentSwitcher();
+    showToast(`Renamed document to ${savedFilename}`);
+  } catch (err) {
+    if (documentID !== renamedDocumentID) return;
+    state.docTitle = previousTitle;
+    titleElement.textContent = previousTitle;
+    renderDocumentSwitcher();
+    console.error('membox: document rename failed', err);
+    showToast(`Could not rename document: ${err.message}`);
+  } finally {
+    if (titleElement.isConnected) {
+      titleElement.contentEditable = 'true';
+      delete titleElement.dataset.saving;
+    }
+  }
+}
+
 // Bottom-left cluster: save/copy status plus the “add related document”
 // button. A hollow circle means there are changes to save; a filled circle
 // means the document is durable and can be clicked to copy its UUID.
