@@ -414,8 +414,12 @@ func parseClipBody(body string) (excerpt, note, mode string) {
 	inExcerpt := true
 	for _, line := range strings.Split(content, "\n") {
 		trim := strings.TrimSpace(line)
-		if strings.HasPrefix(trim, ">") {
-			inExcerpt = true
+		if inExcerpt && strings.HasPrefix(trim, ">") {
+			// Only the leading blockquote is the selected page excerpt. A long
+			// note can contain its own blockquotes later (examples, quotations,
+			// conclusions); those belong to the note body and must not be folded
+			// back into the page anchor.
+			//
 			// Unquote one blockquote level but keep the line's own indentation:
 			// ">     list.Sort()" must stay "    list.Sort()" so multi-line
 			// excerpts match the rendered article text across saves.

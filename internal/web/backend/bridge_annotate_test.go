@@ -121,3 +121,15 @@ func TestParseClipBodyKeepsMultilineNote(t *testing.T) {
 		t.Fatalf("multiline note lost blank lines: %q", note)
 	}
 }
+
+func TestParseClipBodyKeepsBlockquotesInsideLongNote(t *testing.T) {
+	body := "---\nclip_mode: \"selection\"\n---\n\n> long-term user knowledge\n\nA long explanation.\n\n> A quoted example inside the note.\n\nThe conclusion.\n\nSource: [Page](https://example.com)\n"
+	excerpt, note, mode := parseClipBody(body)
+	if mode != "selection" || excerpt != "long-term user knowledge" {
+		t.Fatalf("note blockquote leaked into excerpt: %q / %q", excerpt, mode)
+	}
+	wantNote := "A long explanation.\n\n> A quoted example inside the note.\n\nThe conclusion."
+	if note != wantNote {
+		t.Fatalf("note blockquote was not preserved:\n got %q\nwant %q", note, wantNote)
+	}
+}
