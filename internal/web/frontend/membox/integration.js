@@ -1271,14 +1271,12 @@ function reportPresence(gone) {
     params.set('dirty', annotationsDirty ? '1' : '0');
   }
   const url = `/api/companion/presence?${params.toString()}`;
-  if (gone && typeof navigator.sendBeacon === 'function') {
-    try {
-      if (navigator.sendBeacon(url)) return;
-    } catch (err) {
-      /* fall through to keepalive fetch */
-    }
-  }
-  fetch(url, { method: 'GET', keepalive: gone, cache: 'no-store' }).catch(() => {});
+  fetch(url, {
+    method: 'POST',
+    headers: { 'X-Membox-Presence': '1' },
+    keepalive: gone,
+    cache: 'no-store',
+  }).catch(() => {});
 }
 
 function startPresenceHeartbeat() {

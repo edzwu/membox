@@ -138,6 +138,17 @@ func (b *Box) StopWeb(ctx context.Context) error {
 	return companion.Stop(ctx, b.home)
 }
 
+// RenewWebLease registers or heartbeats this TUI as one independent session
+// controller. Multiple TUIs can safely share a session companion.
+func (b *Box) RenewWebLease(ctx context.Context, controller string) error {
+	return companion.SetControllerLease(ctx, b.home, controller, false)
+}
+
+// ReleaseWebLease releases only this TUI's ownership; it is not a global stop.
+func (b *Box) ReleaseWebLease(ctx context.Context, controller string) error {
+	return companion.SetControllerLease(ctx, b.home, controller, true)
+}
+
 // SetWebLifecycle switches a running companion between session and keep mode.
 func (b *Box) SetWebLifecycle(ctx context.Context, mode string) error {
 	return companion.SetLifecycle(ctx, b.home, mode)

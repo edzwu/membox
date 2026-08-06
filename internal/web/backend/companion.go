@@ -24,7 +24,13 @@ type tabPresence struct {
 }
 
 // tabRetention is how long a silent tab stays visible before it is pruned.
-const tabRetention = 35 * time.Second
+const (
+	tabRetention             = 35 * time.Second
+	maxCompanionTabs         = 256
+	presenceHeaderName       = "X-Membox-Presence"
+	controllerLeaseRetention = 12 * time.Second
+	maxControllerLeases      = 64
+)
 
 // CompanionState aggregates the control-plane facts the status endpoint
 // reports: lifecycle mode, start time, and connected browser tabs.
@@ -47,6 +53,7 @@ func (s *Server) ConfigureCompanion(mode string, onStop func(), onLifecycle func
 	s.companionMode = mode
 	s.companionStartedAt = time.Now()
 	s.companionTabs = make(map[string]tabPresence)
+	s.companionLeases = make(map[string]time.Time)
 	s.onCompanionStop = onStop
 	s.onCompanionLifecycle = onLifecycle
 }
@@ -103,13 +110,17 @@ func (s *Server) pruneTabsLocked() (tabs, dirty int) {
 	return tabs, dirty
 }
 
-// handleCompanionPresence receives browser-tab heartbeats. Same-origin reader
-// pages carry no bridge token, so this endpoint stays open like /api/save.
-// Parameters: tab (stable per-tab id), dirty ("1" when unsaved notes exist),
-// gone ("1" on pagehide so the tab disappears immediately).
+// handleCompanionPresence receives same-origin browser-tab heartbeats. POST
+// plus a custom header prevents image/form CSRF; Sec-Fetch-Site rejects an
+// explicit cross-site request. The bounded map prevents untrusted tab IDs from
+// growing companion memory without limit.
 func (s *Server) handleCompanionPresence(writer http.ResponseWriter, request *http.Request) {
-	if request.Method != http.MethodGet && request.Method != http.MethodPost {
+	if request.Method != http.MethodPost {
 		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if request.Header.Get(presenceHeaderName) != "1" || request.Header.Get("Sec-Fetch-Site") == "cross-site" {
+		http.Error(writer, "forbidden", http.StatusForbidden)
 		return
 	}
 	query := request.URL.Query()
@@ -125,6 +136,17 @@ func (s *Server) handleCompanionPresence(writer http.ResponseWriter, request *ht
 	if query.Get("gone") == "1" {
 		delete(s.companionTabs, tab)
 	} else {
+		s.pruneTabsLocked()
+		if _, exists := s.companionTabs[tab]; !exists && len(s.companionTabs) >= maxCompanionTabs {
+			oldestID := ""
+			var oldest time.Time
+			for id, presence := range s.companionTabs {
+				if oldestID == "" || presence.lastSeen.Before(oldest) {
+					oldestID, oldest = id, presence.lastSeen
+				}
+			}
+			delete(s.companionTabs, oldestID)
+		}
 		s.companionTabs[tab] = tabPresence{lastSeen: time.Now(), dirty: query.Get("dirty") == "1"}
 	}
 	tabs, dirty := s.pruneTabsLocked()
@@ -135,6 +157,70 @@ func (s *Server) handleCompanionPresence(writer http.ResponseWriter, request *ht
 }
 
 // handleCompanionStatus reports the companion control plane to the TUI/CLI.
+// ControllerLeaseState prunes stale TUI leases and reports whether any live
+// controller remains. ever distinguishes startup grace from a crashed TUI.
+func (s *Server) ControllerLeaseState() (active int, ever bool) {
+	s.companionMu.Lock()
+	defer s.companionMu.Unlock()
+	cutoff := time.Now().Add(-controllerLeaseRetention)
+	for id, renewedAt := range s.companionLeases {
+		if renewedAt.Before(cutoff) {
+			delete(s.companionLeases, id)
+		}
+	}
+	return len(s.companionLeases), s.companionEverLeased
+}
+
+// handleCompanionLease renews or releases one TUI's controller lease. A clean
+// release immediately ends a session companion only when no other TUI owns a
+// live lease. Explicit /stop remains the sole global-stop action.
+func (s *Server) handleCompanionLease(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireBridgeToken(writer, request) {
+		return
+	}
+	var payload struct {
+		Controller string `json:"controller"`
+		Release    bool   `json:"release"`
+	}
+	if !decodeJSON(writer, request, &payload) {
+		return
+	}
+	controller := strings.TrimSpace(payload.Controller)
+	if controller == "" || len(controller) > 128 {
+		http.Error(writer, "controller is required", http.StatusBadRequest)
+		return
+	}
+	s.companionMu.Lock()
+	if s.companionLeases == nil {
+		s.companionLeases = make(map[string]time.Time)
+	}
+	if payload.Release {
+		delete(s.companionLeases, controller)
+	} else {
+		if _, exists := s.companionLeases[controller]; !exists && len(s.companionLeases) >= maxControllerLeases {
+			s.companionMu.Unlock()
+			http.Error(writer, "too many controllers", http.StatusTooManyRequests)
+			return
+		}
+		s.companionLeases[controller] = time.Now()
+		s.companionEverLeased = true
+	}
+	remaining := len(s.companionLeases)
+	stopSession := payload.Release && remaining == 0 && s.companionMode == CompanionLifecycleSession
+	onStop := s.onCompanionStop
+	s.companionMu.Unlock()
+	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+	writer.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(writer).Encode(map[string]any{"leased": !payload.Release, "controllers": remaining})
+	if stopSession && onStop != nil {
+		go onStop()
+	}
+}
+
 func (s *Server) handleCompanionStatus(writer http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodGet {
 		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
@@ -179,8 +265,8 @@ func (s *Server) handleCompanionStop(writer http.ResponseWriter, request *http.R
 	}
 }
 
-// handleCompanionLifecycle switches the lifecycle mode of a running companion
-// (session → keep stops the parent watcher; keep → session re-arms it).
+// handleCompanionLifecycle switches the lifecycle mode of a running companion.
+// Keep ignores controller leases; session resumes lease-based shutdown.
 func (s *Server) handleCompanionLifecycle(writer http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodPost {
 		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)

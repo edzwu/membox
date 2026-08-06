@@ -42,16 +42,20 @@ type fakeApp struct {
 	renamedTo     string
 
 	// Web Companion control knobs for tests.
-	webRunning     bool
-	webDirtyTabs   int
-	webTabs        int
-	webMode        string
-	webOnExit      string
-	webEnsureErr   error
-	webStopErr     error
-	webEnsureCalls int
-	webStopCalls   int
-	webLifecycle   string
+	webRunning      bool
+	webDirtyTabs    int
+	webTabs         int
+	webMode         string
+	webOnExit       string
+	webEnsureErr    error
+	webStopErr      error
+	webLifecycleErr error
+	webLeaseErr     error
+	webEnsureCalls  int
+	webStopCalls    int
+	webLeaseCalls   int
+	webReleaseCalls int
+	webLifecycle    string
 }
 
 func (f *fakeApp) AddPath(context.Context, membox.AddPathCommand) (membox.AddPathResult, error) {
@@ -229,7 +233,18 @@ func (f *fakeApp) StopWeb(context.Context) error {
 	f.webRunning = false
 	return nil
 }
+func (f *fakeApp) RenewWebLease(context.Context, string) error {
+	f.webLeaseCalls++
+	return f.webLeaseErr
+}
+func (f *fakeApp) ReleaseWebLease(context.Context, string) error {
+	f.webReleaseCalls++
+	return f.webLeaseErr
+}
 func (f *fakeApp) SetWebLifecycle(_ context.Context, mode string) error {
+	if f.webLifecycleErr != nil {
+		return f.webLifecycleErr
+	}
 	f.webLifecycle = mode
 	f.webMode = mode
 	return nil

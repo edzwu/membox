@@ -7,6 +7,8 @@ package tui
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os/exec"
 	"runtime"
@@ -32,6 +34,8 @@ type webState struct {
 	spawnedPID int
 	// sequence guards the periodic refresh loop against duplicates.
 	sequence uint64
+	// controllerID owns one renewable lease; it is never shared by another TUI.
+	controllerID string
 }
 
 func (w webState) running() bool { return w.status.Running }
@@ -48,38 +52,69 @@ type webStatusMsg struct {
 
 const webRefreshInterval = 3 * time.Second
 
-func webEnsureCmd(ctx context.Context, app App) tea.Cmd {
+func newWebControllerID() string {
+	var random [16]byte
+	if _, err := rand.Read(random[:]); err == nil {
+		return hex.EncodeToString(random[:])
+	}
+	return fmt.Sprintf("tui-%d", time.Now().UnixNano())
+}
+
+func webEnsureCmd(ctx context.Context, app App, controller string) tea.Cmd {
 	return func() tea.Msg {
 		view, err := app.EnsureWebCompanion(ctx, "")
+		if err == nil && view.Running {
+			err = app.RenewWebLease(ctx, controller)
+		}
 		return webStatusMsg{view: view, err: err}
 	}
 }
 
-func webRefreshCmd(ctx context.Context, app App, sequence uint64) tea.Cmd {
+func webRefreshCmd(ctx context.Context, app App, controller string, sequence uint64) tea.Cmd {
 	return func() tea.Msg {
 		view, err := app.WebStatus(ctx)
+		if err == nil && view.Running {
+			err = app.RenewWebLease(ctx, controller)
+		}
 		return webStatusMsg{view: view, err: err, sequence: sequence, refresh: true}
 	}
 }
 
-// webStopAndQuitCmd stops the companion and quits; failures are tolerated
-// because session companions also die with their parent process.
-func webStopAndQuitCmd(ctx context.Context, app App) tea.Cmd {
+type webQuitResultMsg struct {
+	action     string
+	err        error
+	fromPrompt bool
+	notify     bool
+	url        string
+}
+
+// webStopAndQuitCmd is an explicit global stop. The TUI only quits after the
+// companion confirms shutdown; failures restore the prompt.
+func webStopAndQuitCmd(ctx context.Context, app App, fromPrompt bool) tea.Cmd {
 	return func() tea.Msg {
-		_ = app.StopWeb(ctx)
-		return tea.Quit()
+		return webQuitResultMsg{action: "stop", err: app.StopWeb(ctx), fromPrompt: fromPrompt}
 	}
 }
 
-// webKeepAndQuitCmd promotes the companion to keep mode so it survives the
-// TUI exiting, notifies on macOS, and quits.
-func webKeepAndQuitCmd(ctx context.Context, app App, notify bool, url string) tea.Cmd {
+// webReleaseAndQuitCmd releases only this TUI's lease. A session companion
+// exits when it was the last controller; another TUI's lease keeps it alive.
+func webReleaseAndQuitCmd(ctx context.Context, app App, controller string, fromPrompt bool) tea.Cmd {
 	return func() tea.Msg {
-		_ = app.SetWebLifecycle(ctx, "keep")
-		if notify {
-			notifyWebKeptRunning(url)
+		return webQuitResultMsg{action: "release", err: app.ReleaseWebLease(ctx, controller), fromPrompt: fromPrompt}
+	}
+}
+
+// webKeepAndQuitCmd promotes first, then releases this TUI lease. Neither error
+// is ignored: an unconfirmed keep must never be followed by process exit.
+func webKeepAndQuitCmd(ctx context.Context, app App, controller string, notify, fromPrompt bool, url string) tea.Cmd {
+	return func() tea.Msg {
+		if err := app.SetWebLifecycle(ctx, "keep"); err != nil {
+			return webQuitResultMsg{action: "keep", err: err, fromPrompt: fromPrompt}
 		}
-		return tea.Quit()
+		if err := app.ReleaseWebLease(ctx, controller); err != nil {
+			return webQuitResultMsg{action: "release", err: err, fromPrompt: fromPrompt}
+		}
+		return webQuitResultMsg{action: "keep", fromPrompt: fromPrompt, notify: notify, url: url}
 	}
 }
 
@@ -138,8 +173,12 @@ func (m Model) webCommandAction(tokens []string) (func() tea.Msg, string, error)
 				return commandResultMsg{err: err}
 			}
 			// Promote a running session companion so it actually survives.
-			if view, statusErr := m.app.WebStatus(m.ctx); statusErr == nil && view.Running {
-				_ = m.app.SetWebLifecycle(m.ctx, "keep")
+			if view, statusErr := m.app.WebStatus(m.ctx); statusErr != nil {
+				return commandResultMsg{err: statusErr}
+			} else if view.Running {
+				if lifecycleErr := m.app.SetWebLifecycle(m.ctx, "keep"); lifecycleErr != nil {
+					return commandResultMsg{err: lifecycleErr}
+				}
 			}
 			return settingSavedMsg{key: application.SettingWebOnExit, value: application.OnExitKeep}
 		}, "web keep", nil
@@ -173,9 +212,12 @@ func (m *Model) applyWebStatus(msg webStatusMsg) tea.Cmd {
 	// Schedule exactly one follow-up probe; the sequence check above prunes
 	// superseded loops.
 	sequence := m.web.sequence
-	ctx, app := m.ctx, m.app
+	ctx, app, controller := m.ctx, m.app, m.web.controllerID
 	return tea.Tick(webRefreshInterval, func(time.Time) tea.Msg {
 		view, err := app.WebStatus(ctx)
+		if err == nil && view.Running {
+			err = app.RenewWebLease(ctx, controller)
+		}
 		return webStatusMsg{view: view, err: err, sequence: sequence, refresh: true}
 	})
 }
@@ -190,13 +232,12 @@ func (m Model) beginQuit() (tea.Model, tea.Cmd) {
 	}
 	switch m.webOnExitPolicy() {
 	case application.OnExitStop:
-		return m, webStopAndQuitCmd(m.ctx, m.app)
+		// Quit policy releases only this TUI. Another TUI's lease must keep the
+		// shared session companion alive.
+		return m, webReleaseAndQuitCmd(m.ctx, m.app, m.web.controllerID, false)
 	case application.OnExitKeep:
-		// Promote before quitting: the companion may still be in session mode
-		// if the setting changed after startup, and the parent watcher would
-		// otherwise kill it the moment the TUI dies.
 		notify := m.web.status.Tabs > 0 && m.web.owned() && m.web.status.Mode != "keep"
-		return m, webKeepAndQuitCmd(m.ctx, m.app, notify, m.web.status.URL)
+		return m, webKeepAndQuitCmd(m.ctx, m.app, m.web.controllerID, notify, false, m.web.status.URL)
 	default: // ask
 		m.webQuitPrompt = true
 		return m, nil
@@ -209,10 +250,10 @@ func (m Model) updateWebQuitPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "k":
 		m.webQuitPrompt = false
 		notify := m.web.status.Tabs > 0 && m.web.owned()
-		return m, webKeepAndQuitCmd(m.ctx, m.app, notify, m.web.status.URL)
+		return m, webKeepAndQuitCmd(m.ctx, m.app, m.web.controllerID, notify, true, m.web.status.URL)
 	case "s":
 		m.webQuitPrompt = false
-		return m, webStopAndQuitCmd(m.ctx, m.app)
+		return m, webStopAndQuitCmd(m.ctx, m.app, true)
 	case "esc":
 		m.webQuitPrompt = false
 	}

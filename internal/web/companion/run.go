@@ -26,14 +26,13 @@ type Options struct {
 	Home      string
 	Port      int // 0 prefers DefaultPort, then falls back to ephemeral
 	Lifecycle string
-	ParentPID int    // session companions exit when this process dies
 	Version   string // written to bridge.json for extension compatibility
 	// OnReady fires once the server listens, before Run blocks (CLI output).
 	OnReady func(baseURL, token string)
 }
 
 // Run executes the Web Companion in the current process: singleton lock,
-// HTTP server, bridge.json, parent watching, and graceful shutdown. It is the
+// HTTP server, bridge.json, controller leases, and graceful shutdown. It is the
 // shared core of `mm web run` (detached child) and `mm serve` (foreground).
 func Run(ctx context.Context, options Options) error {
 	if strings.TrimSpace(options.Home) == "" {
@@ -69,9 +68,8 @@ func Run(ctx context.Context, options Options) error {
 	defer cancel()
 	stopOnce := sync.OnceFunc(cancel)
 
-	// Lifecycle may flip at runtime (session → keep re-arms nothing; keep →
-	// session re-arms the parent watcher). The watcher reads mode under this
-	// mutex on every tick.
+	// Lifecycle may flip at runtime. The lease watcher reads mode under this
+	// mutex on every tick; keep never depends on controller leases.
 	var modeMu sync.Mutex
 	currentMode := lifecycle
 	server := web.NewServer(service)
@@ -102,13 +100,11 @@ func Run(ctx context.Context, options Options) error {
 		options.OnReady(baseURL, token)
 	}
 
-	if options.ParentPID > 0 {
-		go watchParent(runCtx, options.ParentPID, 1500*time.Millisecond, func() bool {
-			modeMu.Lock()
-			defer modeMu.Unlock()
-			return currentMode == LifecycleSession
-		}, stopOnce)
-	}
+	go watchControllerLeases(runCtx, server, 1500*time.Millisecond, func() bool {
+		modeMu.Lock()
+		defer modeMu.Unlock()
+		return currentMode == LifecycleSession
+	}, stopOnce)
 
 	<-runCtx.Done()
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -146,9 +142,12 @@ func startWithPortPreference(ctx context.Context, server *web.Server, port int) 
 	return "", 0, lastErr
 }
 
-// watchParent stops a session companion when its parent process disappears, so
-// a crashed or force-killed TUI never leaves an orphaned server behind.
-func watchParent(ctx context.Context, parentPID int, interval time.Duration, sessionMode func() bool, stop func()) {
+// watchControllerLeases stops a session companion after all TUI controllers
+// release or expire. A short startup grace lets the spawning TUI receive the
+// ready response and register its first lease. Keep mode never consults leases.
+func watchControllerLeases(ctx context.Context, server *web.Server, interval time.Duration, sessionMode func() bool, stop func()) {
+	startedAt := time.Now()
+	const startupGrace = 15 * time.Second
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -159,7 +158,8 @@ func watchParent(ctx context.Context, parentPID int, interval time.Duration, ses
 			if !sessionMode() {
 				continue
 			}
-			if !parentAlive(parentPID) {
+			active, ever := server.ControllerLeaseState()
+			if active == 0 && (ever || time.Since(startedAt) >= startupGrace) {
 				stop()
 				return
 			}

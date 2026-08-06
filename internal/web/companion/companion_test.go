@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -107,7 +106,7 @@ func TestEnsureConnectsToRunningWithoutSpawning(t *testing.T) {
 	writeBridge(t, home, fake.URL, "")
 
 	spawned := false
-	status, didSpawn, err := Ensure(context.Background(), home, LifecycleSession, 0, func(context.Context, string, string, int, int) (int, error) {
+	status, didSpawn, err := Ensure(context.Background(), home, LifecycleSession, 0, func(context.Context, string, string, int) (int, error) {
 		spawned = true
 		return 0, nil
 	})
@@ -119,6 +118,56 @@ func TestEnsureConnectsToRunningWithoutSpawning(t *testing.T) {
 	}
 	if !status.Running || status.Started {
 		t.Fatalf("unexpected ensure result: %+v", status)
+	}
+}
+
+func TestEnsurePromotesSessionToKeepWithoutSpawning(t *testing.T) {
+	var lifecycleCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/companion/status":
+			_ = json.NewEncoder(writer).Encode(map[string]any{"running": true, "pid": 7, "mode": "session", "port": 8787})
+		case "/api/companion/lifecycle":
+			lifecycleCalls.Add(1)
+			_, _ = writer.Write([]byte(`{"mode":"keep"}`))
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+	home := t.TempDir()
+	writeBridge(t, home, server.URL, "")
+	spawned := false
+	status, didSpawn, err := Ensure(context.Background(), home, LifecycleKeep, 0, func(context.Context, string, string, int) (int, error) {
+		spawned = true
+		return 0, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spawned || didSpawn || lifecycleCalls.Load() != 1 || status.Mode != LifecycleKeep {
+		t.Fatalf("promotion result=%+v spawned=%v didSpawn=%v calls=%d", status, spawned, didSpawn, lifecycleCalls.Load())
+	}
+}
+
+func TestEnsureSessionDoesNotDowngradeKeep(t *testing.T) {
+	var lifecycleCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/api/companion/status" {
+			_ = json.NewEncoder(writer).Encode(map[string]any{"running": true, "pid": 7, "mode": "keep", "port": 8787})
+			return
+		}
+		lifecycleCalls.Add(1)
+	}))
+	defer server.Close()
+	home := t.TempDir()
+	writeBridge(t, home, server.URL, "")
+	status, _, err := Ensure(context.Background(), home, LifecycleSession, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Mode != LifecycleKeep || lifecycleCalls.Load() != 0 {
+		t.Fatalf("session request downgraded keep: %+v calls=%d", status, lifecycleCalls.Load())
 	}
 }
 
@@ -198,9 +247,36 @@ func TestRunServesStatusAndStopsOnRequest(t *testing.T) {
 		t.Fatalf("probe after run = %+v, %v", status, err)
 	}
 
-	// Presence heartbeats aggregate tabs and dirty counts.
+	// Presence rejects cross-site/simple-request spoofing before accepting
+	// same-origin POST heartbeats with the custom header.
+	if response, err := http.Get(baseURL + "/api/companion/presence?tab=spoof"); err != nil {
+		t.Fatal(err)
+	} else {
+		response.Body.Close()
+		if response.StatusCode != http.StatusMethodNotAllowed {
+			t.Fatalf("GET presence status = %d", response.StatusCode)
+		}
+	}
+	crossSite, _ := http.NewRequest(http.MethodPost, baseURL+"/api/companion/presence?tab=spoof", nil)
+	crossSite.Header.Set("X-Membox-Presence", "1")
+	crossSite.Header.Set("Sec-Fetch-Site", "cross-site")
+	if response, err := http.DefaultClient.Do(crossSite); err != nil {
+		t.Fatal(err)
+	} else {
+		response.Body.Close()
+		if response.StatusCode != http.StatusForbidden {
+			t.Fatalf("cross-site presence status = %d", response.StatusCode)
+		}
+	}
+
+	// Valid presence heartbeats aggregate tabs and dirty counts.
 	for _, call := range []string{"/api/companion/presence?tab=a&dirty=1", "/api/companion/presence?tab=b&dirty=0"} {
-		resp, err := http.Get(baseURL + call)
+		request, err := http.NewRequest(http.MethodPost, baseURL+call, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("X-Membox-Presence", "1")
+		resp, err := http.DefaultClient.Do(request)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -261,44 +337,15 @@ func TestRunRefusesSecondInstance(t *testing.T) {
 	<-done
 }
 
-// TestHelperSleepProcess is not a test: invoked as a child binary it sleeps
-// so another test can kill it and observe parent-death handling.
-func TestHelperSleepProcess(t *testing.T) {
-	if os.Getenv("MEMBOX_HELPER_SLEEP") != "1" {
-		return
-	}
-	time.Sleep(60 * time.Second)
-}
-
-func sleepProcess(t *testing.T) *exec.Cmd {
-	t.Helper()
-	command := exec.Command(os.Args[0], "-test.run=TestHelperSleepProcess")
-	command.Env = append(os.Environ(), "MEMBOX_HELPER_SLEEP=1")
-	if err := command.Start(); err != nil {
-		t.Fatal(err)
-	}
-	return command
-}
-
-func TestRunSessionModeExitsWhenParentDies(t *testing.T) {
-	// Spawn a sleeper process to act as the parent, then run a session
-	// companion watching it and kill the parent. Reap the corpse promptly:
-	// an unreaped zombie still answers signal 0, while real parents get
-	// reaped by their own parent (shell, launchd).
+func TestRunSessionModeWaitsForEveryControllerLease(t *testing.T) {
 	home := t.TempDir()
-	sleeper := sleepProcess(t)
-	defer func() {
-		_ = sleeper.Process.Kill()
-		_, _ = sleeper.Process.Wait()
-	}()
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	ready := make(chan struct{}, 1)
 	done := make(chan error, 1)
 	go func() {
 		done <- Run(ctx, Options{
-			Home: home, Port: 0, Lifecycle: LifecycleSession, ParentPID: sleeper.Process.Pid, Version: "test",
+			Home: home, Port: 0, Lifecycle: LifecycleSession, Version: "test",
 			OnReady: func(string, string) { ready <- struct{}{} },
 		})
 	}()
@@ -307,17 +354,25 @@ func TestRunSessionModeExitsWhenParentDies(t *testing.T) {
 	case <-time.After(15 * time.Second):
 		t.Fatal("session companion did not start")
 	}
-
-	if err := sleeper.Process.Kill(); err != nil {
+	if err := SetControllerLease(ctx, home, "tui-a", false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := sleeper.Process.Wait(); err != nil {
+	if err := SetControllerLease(ctx, home, "tui-b", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetControllerLease(ctx, home, "tui-a", true); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(250 * time.Millisecond)
+	if status, _ := Probe(ctx, home); !status.Running {
+		t.Fatal("releasing one TUI must not stop a companion leased by another")
+	}
+	if err := SetControllerLease(ctx, home, "tui-b", true); err != nil {
 		t.Fatal(err)
 	}
 	select {
 	case <-done:
-		// Companion observed the parent's death and shut down on its own.
-	case <-time.After(10 * time.Second):
-		t.Fatal("session companion did not exit after its parent died")
+	case <-time.After(8 * time.Second):
+		t.Fatal("session companion did not exit after its last lease was released")
 	}
 }

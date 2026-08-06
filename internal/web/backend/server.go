@@ -46,6 +46,8 @@ type Server struct {
 	companionMode        string
 	companionStartedAt   time.Time
 	companionTabs        map[string]tabPresence
+	companionLeases      map[string]time.Time
+	companionEverLeased  bool
 	onCompanionStop      func()
 	onCompanionLifecycle func(mode string)
 }
@@ -84,6 +86,7 @@ func (s *Server) Start(ctx context.Context, port int) (string, error) {
 	mux.HandleFunc("/api/companion/status", s.handleCompanionStatus)
 	mux.HandleFunc("/api/companion/stop", s.handleCompanionStop)
 	mux.HandleFunc("/api/companion/lifecycle", s.handleCompanionLifecycle)
+	mux.HandleFunc("/api/companion/lease", s.handleCompanionLease)
 	mux.HandleFunc("/api/companion/presence", s.handleCompanionPresence)
 	mux.HandleFunc("/api/bridge/status", s.handleBridgeStatus)
 	mux.HandleFunc("/api/bridge/clips", s.handleBridgeClips)

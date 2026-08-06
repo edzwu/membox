@@ -42,9 +42,12 @@ func NewBridgeToken() (string, error) {
 }
 
 // BridgeFilePath is $MEMBOX_HOME/bridge.json.
-func BridgeFilePath(home string) string {
-	return filepath.Join(home, "bridge.json")
-}
+func BridgeFilePath(home string) string { return filepath.Join(home, "bridge.json") }
+
+// BridgeTokenPath is the durable pairing secret. Keeping it separate from
+// volatile runtime state means a torn/corrupt bridge.json never rotates the
+// browser extension's long-lived token.
+func BridgeTokenPath(home string) string { return filepath.Join(home, "bridge.token") }
 
 // ReadBridgeFile loads an existing pairing file, if any.
 func ReadBridgeFile(home string) (BridgeFile, error) {
@@ -59,18 +62,35 @@ func ReadBridgeFile(home string) (BridgeFile, error) {
 	return file, nil
 }
 
-// LoadOrCreateBridgeToken reuses the token from bridge.json when present so
-// browser extensions stay paired across TUI / serve restarts.
+// LoadOrCreateBridgeToken loads the durable token, migrates the legacy token
+// from bridge.json, or creates one atomically.
 func LoadOrCreateBridgeToken(home string) (string, error) {
-	if existing, err := ReadBridgeFile(home); err == nil {
-		if token := strings.TrimSpace(existing.Token); token != "" {
+	if body, err := os.ReadFile(BridgeTokenPath(home)); err == nil {
+		if token := strings.TrimSpace(string(body)); token != "" {
 			return token, nil
 		}
 	}
-	return NewBridgeToken()
+	var token string
+	if existing, err := ReadBridgeFile(home); err == nil {
+		token = strings.TrimSpace(existing.Token)
+	}
+	if token == "" {
+		var err error
+		token, err = NewBridgeToken()
+		if err != nil {
+			return "", err
+		}
+	}
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		return "", err
+	}
+	if err := writePrivateFileAtomic(BridgeTokenPath(home), []byte(token+"\n")); err != nil {
+		return "", err
+	}
+	return token, nil
 }
 
-// WriteBridgeFile persists pairing info under membox home.
+// WriteBridgeFile persists pairing info atomically under membox home.
 func WriteBridgeFile(home string, file BridgeFile) (string, error) {
 	if strings.TrimSpace(home) == "" {
 		return "", fmt.Errorf("membox home is required")
@@ -86,10 +106,44 @@ func WriteBridgeFile(home string, file BridgeFile) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(path, append(body, '\n'), 0o600); err != nil {
+	if err := writePrivateFileAtomic(path, append(body, '\n')); err != nil {
 		return "", err
 	}
 	return path, nil
+}
+
+func writePrivateFileAtomic(destination string, body []byte) error {
+	directory := filepath.Dir(destination)
+	temporary, err := os.CreateTemp(directory, ".membox-*.tmp")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if err := temporary.Chmod(0o600); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if _, err := temporary.Write(body); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(temporaryPath, destination); err != nil {
+		return err
+	}
+	// Persist the directory entry on filesystems that support directory fsync.
+	if directoryFile, err := os.Open(directory); err == nil {
+		_ = directoryFile.Sync()
+		_ = directoryFile.Close()
+	}
+	return nil
 }
 
 func withCORS(next http.Handler) http.Handler {

@@ -65,6 +65,8 @@ type App interface {
 	WebStatus(context.Context) (membox.WebStatusView, error)
 	EnsureWebCompanion(context.Context, string) (membox.WebStatusView, error)
 	StopWeb(context.Context) error
+	RenewWebLease(context.Context, string) error
+	ReleaseWebLease(context.Context, string) error
 	SetWebLifecycle(context.Context, string) error
 	ScanPaths(context.Context, membox.ScanPathsCommand) (membox.ScanReport, error)
 	ListPaths(context.Context) ([]membox.PathView, error)
@@ -289,7 +291,7 @@ func New(ctx context.Context, app App, launcher host.Launcher) Model {
 	spin := spinner.New()
 	spin.Spinner = spinner.Dot
 	vp := viewport.New(40, 10)
-	model := Model{ctx: ctx, app: app, launcher: launcher, input: input, spinner: spin, preview: vp, searchMode: searchModeName, inputMode: inputModeSearch, viewMode: viewTree, sortMode: sortModeTime, viewerMode: "leaf"}
+	model := Model{ctx: ctx, app: app, launcher: launcher, input: input, spinner: spin, preview: vp, searchMode: searchModeName, inputMode: inputModeSearch, viewMode: viewTree, sortMode: sortModeTime, viewerMode: "leaf", web: webState{controllerID: newWebControllerID()}}
 	model.web.starting = true
 	model.preview.SetContent(previewPlaceholder("Loading documents…"))
 	return model
@@ -309,7 +311,7 @@ func (m Model) Init() tea.Cmd {
 		listDocumentsCmd(m.ctx, m.app, m.listSequence),
 		viewerModeCmd(m.ctx, m.app),
 		settingsCmd(m.ctx, m.app),
-		webEnsureCmd(m.ctx, m.app),
+		webEnsureCmd(m.ctx, m.app, m.web.controllerID),
 	)
 }
 
@@ -365,6 +367,16 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		// working; the badge shows the degraded state permanently.
 		if next := m.applyWebStatus(msg); next != nil {
 			commands = append(commands, next)
+		}
+	case webQuitResultMsg:
+		if msg.err != nil {
+			m.err = fmt.Errorf("%s web companion before quit: %w", msg.action, msg.err)
+			m.webQuitPrompt = msg.fromPrompt
+		} else {
+			if msg.notify {
+				notifyWebKeptRunning(msg.url)
+			}
+			commands = append(commands, tea.Quit)
 		}
 	case settingsMsg:
 		if msg.err != nil {
@@ -2142,7 +2154,7 @@ func (m Model) updateConfigPanel(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(m.spinner.Tick, webStopCmd(m.ctx, m.app))
 		}
 		m.web.starting = true
-		return m, tea.Batch(m.spinner.Tick, webEnsureCmd(m.ctx, m.app))
+		return m, tea.Batch(m.spinner.Tick, webEnsureCmd(m.ctx, m.app, m.web.controllerID))
 	}
 	return m, nil
 }

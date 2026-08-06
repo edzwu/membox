@@ -3,58 +3,58 @@
 package companion
 
 import (
-	"os"
 	"os/exec"
-	"strconv"
-	"strings"
+	"syscall"
+
+	"membox/internal/infrastructure/system"
 )
 
-// On Windows the singleton is a pidfile plus a process-liveness check: flock
-// is unavailable, and exclusive file handles would break crash recovery.
-func readLockPID(home string) int {
-	body, err := os.ReadFile(LockPath(home))
-	if err != nil {
-		return 0
-	}
-	pid, _ := strconv.Atoi(strings.TrimSpace(string(body)))
-	return pid
-}
+const (
+	createNewProcessGroup = 0x00000200
+	detachedProcess       = 0x00000008
+)
 
-func processAlive(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	// Signal 0 probes existence without affecting the target.
-	return process.Signal(os.Signal(nil)) == nil
-}
-
-// AcquireLock claims the pidfile when no live companion owns it.
+// AcquireLock atomically takes a Windows named mutex. Unlike a pidfile this
+// has no check/write race and is released by the kernel after a crash.
 func AcquireLock(home string) (func(), error) {
-	if err := os.MkdirAll(home, 0o700); err != nil {
+	lock, err := system.OpenOSMutex(home, "companion")
+	if err != nil {
 		return nil, err
 	}
-	if LockHeld(home) {
+	held, err := lock.TryLock()
+	if err != nil {
+		_ = lock.Close()
+		return nil, err
+	}
+	if !held {
+		_ = lock.Close()
 		return nil, ErrAlreadyRunning
 	}
-	if err := os.WriteFile(LockPath(home), []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
-		return nil, err
-	}
 	return func() {
-		if readLockPID(home) == os.Getpid() {
-			_ = os.Remove(LockPath(home))
-		}
+		_ = lock.Unlock()
+		_ = lock.Close()
 	}, nil
 }
 
-// LockHeld reports whether a live process owns the pidfile.
 func LockHeld(home string) bool {
-	return processAlive(readLockPID(home))
+	lock, err := system.OpenOSMutex(home, "companion")
+	if err != nil {
+		return false
+	}
+	defer lock.Close()
+	held, err := lock.TryLock()
+	if err != nil || !held {
+		return true
+	}
+	_ = lock.Unlock()
+	return false
 }
 
-// detach is a no-op on Windows: child processes already survive the parent's
-// console closing.
-func detach(*exec.Cmd) {}
+// detach prevents Ctrl+C or console teardown in the parent from terminating a
+// keep-mode companion.
+func detach(command *exec.Cmd) {
+	command.SysProcAttr = &syscall.SysProcAttr{
+		CreationFlags: createNewProcessGroup | detachedProcess,
+		HideWindow:    true,
+	}
+}

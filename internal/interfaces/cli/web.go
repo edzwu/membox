@@ -87,7 +87,6 @@ func formatUptime(startedAt time.Time) string {
 }
 
 func newWebStartCommand(runtime *runtime) *cobra.Command {
-	var session bool
 	command := &cobra.Command{
 		Use:   "start",
 		Short: "Start the Web Companion if it is not running",
@@ -97,17 +96,18 @@ func newWebStartCommand(runtime *runtime) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			lifecycle := companion.LifecycleKeep
-			if session {
-				lifecycle = companion.LifecycleSession
-			}
-			status, spawned, err := companion.Ensure(cmd.Context(), home, lifecycle, 0, nil)
+			before, _ := companion.Probe(cmd.Context(), home)
+			status, spawned, err := companion.Ensure(cmd.Context(), home, companion.LifecycleKeep, 0, nil)
 			if err != nil {
 				return err
 			}
 			out := cmd.OutOrStdout()
 			if !spawned {
-				fmt.Fprintf(out, "web companion already running\n  URL: %s\n", status.BaseURL)
+				if before.Running && before.Mode == companion.LifecycleSession && status.Mode == companion.LifecycleKeep {
+					fmt.Fprintf(out, "web companion promoted to keep mode\n  URL: %s\n", status.BaseURL)
+				} else {
+					fmt.Fprintf(out, "web companion already running\n  URL: %s\n", status.BaseURL)
+				}
 				return nil
 			}
 			fmt.Fprintf(out, "web companion started\n  URL:  %s\n", status.BaseURL)
@@ -115,7 +115,6 @@ func newWebStartCommand(runtime *runtime) *cobra.Command {
 			return nil
 		},
 	}
-	command.Flags().BoolVar(&session, "session", false, "exit with the parent process instead of staying alive")
 	return command
 }
 
@@ -177,12 +176,11 @@ func newWebOpenCommand(runtime *runtime) *cobra.Command {
 }
 
 // newWebRunCommand is the hidden foreground companion runner. It is what the
-// TUI spawns detached (`mm web run --lifecycle … --parent …`) and what
+// TUI spawns detached (`mm web run --lifecycle …`) and what
 // `mm serve` reuses inline.
 func newWebRunCommand(runtime *runtime) *cobra.Command {
 	var port int
 	var lifecycle string
-	var parent int
 	command := &cobra.Command{
 		Use:    "run",
 		Hidden: true,
@@ -196,7 +194,6 @@ func newWebRunCommand(runtime *runtime) *cobra.Command {
 				Home:      home,
 				Port:      port,
 				Lifecycle: lifecycle,
-				ParentPID: parent,
 				Version:   membox.Version,
 				OnReady: func(baseURL, token string) {
 					fmt.Fprintf(cmd.OutOrStdout(), "web companion ready\n  URL:   %s\n  Token: %s\n", baseURL, token)
@@ -206,7 +203,6 @@ func newWebRunCommand(runtime *runtime) *cobra.Command {
 	}
 	command.Flags().IntVar(&port, "port", 0, "listen port (0 = prefer 8787, else ephemeral)")
 	command.Flags().StringVar(&lifecycle, "lifecycle", companion.LifecycleSession, "lifecycle mode: session or keep")
-	command.Flags().IntVar(&parent, "parent", 0, "exit when this parent PID disappears (session mode)")
 	return command
 }
 

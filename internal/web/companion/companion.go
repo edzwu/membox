@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -117,7 +116,7 @@ func Probe(ctx context.Context, home string) (Status, error) {
 
 // SpawnFunc starts a detached companion process and returns its PID. The TUI
 // injects its own spawn in tests; production uses SpawnDetached.
-type SpawnFunc func(ctx context.Context, home, lifecycle string, port, parentPID int) (int, error)
+type SpawnFunc func(ctx context.Context, home, lifecycle string, port int) (int, error)
 
 // Ensure probes first, then spawns a companion when none answers. It returns
 // the live status and whether this call started the process. A held lock with
@@ -128,6 +127,14 @@ func Ensure(ctx context.Context, home, lifecycle string, port int, spawn SpawnFu
 		lifecycle = LifecycleSession
 	}
 	if status, _ := Probe(ctx, home); status.Running {
+		// Ensure is monotonic: a caller asking for keep promotes an existing
+		// session companion, while a session caller never downgrades keep.
+		if lifecycle == LifecycleKeep && status.Mode == LifecycleSession {
+			if err := SetLifecycle(ctx, home, LifecycleKeep); err != nil {
+				return Status{}, false, fmt.Errorf("promoting web companion: %w", err)
+			}
+			status.Mode = LifecycleKeep
+		}
 		return status, false, nil
 	}
 	held := LockHeld(home)
@@ -135,7 +142,7 @@ func Ensure(ctx context.Context, home, lifecycle string, port int, spawn SpawnFu
 		if spawn == nil {
 			spawn = SpawnDetached
 		}
-		if _, err := spawn(ctx, home, lifecycle, port, os.Getpid()); err != nil {
+		if _, err := spawn(ctx, home, lifecycle, port); err != nil {
 			return Status{}, false, fmt.Errorf("starting web companion: %w", err)
 		}
 	}
@@ -229,6 +236,19 @@ func Stop(ctx context.Context, home string) error {
 		case <-time.After(150 * time.Millisecond):
 		}
 	}
+}
+
+// SetControllerLease renews or releases one TUI controller lease.
+func SetControllerLease(ctx context.Context, home, controller string, release bool) error {
+	controller = strings.TrimSpace(controller)
+	if controller == "" {
+		return errors.New("controller id is required")
+	}
+	_, err := controlRequest(ctx, home, http.MethodPost, "/api/companion/lease", map[string]any{
+		"controller": controller,
+		"release":    release,
+	})
+	return err
 }
 
 // SetLifecycle switches a running companion between session and keep mode.

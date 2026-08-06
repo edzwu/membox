@@ -190,7 +190,7 @@ WEB ○ off                          stopped
 WEB ! unavailable                  start failed (see ~/.membox/companion.log)
 ```
 
-What happens to the companion when the TUI quits is the `web on exit` setting (`ctrl+o`, or `:web keep`): `ask` (default) shows a prompt when browser tabs are connected, `stop` shuts the companion down with the TUI, and `keep` leaves it running. Choosing `keep` in the prompt promotes a running companion so it survives.
+What happens to the companion when the TUI quits is the `web on exit` setting (`ctrl+o`, or `:web keep`): `ask` (default) shows a prompt, `stop` releases this TUI's session lease, and `keep` promotes the companion before releasing the lease. A session companion stops when its last TUI lease is released or expires, so closing one of several TUIs never disrupts the others. Choosing `[s] Stop web and quit`, `:web stop`, or `mm web stop` is an explicit global stop.
 
 ```bash
 ./mm web status   # show companion state, tabs, unsaved counts
@@ -200,7 +200,7 @@ What happens to the companion when the TUI quits is the `web on exit` setting (`
 ./mm serve        # run the companion in the foreground instead
 ```
 
-Inside the TUI, `:web status / open / start / stop / keep` do the same, and `ctrl+o` adds `o` (open reader) and `x` (stop/start). Browser tabs heartbeat their unsaved state, so the badge and `mm web status` always reflect what is actually open.
+Inside the TUI, `:web status / open / start / stop / keep` do the same, and `ctrl+o` adds `o` (open reader) and `x` (stop/start). Each TUI renews an independent controller lease. Browser tabs send same-origin POST heartbeats with their unsaved state, so the badge and `mm web status` reflect what is actually open. All TUI, CLI, and Companion data mutations also share `$MEMBOX_HOME/mutation.lock`, serializing each complete file-and-index update across processes.
 
 The connection icon in the Miru top bar shows whether the reader is connected to membox; click it to toggle the connection. While connected, the lower-right Markdown arrow syncs both Markdown and annotations to membox (updating the current UUID, or creating a note when the paste is new). While disconnected, the same arrow keeps Miru's normal local download behavior. Every synced annotation is an individual `*-note.md` document: its blockquote/explanation is Markdown content, while SQLite stores the target UUID and anchoring hints. Miru assembles its annotation JSON only when the document is opened; it is not a second persisted note copy. Reading progress is separate DB UI state, so scrolling never rewrites note files. Notes and progress auto-save in the background for any document bound to membox; taking the first note on pasted (not yet synced) content automatically creates the membox source document while connected. The explicit arrow sync additionally writes the Markdown source.
 
