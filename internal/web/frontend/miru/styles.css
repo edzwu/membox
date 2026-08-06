@@ -198,23 +198,6 @@ button {
   letter-spacing: 0;
 }
 
-.brand-social {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 6px;
-  color: var(--muted);
-  text-decoration: none;
-  transition: color 0.15s ease, background 0.15s ease;
-}
-
-.brand-social:hover {
-  color: var(--accent);
-  background: var(--accent-soft);
-}
-
 .topbar-actions {
   display: flex;
   align-items: center;

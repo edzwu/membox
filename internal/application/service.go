@@ -652,6 +652,34 @@ func (s *Service) GetDocumentReadState(ctx context.Context, selector string) (po
 	return s.store.GetDocumentReadState(ctx, document.ID)
 }
 
+// MarkDocumentOpened updates recency without disturbing the reader's saved
+// scroll position.
+func (s *Service) MarkDocumentOpened(ctx context.Context, selector string) error {
+	document, _, err := s.ResolveDocument(ctx, selector)
+	if err != nil {
+		return err
+	}
+	state, found, err := s.store.GetDocumentReadState(ctx, document.ID)
+	if err != nil {
+		return err
+	}
+	if !found {
+		state = port.DocumentReadState{DocumentID: document.ID}
+	}
+	state.ProgressAt = s.clock.Now().UTC().Format(time.RFC3339Nano)
+	return s.store.SaveDocumentReadState(ctx, state)
+}
+
+func (s *Service) ListRecentDocuments(ctx context.Context, limit int) ([]port.RecentDocument, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	if limit > 100 {
+		return nil, errors.New("recent document limit cannot exceed 100")
+	}
+	return s.store.ListRecentDocuments(ctx, limit)
+}
+
 type SyncDocumentResult struct {
 	DocumentID catalog.DocumentID
 	Path       string

@@ -850,6 +850,30 @@ func (s *Store) GetDocumentReadState(ctx context.Context, documentID catalog.Doc
 	return state, true, nil
 }
 
+func (s *Store) ListRecentDocuments(ctx context.Context, limit int) ([]port.RecentDocument, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT d.id,COALESCE(i.title,''),l.relative_path,r.progress_at
+FROM document_read_state r
+JOIN documents d ON d.id=r.document_id
+JOIN document_locations l ON l.document_id=d.id
+LEFT JOIN document_index i ON i.document_id=d.id
+WHERE l.status='active' AND `+notTrashedClause+` AND trim(r.progress_at)!=''
+ORDER BY r.progress_at DESC,d.id
+LIMIT ?`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("listing recent documents: %w", err)
+	}
+	defer rows.Close()
+	var documents []port.RecentDocument
+	for rows.Next() {
+		var document port.RecentDocument
+		if err := rows.Scan(&document.DocumentID, &document.Title, &document.Path, &document.OpenedAt); err != nil {
+			return nil, err
+		}
+		documents = append(documents, document)
+	}
+	return documents, rows.Err()
+}
+
 func (s *Store) ResolveTopic(ctx context.Context, selector string) (*catalog.Document, string, error) {
 	selector = strings.TrimSpace(selector)
 	if selector == "" {

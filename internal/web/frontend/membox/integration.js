@@ -65,6 +65,45 @@ function createConnectionButton() {
 
 const connectionButton = createConnectionButton();
 
+function createDocumentSwitcher() {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.id = 'membox-document-switcher';
+  button.className = 'membox-document-switcher';
+  button.hidden = true;
+  button.title = 'Switch document · ⌘K';
+  button.setAttribute('aria-label', 'Switch document');
+  button.innerHTML = `
+    <svg class="membox-document-switcher-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M7 7V5a2 2 0 0 1 2-2h8l3 3v11a2 2 0 0 1-2 2h-2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      <rect x="4" y="7" width="12" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/>
+      <path d="M7 12h6M7 16h6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+    </svg>
+    <span class="membox-document-switcher-label">Open document</span>
+    <svg class="membox-document-switcher-chevron" viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>`;
+  document.querySelector('.topbar-center')?.appendChild(button);
+  button.addEventListener('click', openDocumentPicker);
+  return button;
+}
+
+const documentSwitcher = createDocumentSwitcher();
+
+function renderDocumentSwitcher() {
+  documentSwitcher.hidden = !connected;
+  const liveTitle = document.getElementById('doc-title')?.textContent?.replace(/\s+/g, ' ').trim();
+  const title = liveTitle || state.docTitle || 'Open document';
+  documentSwitcher.querySelector('.membox-document-switcher-label').textContent = title;
+  documentSwitcher.setAttribute('aria-label', documentID ? `Switch document from ${title}` : 'Open document');
+}
+
+new MutationObserver(renderDocumentSwitcher).observe(elements.article, {
+  childList: true,
+  subtree: true,
+  characterData: true,
+});
+
 // Bottom-left cluster: save/copy status plus the “add related document”
 // button. A hollow circle means there are changes to save; a filled circle
 // means the document is durable and can be clicked to copy its UUID.
@@ -262,7 +301,7 @@ function createRelatedModal() {
       <div class="membox-related-picker" data-panel="existing" role="tabpanel">
         <input class="membox-related-search" type="search" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="membox-related-options" placeholder="Search by title or UUID\u2026" autocomplete="off" spellcheck="false">
         <div class="membox-related-options" id="membox-related-options" role="listbox" aria-label="Matching documents"></div>
-        <div class="membox-modal-hint">Type any part of a title or UUID, then choose a document.</div>
+        <div class="membox-modal-hint">Recently opened files appear first · type a title or UUID to search.</div>
       </div>
       <div class="membox-related-create" data-panel="new" role="tabpanel" hidden>
         <input class="membox-modal-input" type="text" placeholder="Title" maxlength="200" spellcheck="false">
@@ -276,8 +315,11 @@ function createRelatedModal() {
     </div>`;
   document.body.appendChild(backdrop);
   const modal = backdrop.querySelector('.membox-modal');
+  const dialogTitle = backdrop.querySelector('.membox-modal-title');
+  const tablist = backdrop.querySelector('.membox-modal-tabs');
   const searchInput = backdrop.querySelector('.membox-related-search');
   const options = backdrop.querySelector('.membox-related-options');
+  const hint = backdrop.querySelector('.membox-related-picker .membox-modal-hint');
   const titleInput = backdrop.querySelector('.membox-modal-input');
   const bodyInput = backdrop.querySelector('.membox-modal-body');
   const primaryButton = backdrop.querySelector('.membox-modal-save');
@@ -288,10 +330,7 @@ function createRelatedModal() {
     if (event.target === backdrop) closeRelatedModal();
   });
   backdrop.querySelector('.membox-modal-cancel').addEventListener('click', closeRelatedModal);
-  primaryButton.addEventListener('click', () => {
-    if (relatedModalMode === 'existing') void linkExistingRelated();
-    else void saveRelated();
-  });
+  primaryButton.addEventListener('click', submitPickerSelection);
   tabs.forEach((tab) => tab.addEventListener('click', () => setRelatedModalMode(tab.dataset.mode)));
   searchInput.addEventListener('input', scheduleRelatedSearch);
   searchInput.addEventListener('keydown', onRelatedSearchKeydown);
@@ -304,26 +343,29 @@ function createRelatedModal() {
       void saveRelated();
     }
   });
-  return { backdrop, searchInput, options, titleInput, bodyInput, primaryButton, tabs, panels };
+  return { backdrop, dialogTitle, tablist, searchInput, options, hint, titleInput, bodyInput, primaryButton, tabs, panels };
 }
 
 const relatedModal = createRelatedModal();
 let relatedSaving = false;
 let relatedModalMode = 'existing';
+let pickerPurpose = 'related';
 let selectedRelatedCandidate = null;
 let relatedSearchTimer = 0;
 let relatedSearchController = null;
 let relatedSearchGeneration = 0;
 
 function setRelatedModalMode(mode, focus = true) {
-  relatedModalMode = mode === 'new' ? 'new' : 'existing';
+  relatedModalMode = pickerPurpose === 'open' ? 'existing' : mode === 'new' ? 'new' : 'existing';
   relatedModal.tabs.forEach((tab) => {
     const active = tab.dataset.mode === relatedModalMode;
     tab.classList.toggle('is-active', active);
     tab.setAttribute('aria-selected', String(active));
   });
   relatedModal.panels.forEach((panel) => { panel.hidden = panel.dataset.panel !== relatedModalMode; });
-  relatedModal.primaryButton.textContent = relatedModalMode === 'existing' ? 'Link document' : 'Create';
+  relatedModal.primaryButton.textContent = pickerPurpose === 'open'
+    ? 'Open document'
+    : relatedModalMode === 'existing' ? 'Link document' : 'Create';
   updateRelatedPrimaryButton();
   if (focus) {
     (relatedModalMode === 'existing' ? relatedModal.searchInput : relatedModal.titleInput).focus();
@@ -385,7 +427,8 @@ function scheduleRelatedSearch() {
   relatedSearchGeneration++;
   const query = relatedModal.searchInput.value.trim();
   if (!query) {
-    renderRelatedOptions([], 'Start typing to find a document');
+    renderRelatedOptions([], 'Loading recent files\u2026');
+    relatedSearchTimer = window.setTimeout(() => void searchRelatedCandidates(''), 0);
     return;
   }
   renderRelatedOptions([], 'Searching\u2026');
@@ -397,8 +440,16 @@ async function searchRelatedCandidates(query) {
   relatedSearchController = new AbortController();
   const generation = ++relatedSearchGeneration;
   try {
-    const params = new URLSearchParams({ q: query, limit: '8' });
-    const response = await fetch(`/api/doc/${encodeURIComponent(documentID)}/related/candidates?${params}`, {
+    const params = new URLSearchParams({
+      limit: '8',
+      purpose: pickerPurpose === 'open' ? 'open' : 'related',
+    });
+    if (query) params.set('q', query);
+    if (pickerPurpose === 'open' && documentID) params.set('focus', documentID);
+    const endpoint = pickerPurpose === 'open'
+      ? '/api/documents/candidates'
+      : `/api/doc/${encodeURIComponent(documentID)}/related/candidates`;
+    const response = await fetch(`${endpoint}?${params}`, {
       cache: 'no-store',
       signal: relatedSearchController.signal,
     });
@@ -406,10 +457,13 @@ async function searchRelatedCandidates(query) {
     const data = await response.json();
     if (generation !== relatedSearchGeneration || relatedModal.backdrop.hidden) return;
     const candidates = Array.isArray(data.candidates) ? data.candidates : [];
-    renderRelatedOptions(candidates, candidates.length ? '' : 'No matching unlinked documents');
+    const emptyMessage = pickerPurpose === 'open'
+      ? query ? 'No matching documents' : 'No recently opened files'
+      : query ? 'No matching unlinked documents' : 'No recently opened unlinked files';
+    renderRelatedOptions(candidates, candidates.length ? '' : emptyMessage);
   } catch (err) {
     if (err.name === 'AbortError') return;
-    console.warn('membox: related document search failed', err);
+    console.warn('membox: document picker search failed', err);
     renderRelatedOptions([], 'Could not search documents');
   }
 }
@@ -420,7 +474,7 @@ function onRelatedSearchKeydown(event) {
   if (!first) return;
   event.preventDefault();
   if (event.key === 'Enter') {
-    if (selectedRelatedCandidate) void linkExistingRelated();
+    if (selectedRelatedCandidate) submitPickerSelection();
     else first.click();
   } else {
     first.focus();
@@ -431,7 +485,7 @@ function onRelatedOptionKeydown(event) {
   if (!['ArrowDown', 'ArrowUp', 'Enter'].includes(event.key)) return;
   event.preventDefault();
   if (event.key === 'Enter') {
-    if (event.currentTarget.getAttribute('aria-selected') === 'true') void linkExistingRelated();
+    if (event.currentTarget.getAttribute('aria-selected') === 'true') submitPickerSelection();
     else event.currentTarget.click();
     return;
   }
@@ -441,15 +495,30 @@ function onRelatedOptionKeydown(event) {
   (next || relatedModal.searchInput).focus();
 }
 
-function openRelatedModal() {
-  if (!connected || !documentID) return;
+function openPicker(purpose) {
+  if (!connected || (purpose === 'related' && !documentID)) return;
+  pickerPurpose = purpose === 'open' ? 'open' : 'related';
+  relatedModal.dialogTitle.textContent = pickerPurpose === 'open' ? 'Open document' : 'Add related document';
+  relatedModal.tablist.hidden = pickerPurpose === 'open';
+  relatedModal.hint.textContent = pickerPurpose === 'open'
+    ? 'Recently opened files appear first · type a title or UUID to search · ⌘K'
+    : 'Recently opened files appear first · type a title or UUID to search.';
   relatedModal.searchInput.value = '';
   relatedModal.titleInput.value = '';
   relatedModal.bodyInput.value = '';
   selectedRelatedCandidate = null;
-  renderRelatedOptions([], 'Start typing to find a document');
   relatedModal.backdrop.hidden = false;
   setRelatedModalMode('existing');
+  renderRelatedOptions([], 'Loading recent files\u2026');
+  void searchRelatedCandidates('');
+}
+
+function openRelatedModal() {
+  openPicker('related');
+}
+
+function openDocumentPicker() {
+  openPicker('open');
 }
 
 function closeRelatedModal() {
@@ -457,6 +526,34 @@ function closeRelatedModal() {
   if (relatedSearchController) relatedSearchController.abort();
   relatedSearchGeneration++;
   relatedModal.backdrop.hidden = true;
+}
+
+function submitPickerSelection() {
+  if (pickerPurpose === 'open') void openSelectedDocument();
+  else if (relatedModalMode === 'existing') void linkExistingRelated();
+  else void saveRelated();
+}
+
+async function openSelectedDocument() {
+  if (relatedSaving || !selectedRelatedCandidate) return;
+  const targetID = selectedRelatedCandidate.id;
+  relatedSaving = true;
+  updateRelatedPrimaryButton();
+  try {
+    const currentNeedsSave = Boolean((state.currentMarkdown || '').trim()) && (!documentID || annotationsDirty);
+    if (currentNeedsSave) {
+      showToast('Saving current document before switching…');
+      await syncToMembox();
+      if (!documentID || annotationsDirty) {
+        showToast('Could not switch because the current document is not saved');
+        return;
+      }
+    }
+    window.location.assign(`/?id=${encodeURIComponent(targetID)}`);
+  } finally {
+    relatedSaving = false;
+    updateRelatedPrimaryButton();
+  }
 }
 
 async function linkExistingRelated() {
@@ -552,6 +649,7 @@ function renderConnection() {
   connectionButton.title = label;
   setDownloadMeaning();
   renderDocStatus();
+  renderDocumentSwitcher();
 }
 
 async function backendAvailable() {
@@ -1026,6 +1124,18 @@ document.addEventListener('paste', (event) => {
 document.addEventListener('drop', (event) => {
   if (event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files.length) unbindDocument();
 }, true);
+
+document.addEventListener('keydown', (event) => {
+  if (event.repeat || event.altKey || event.shiftKey) return;
+  if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'k') return;
+  if (!connected) return;
+  event.preventDefault();
+  if (!relatedModal.backdrop.hidden && pickerPurpose === 'open') {
+    relatedModal.searchInput.focus();
+    return;
+  }
+  openDocumentPicker();
+});
 
 // Miru updates this title when annotations change; connected mode owns its
 // sync wording, so immediately re-apply it after those generic updates.

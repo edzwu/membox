@@ -1,4 +1,76 @@
 /* membox-only chrome. Miru's own stylesheet remains product-neutral. */
+.membox-document-switcher {
+  appearance: none;
+  max-width: min(360px, 42vw);
+  height: 36px;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--paper-raised);
+  color: var(--ink-soft);
+  font-family: var(--font-sans);
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.membox-document-switcher[hidden] {
+  display: none;
+}
+
+.membox-document-switcher:hover,
+.membox-document-switcher:focus-visible {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 38%, var(--line));
+  background: color-mix(in srgb, var(--accent-soft) 52%, var(--paper-raised));
+  outline: none;
+}
+
+.membox-document-switcher-icon {
+  width: 18px;
+  height: 18px;
+  color: var(--accent);
+  flex: 0 0 auto;
+}
+
+.membox-document-switcher-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.membox-document-switcher-chevron {
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+  flex: 0 0 auto;
+}
+
+@media (max-width: 768px) {
+  .topbar-center:has(.membox-document-switcher) {
+    position: static;
+    transform: none;
+    margin-right: auto;
+    margin-left: 12px;
+  }
+
+  .membox-document-switcher {
+    width: 36px;
+    padding: 0;
+  }
+
+  .membox-document-switcher-label,
+  .membox-document-switcher-chevron {
+    display: none;
+  }
+}
+
 .membox-connection {
   position: relative;
   width: 36px;
@@ -338,6 +410,10 @@
   padding: 3px;
   border-radius: 9px;
   background: color-mix(in srgb, var(--line) 55%, transparent);
+}
+
+.membox-modal-tabs[hidden] {
+  display: none;
 }
 
 .membox-modal-tab {

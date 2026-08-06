@@ -71,6 +71,9 @@ func TestServerServesReaderAndMarkdown(t *testing.T) {
 	if !strings.Contains(string(indexBody), `src="/membox/integration.js"`) {
 		t.Fatalf("index.html missing isolated membox adapter: %s", indexBody[:200])
 	}
+	if strings.Contains(string(indexBody), "brand-social") || !strings.Contains(string(indexBody), `class="topbar-center"`) {
+		t.Fatal("host-neutral topbar should expose an empty center slot without personal links")
+	}
 	adapterResp, err := http.Get(baseURL + "/membox/integration.js")
 	if err != nil {
 		t.Fatal(err)
@@ -79,6 +82,9 @@ func TestServerServesReaderAndMarkdown(t *testing.T) {
 	adapterResp.Body.Close()
 	if adapterResp.StatusCode != http.StatusOK || !strings.Contains(string(adapterBody), "membox-connection") {
 		t.Fatalf("membox adapter unavailable: status=%d", adapterResp.StatusCode)
+	}
+	if !strings.Contains(string(adapterBody), "membox-document-switcher") || !strings.Contains(string(adapterBody), "Switch document · ⌘K") {
+		t.Fatal("membox adapter does not inject the document switcher")
 	}
 
 	docResp, err := http.Get(baseURL + "/api/doc/" + docID)
@@ -945,6 +951,103 @@ func TestServerRelatedSearchesAndLinksExistingDocument(t *testing.T) {
 
 	// Already-related cards should not continue to appear in autocomplete.
 	assertCandidate("Softmax", false)
+
+	// The global document switcher uses the same picker but includes graph
+	// neighbors; it only excludes the document currently being read.
+	pickerCandidate := func(query, id string) bool {
+		t.Helper()
+		endpoint := baseURL + "/api/documents/candidates?purpose=open&focus=" + docID + "&q=" + query
+		resp, getErr := http.Get(endpoint)
+		if getErr != nil {
+			t.Fatal(getErr)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("document picker failed: status=%d body=%q", resp.StatusCode, body)
+		}
+		return strings.Contains(string(body), `"id":"`+id+`"`)
+	}
+	if !pickerCandidate("Softmax", target.ID) {
+		t.Fatal("global picker should include an already-related document")
+	}
+	if pickerCandidate("Flash", docID) {
+		t.Fatal("global picker should exclude the current document")
+	}
+}
+
+func TestServerRelatedCandidatesDefaultToRecentlyOpenedDocuments(t *testing.T) {
+	baseURL, docID, _ := startServer(t)
+
+	createDocument := func(title string) string {
+		t.Helper()
+		body := postJSON(t, baseURL+"/api/save", map[string]string{
+			"title": title,
+			"body":  "# " + title + "\n",
+		})
+		var saved struct {
+			ID string `json:"id"`
+		}
+		mustUnmarshal(t, body, &saved)
+		return saved.ID
+	}
+	olderID := createDocument("Older Recent")
+	newerID := createDocument("Newer Recent")
+	unopenedID := createDocument("Not Opened Yet")
+	for id, openedAt := range map[string]string{
+		olderID: "2000-01-01T00:00:00.000Z",
+		newerID: "2001-01-01T00:00:00.000Z",
+	} {
+		postJSON(t, baseURL+"/api/doc/"+id+"/annotations", map[string]any{
+			"format":      "miru-annotations",
+			"version":     2,
+			"annotations": []any{},
+			"progress":    map[string]any{"y": 0, "at": openedAt},
+		})
+	}
+
+	listRecent := func() []struct {
+		ID       string `json:"id"`
+		OpenedAt string `json:"opened_at"`
+	} {
+		t.Helper()
+		resp, err := http.Get(baseURL + "/api/doc/" + docID + "/related/candidates?limit=8")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("recent candidates failed: status=%d body=%q", resp.StatusCode, body)
+		}
+		var result struct {
+			Candidates []struct {
+				ID       string `json:"id"`
+				OpenedAt string `json:"opened_at"`
+			} `json:"candidates"`
+		}
+		mustUnmarshal(t, body, &result)
+		return result.Candidates
+	}
+
+	recent := listRecent()
+	if len(recent) != 2 || recent[0].ID != newerID || recent[1].ID != olderID {
+		t.Fatalf("recent candidates are not newest first: %+v", recent)
+	}
+	if recent[0].OpenedAt == "" || recent[1].OpenedAt == "" {
+		t.Fatalf("recent candidates do not include opened_at: %+v", recent)
+	}
+
+	// Loading a document counts as opening it even if the reader never scrolls.
+	openedResp, err := http.Get(baseURL + "/api/doc/" + unopenedID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	openedResp.Body.Close()
+	recent = listRecent()
+	if len(recent) != 3 || recent[0].ID != unopenedID {
+		t.Fatalf("newly opened document is not first: %+v", recent)
+	}
 }
 
 func TestServerRefusesDeletionForStaleRevision(t *testing.T) {

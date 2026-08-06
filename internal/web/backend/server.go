@@ -70,6 +70,7 @@ func (s *Server) Start(ctx context.Context, port int) (string, error) {
 	mux.HandleFunc("/api/bridge/status", s.handleBridgeStatus)
 	mux.HandleFunc("/api/bridge/clips", s.handleBridgeClips)
 	mux.HandleFunc("/api/ingest", s.handleIngest)
+	mux.HandleFunc("/api/documents/candidates", s.handleDocumentCandidates)
 	mux.HandleFunc("/api/doc/", s.handleDocument)
 	mux.HandleFunc("/api/save", s.handleSave)
 	mux.HandleFunc("/api/sync", s.handleSync)
@@ -179,6 +180,9 @@ func (s *Server) handleDocument(writer http.ResponseWriter, request *http.Reques
 		http.Error(writer, err.Error(), http.StatusNotFound)
 		return
 	}
+	// Opening a document is reading activity even when the user does not scroll.
+	// Recency is best-effort and must never prevent the Markdown from loading.
+	_ = s.service.MarkDocumentOpened(request.Context(), selector)
 	writer.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 	writer.Header().Set("Cache-Control", "no-store")
 	// HTTP header values do not have a browser-portable Unicode encoding.
@@ -188,17 +192,24 @@ func (s *Server) handleDocument(writer http.ResponseWriter, request *http.Reques
 	_, _ = writer.Write(body)
 }
 
-// handleRelatedCandidates powers the existing-document picker. It searches
-// literal UUID/title/path fragments and omits the focus, existing relations,
-// and internal selection-note documents.
+func (s *Server) handleDocumentCandidates(writer http.ResponseWriter, request *http.Request) {
+	s.handleRelatedCandidates(writer, request, strings.TrimSpace(request.URL.Query().Get("focus")))
+}
+
+// handleRelatedCandidates powers both document switching and the
+// existing-related picker. An empty query returns recently opened documents
+// (newest first); a non-empty query matches literal UUID/title/path fragments.
+// Both omit the focus and internal selection-note documents; related mode also
+// omits existing graph neighbors.
 func (s *Server) handleRelatedCandidates(writer http.ResponseWriter, request *http.Request, selector string) {
 	if request.Method != http.MethodGet {
 		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	query := strings.TrimSpace(request.URL.Query().Get("q"))
-	if selector == "" || query == "" {
-		http.Error(writer, "document selector and query are required", http.StatusBadRequest)
+	purpose := strings.TrimSpace(request.URL.Query().Get("purpose"))
+	if purpose != "open" && selector == "" {
+		http.Error(writer, "document selector is required", http.StatusBadRequest)
 		return
 	}
 	limit := 8
@@ -210,43 +221,72 @@ func (s *Server) handleRelatedCandidates(writer http.ResponseWriter, request *ht
 		}
 		limit = parsed
 	}
-	focus, graph, err := s.service.GetDocumentGraph(request.Context(), selector)
-	if err != nil {
-		http.Error(writer, err.Error(), http.StatusNotFound)
-		return
-	}
-	excluded := map[string]bool{string(focus.ID): true}
-	for _, link := range append(graph.Outgoing, graph.Incoming...) {
-		if link.Document != nil {
-			excluded[string(link.Document.ID)] = true
+	excluded := map[string]bool{}
+	if selector != "" {
+		if purpose == "open" {
+			focus, _, err := s.service.ResolveDocument(request.Context(), selector)
+			if err != nil {
+				http.Error(writer, err.Error(), http.StatusNotFound)
+				return
+			}
+			excluded[string(focus.ID)] = true
+		} else {
+			focus, graph, err := s.service.GetDocumentGraph(request.Context(), selector)
+			if err != nil {
+				http.Error(writer, err.Error(), http.StatusNotFound)
+				return
+			}
+			excluded[string(focus.ID)] = true
+			for _, link := range append(graph.Outgoing, graph.Incoming...) {
+				if link.Document != nil {
+					excluded[string(link.Document.ID)] = true
+				}
+			}
 		}
 	}
 	fetchLimit := limit * 4
 	if fetchLimit > 100 {
 		fetchLimit = 100
 	}
-	hits, err := s.service.SuggestDocuments(request.Context(), query, fetchLimit)
-	if err != nil {
-		http.Error(writer, err.Error(), http.StatusBadRequest)
-		return
-	}
 	type candidateView struct {
-		ID    string `json:"id"`
-		Title string `json:"title"`
-		Path  string `json:"path"`
+		ID       string `json:"id"`
+		Title    string `json:"title"`
+		Path     string `json:"path"`
+		OpenedAt string `json:"opened_at,omitempty"`
 	}
 	candidates := make([]candidateView, 0, limit)
-	for _, hit := range hits {
-		if excluded[string(hit.DocumentID)] || strings.HasSuffix(hit.Path, "-note.md") {
-			continue
+	appendCandidate := func(id, title, documentPath, openedAt string) bool {
+		if excluded[id] || strings.HasSuffix(documentPath, "-note.md") {
+			return false
 		}
-		title := strings.TrimSpace(hit.Title)
+		title = strings.TrimSpace(title)
 		if title == "" {
-			title = path.Base(hit.Path)
+			title = path.Base(documentPath)
 		}
-		candidates = append(candidates, candidateView{ID: string(hit.DocumentID), Title: title, Path: hit.Path})
-		if len(candidates) == limit {
-			break
+		candidates = append(candidates, candidateView{ID: id, Title: title, Path: documentPath, OpenedAt: openedAt})
+		return len(candidates) == limit
+	}
+	if query == "" {
+		recent, recentErr := s.service.ListRecentDocuments(request.Context(), fetchLimit)
+		if recentErr != nil {
+			http.Error(writer, recentErr.Error(), http.StatusInternalServerError)
+			return
+		}
+		for _, document := range recent {
+			if appendCandidate(string(document.DocumentID), document.Title, document.Path, document.OpenedAt) {
+				break
+			}
+		}
+	} else {
+		hits, suggestErr := s.service.SuggestDocuments(request.Context(), query, fetchLimit)
+		if suggestErr != nil {
+			http.Error(writer, suggestErr.Error(), http.StatusBadRequest)
+			return
+		}
+		for _, hit := range hits {
+			if appendCandidate(string(hit.DocumentID), hit.Title, hit.Path, "") {
+				break
+			}
 		}
 	}
 	writer.Header().Set("Content-Type", "application/json; charset=utf-8")

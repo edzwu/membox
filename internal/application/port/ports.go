@@ -107,6 +107,15 @@ type DocumentReadState struct {
 	ProgressAt string
 }
 
+// RecentDocument is a compact picker-oriented view ordered by the last time a
+// document was opened in the reader.
+type RecentDocument struct {
+	DocumentID catalog.DocumentID
+	Title      string
+	Path       string
+	OpenedAt   string
+}
+
 // TrashRecord marks a document as soft-deleted. Rows and relations survive;
 // the file sits in the path's trash directory until restore or purge.
 type TrashRecord struct {
@@ -147,6 +156,7 @@ type CatalogStore interface {
 	DeleteAnnotationNote(ctx context.Context, noteDocumentID catalog.DocumentID) error
 	SaveDocumentReadState(ctx context.Context, state DocumentReadState) error
 	GetDocumentReadState(ctx context.Context, documentID catalog.DocumentID) (DocumentReadState, bool, error)
+	ListRecentDocuments(ctx context.Context, limit int) ([]RecentDocument, error)
 	Search(ctx context.Context, query string, limit int) ([]SearchHit, error)
 	SuggestDocuments(ctx context.Context, query string, limit int) ([]SearchHit, error)
 	ListDocuments(ctx context.Context, limit int, includeUnavailable bool) ([]DocumentRecord, error)
