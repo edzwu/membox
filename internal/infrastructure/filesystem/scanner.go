@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -218,8 +219,40 @@ func isMarkdown(name string) bool {
 
 func extractTitle(body []byte, absolutePath string) string {
 	scanner := bufio.NewScanner(strings.NewReader(string(body)))
+	inFrontmatter := false
+	inCodeFence := false
+	codeFence := byte(0)
+	lineNumber := 0
 	for scanner.Scan() {
+		lineNumber++
 		line := strings.TrimSpace(scanner.Text())
+
+		if lineNumber == 1 && line == "---" {
+			inFrontmatter = true
+			continue
+		}
+		if inFrontmatter {
+			if line == "---" {
+				inFrontmatter = false
+				continue
+			}
+			if title, ok := frontmatterTitle(line); ok {
+				return title
+			}
+			continue
+		}
+
+		if marker := markdownFenceMarker(line); marker != 0 {
+			if !inCodeFence {
+				inCodeFence, codeFence = true, marker
+			} else if marker == codeFence {
+				inCodeFence, codeFence = false, 0
+			}
+			continue
+		}
+		if inCodeFence {
+			continue
+		}
 		if strings.HasPrefix(line, "# ") {
 			if title := strings.TrimSpace(strings.TrimPrefix(line, "# ")); title != "" {
 				return title
@@ -228,6 +261,38 @@ func extractTitle(body []byte, absolutePath string) string {
 	}
 	base := filepath.Base(absolutePath)
 	return strings.TrimSuffix(base, filepath.Ext(base))
+}
+
+func frontmatterTitle(line string) (string, bool) {
+	key, value, found := strings.Cut(line, ":")
+	if !found || !strings.EqualFold(strings.TrimSpace(key), "title") {
+		return "", false
+	}
+	value = strings.TrimSpace(value)
+	if value == "" || value == "~" || strings.EqualFold(value, "null") {
+		return "", false
+	}
+	if len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"' {
+		if unquoted, err := strconv.Unquote(value); err == nil && strings.TrimSpace(unquoted) != "" {
+			return strings.TrimSpace(unquoted), true
+		}
+	}
+	if len(value) >= 2 && value[0] == '\'' && value[len(value)-1] == '\'' {
+		value = strings.ReplaceAll(value[1:len(value)-1], "''", "'")
+	}
+	value = strings.TrimSpace(value)
+	return value, value != ""
+}
+
+func markdownFenceMarker(line string) byte {
+	if len(line) < 3 || (line[0] != '`' && line[0] != '~') {
+		return 0
+	}
+	marker := line[0]
+	if line[1] == marker && line[2] == marker {
+		return marker
+	}
+	return 0
 }
 
 type Reader struct{}
