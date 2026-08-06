@@ -76,9 +76,10 @@
   to { transform: translateY(3px); }
 }
 
-/* Bottom-left document status cluster: visible only while connected. Pending
-   content says “unsaved”; once membox confirms persistence it collapses to a
-   green dot. The + button adds a related document. */
+/* Bottom-left document status cluster: visible only while connected. A hollow
+   circle saves pending changes; after persistence it fills and copies the
+   document ID. Hovering a saved circle reveals only its five-character suffix.
+   The + button adds a related document. */
 .membox-status-cluster {
   position: fixed;
   left: 24px;
@@ -100,61 +101,72 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: 0;
+  width: 30px;
   min-width: 30px;
   height: 30px;
-  padding: 0 10px;
+  padding: 0;
   appearance: none;
   border: 0;
   border-radius: 999px;
   background: transparent;
   color: var(--muted);
   font-family: var(--font-sans);
-  cursor: default;
-  transition: color 0.15s ease, background 0.15s ease;
+  cursor: pointer;
+  overflow: hidden;
+  transition: width 0.15s ease, padding 0.15s ease, gap 0.15s ease,
+    color 0.15s ease, background 0.15s ease;
 }
 
 .membox-doc-status[data-has-document="true"] {
   border-radius: 999px 0 0 999px;
-  cursor: pointer;
+}
+
+.membox-doc-status:disabled {
+  cursor: wait;
 }
 
 .membox-status-label {
+  display: none;
   font-size: 11px;
   font-weight: 500;
   line-height: 1;
-  letter-spacing: 0.01em;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
 }
 
 .membox-status-dot {
-  width: 6px;
-  height: 6px;
+  box-sizing: border-box;
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid currentColor;
   border-radius: 50%;
-  background: var(--muted);
+  background: transparent;
   flex: 0 0 auto;
 }
 
-.membox-doc-status[data-saved="false"] .membox-status-dot {
-  display: none;
-}
-
 .membox-doc-status[data-saved="true"] {
-  width: 30px;
-  padding: 0;
-  color: var(--ink-soft);
-}
-
-.membox-doc-status[data-saved="true"] .membox-status-label {
-  display: none;
+  color: #3f8b61;
 }
 
 .membox-doc-status[data-saved="true"] .membox-status-dot {
-  background: #3f8b61;
+  background: currentColor;
 }
 
-.membox-doc-status[data-has-document="true"]:hover {
+.membox-doc-status[data-saved="true"]:hover {
+  width: 72px;
+  padding: 0 10px;
+  gap: 6px;
   color: var(--accent);
   background: color-mix(in srgb, var(--accent-soft) 62%, transparent);
+}
+
+.membox-doc-status[data-saved="true"]:hover .membox-status-label {
+  display: inline;
+}
+
+.membox-doc-status[data-saving="true"] .membox-status-dot {
+  animation: membox-pulse 0.7s ease-in-out infinite alternate;
 }
 
 @media (max-width: 768px) {

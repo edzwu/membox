@@ -7,7 +7,7 @@ import { elements } from '../js/dom.js';
 import { state } from '../js/state.js';
 import { loadDocument } from '../js/document.js';
 import { isEditableTarget, sanitizeFilename } from '../js/utils.js';
-import { showToast, flashButton } from '../js/ui/feedback.js';
+import { showToast, flashButton, writeClipboard } from '../js/ui/feedback.js';
 import { updateMarkdownDownloadControl } from '../js/ui/chrome.js';
 import { markAnnotationsSaved } from '../js/annotations/session.js';
 import {
@@ -65,9 +65,9 @@ function createConnectionButton() {
 
 const connectionButton = createConnectionButton();
 
-// Bottom-left cluster: status pill plus the “add related document” button.
-// The pill tells whether the current document already has a membox identity
-// and shows the UUID suffix that identifies it.
+// Bottom-left cluster: save/copy status plus the “add related document”
+// button. A hollow circle means there are changes to save; a filled circle
+// means the document is durable and can be clicked to copy its UUID.
 function createStatusCluster() {
   const cluster = document.createElement('div');
   cluster.className = 'membox-status-cluster';
@@ -84,13 +84,16 @@ function createStatusBadge() {
   badge.id = 'membox-doc-status';
   badge.className = 'membox-doc-status';
   badge.hidden = true;
-  badge.innerHTML = '<span class="membox-status-dot" aria-hidden="true"></span><span class="membox-status-label">unsaved</span>';
+  badge.innerHTML = '<span class="membox-status-dot" aria-hidden="true"></span><span class="membox-status-label" aria-hidden="true"></span>';
   statusCluster.appendChild(badge);
   badge.addEventListener('click', () => {
-    if (!documentID || !navigator.clipboard) return;
-    navigator.clipboard.writeText(documentID)
-      .then(() => showToast(`Copied membox UUID: ${documentID}`))
-      .catch(() => {});
+    if (syncing || saveInFlight) return;
+    const saved = Boolean(documentID) && !annotationsDirty;
+    if (!saved) {
+      void syncToMembox();
+      return;
+    }
+    writeClipboard(documentID, () => showToast('Copied document ID'));
   });
   return badge;
 }
@@ -124,16 +127,21 @@ function renderDocStatus() {
   statusCluster.hidden = false;
   statusBadge.hidden = false;
   const saved = Boolean(documentID) && !annotationsDirty;
+  const saving = syncing || saveInFlight;
+  const label = statusBadge.querySelector('.membox-status-label');
   statusBadge.dataset.saved = String(saved);
+  statusBadge.dataset.saving = String(saving);
   statusBadge.dataset.hasDocument = String(Boolean(documentID));
+  statusBadge.disabled = saving;
   if (saved) {
-    statusBadge.setAttribute('aria-label', `Saved document ${documentID}`);
-    statusBadge.title = `Saved · ${documentID.slice(-5)} (click to copy full UUID)`;
+    const suffix = documentID.slice(-5);
+    label.textContent = suffix;
+    statusBadge.setAttribute('aria-label', `Copy document ID ${documentID}`);
+    statusBadge.title = suffix;
   } else {
-    statusBadge.setAttribute('aria-label', 'Current document has unsaved changes');
-    statusBadge.title = documentID
-      ? 'Unsaved changes · waiting to sync to membox'
-      : 'Current document is not saved to membox';
+    label.textContent = '';
+    statusBadge.setAttribute('aria-label', saving ? 'Saving changes' : 'Save changes');
+    statusBadge.title = saving ? 'Saving changes…' : 'Unsaved changes · click to save';
   }
   if (documentID) {
     addRelatedButton.hidden = false;
@@ -652,6 +660,7 @@ async function persistReadingState(keepalive) {
     return;
   }
   saveInFlight = true;
+  renderDocStatus();
   saveAbortController = new AbortController();
   const savedSessionId = state.annotationSessionId;
   const savedVersion = state.annotationVersion;
@@ -707,6 +716,7 @@ async function persistReadingState(keepalive) {
   } finally {
     saveAbortController = null;
     saveInFlight = false;
+    renderDocStatus();
     if (savePending && connected) {
       savePending = false;
       void persistReadingState(false);
@@ -944,6 +954,7 @@ async function syncToMembox() {
 
   syncing = true;
   setDownloadMeaning();
+  renderDocStatus();
   try {
     // A sidecar-shaped DTO rides along so the backend can reconcile separate
     // Markdown note documents and refresh reading progress in one request.
@@ -992,6 +1003,7 @@ async function syncToMembox() {
   } finally {
     syncing = false;
     setDownloadMeaning();
+    renderDocStatus();
   }
 }
 
