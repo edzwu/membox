@@ -384,10 +384,20 @@ func (s *Server) handleRelated(writer http.ResponseWriter, request *http.Request
 			return
 		}
 		type relatedView struct {
-			ID        string `json:"id"`
-			Title     string `json:"title"`
-			Path      string `json:"path"`
-			Direction string `json:"direction"`
+			ID            string `json:"id"`
+			Title         string `json:"title"`
+			Path          string `json:"path"`
+			Direction     string `json:"direction"`
+			AnnotationRef string `json:"annotation_ref,omitempty"`
+		}
+		// When the focus itself is a selection-note document, identify its
+		// source relation. The reader uses this durable note UUID to return to
+		// the exact passage instead of merely opening the source at its saved
+		// scroll position.
+		annotation, isAnnotation, err := s.service.GetAnnotationNote(ctx, string(focus.ID))
+		if err != nil {
+			http.Error(writer, err.Error(), http.StatusInternalServerError)
+			return
 		}
 		related := make([]relatedView, 0, len(graph.Outgoing)+len(graph.Incoming))
 		appendLink := func(link catalog.DocumentLink, direction string) {
@@ -403,12 +413,16 @@ func (s *Server) handleRelated(writer http.ResponseWriter, request *http.Request
 			if strings.TrimSpace(title) == "" {
 				title = path.Base(link.Document.Location.RelativePath)
 			}
-			related = append(related, relatedView{
+			item := relatedView{
 				ID:        string(link.Document.ID),
 				Title:     title,
 				Path:      link.Document.Location.RelativePath,
 				Direction: direction,
-			})
+			}
+			if isAnnotation && link.Document.ID == annotation.TargetDocumentID {
+				item.AnnotationRef = string(annotation.NoteDocumentID)
+			}
+			related = append(related, item)
 		}
 		for _, link := range graph.Outgoing {
 			appendLink(link, "out")

@@ -394,8 +394,9 @@
   outline: none;
 }
 
-/* Long saved comments stay readable in the rail without taking over the page.
-   Only presentation is clamped; the model and edit textarea retain all text. */
+/* Long comments stay readable in the rail without taking over the page. Clamp
+   immediately on editor submit; the durable full-note link appears after save.
+   Only presentation is clamped: the model and edit textarea retain all text. */
 .annotation-layer.membox-notes-relayout {
   overflow-anchor: none;
 }

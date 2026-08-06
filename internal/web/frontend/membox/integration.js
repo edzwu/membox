@@ -27,7 +27,11 @@ document.head.appendChild(style);
 let connected = false;
 let connecting = true;
 let syncing = false;
-let documentID = new URLSearchParams(window.location.search).get('id') || '';
+const initialURLParams = new URLSearchParams(window.location.search);
+let documentID = initialURLParams.get('id') || '';
+const requestedSourceNoteRef = (initialURLParams.get('note') || '').slice(0, 64);
+let pendingSourceNoteRef = requestedSourceNoteRef;
+let sourceNoteFocused = false;
 let loadedMarkdown = '';
 // Wipe protection: when a sidecar loaded with annotations but none survived
 // restoration and the user did not delete any, never overwrite the stored
@@ -257,6 +261,9 @@ function noteCount() {
 function noteDocumentURL(ref) {
   const url = new URL(window.location.href);
   url.searchParams.set('id', ref);
+  // `note` is a one-way return target for the source page. Carrying it into
+  // the full-note document would make that page try to focus itself.
+  url.searchParams.delete('note');
   url.hash = '';
   return url.href;
 }
@@ -283,9 +290,19 @@ function restoreReadingAnchor(anchor) {
   if (Math.abs(delta) > 0.5) window.scrollBy({ top: delta, behavior: 'auto' });
 }
 
-// Saved comments are regular Markdown documents. Keep long rail cards compact
-// while preserving the full text in the model/editor, and link to that source
-// document only after the backend has assigned its durable UUID. Lock a visible
+function focusRequestedSourceNote() {
+  if (!pendingSourceNoteRef) return false;
+  const entry = state.annotations.find((item) => item.ref === pendingSourceNoteRef);
+  if (!entry) return false;
+  pendingSourceNoteRef = '';
+  sourceNoteFocused = true;
+  focusNote(entry.id, { scrollTo: 'anchor', duration: 3000 });
+  return true;
+}
+
+// Comments become regular Markdown documents when saved. Keep long rail cards
+// compact immediately while preserving the full text in the model/editor, and
+// add the source-document link after the backend assigns its durable UUID. Lock a visible
 // content anchor across the synchronous relayout so previewing cannot move the
 // reader to a different paragraph or note.
 function renderLongNotePreviews() {
@@ -299,7 +316,7 @@ function renderLongNotePreviews() {
     let link = body && body.querySelector('.membox-open-note');
     card.classList.remove('membox-note-preview');
     delete card.dataset.exportRemoveClass;
-    if (!entry || !entry.ref || !text) {
+    if (!entry || !text) {
       if (link) link.remove();
       return;
     }
@@ -309,8 +326,16 @@ function renderLongNotePreviews() {
       if (link) link.remove();
       return;
     }
+    // Clamp immediately, even before the async save assigns a durable ref.
+    // The synchronous annotation-change handler runs in the same task that
+    // replaces the editor, so the browser never paints an intermediate full
+    // card and the page cannot visibly jump when the save response arrives.
     card.classList.add('membox-note-preview');
     card.dataset.exportRemoveClass = 'membox-note-preview';
+    if (!entry.ref) {
+      if (link) link.remove();
+      return;
+    }
     if (!link) {
       link = document.createElement('a');
       link.className = 'membox-open-note';
@@ -327,6 +352,7 @@ function renderLongNotePreviews() {
   layoutMarginNotes();
   restoreReadingAnchor(readingAnchor);
   elements.annotationLayer.classList.remove('membox-notes-relayout');
+  focusRequestedSourceNote();
 }
 
 let notePreviewTimer = null;
@@ -530,12 +556,12 @@ function onNoteOptionKeydown(event) {
 
 window.addEventListener('miru-annotations-changed', () => {
   renderBrowseNotesButton();
-  scheduleLongNotePreviews();
+  renderLongNotePreviews();
   if (!notesModal.backdrop.hidden) renderNoteOptions();
 });
 window.addEventListener('miru-annotations-saved', () => {
   renderBrowseNotesButton();
-  scheduleLongNotePreviews();
+  renderLongNotePreviews();
   if (!notesModal.backdrop.hidden) renderNoteOptions();
 });
 window.addEventListener('resize', scheduleLongNotePreviews);
@@ -614,7 +640,10 @@ function renderRelatedGrid(items) {
     const label = String(item.title || filename || item.id).trim() || filename;
     const tile = document.createElement('a');
     tile.className = 'membox-related-tile';
-    tile.href = `/?id=${encodeURIComponent(item.id)}`;
+    const targetURL = new URL('/', window.location.origin);
+    targetURL.searchParams.set('id', item.id);
+    if (item.annotation_ref) targetURL.searchParams.set('note', item.annotation_ref);
+    tile.href = targetURL.href;
     tile.dataset.direction = item.direction === 'in' ? 'in' : 'out';
     tile.setAttribute('aria-label', `${label} (${item.id})`);
     const tooltip = document.createElement('span');
@@ -1349,7 +1378,10 @@ async function restoreReadingState(id, markdown) {
     if (Array.isArray(data.unrestored) && data.unrestored.length) {
       pendingAnchors = data.unrestored;
     }
-    restoreProgress(data.progress);
+    // An explicit return-from-note target wins over the source document's
+    // ordinary saved scroll position. focusNote centers the passage after the
+    // note rail has reached its final (including collapsed-preview) geometry.
+    if (!sourceNoteFocused) restoreProgress(data.progress);
   } catch (err) {
     restoring = false;
     console.warn('membox: could not restore reading state', err);
@@ -1382,6 +1414,10 @@ async function loadFromMembox() {
     // Notes before progress: note cards change the layout, so the saved
     // scroll position only means something once they are in place.
     await restoreReadingState(documentID, markdown);
+    if (pendingSourceNoteRef) {
+      pendingSourceNoteRef = '';
+      showToast('The note is saved, but its passage could not be located in this document');
+    }
   } catch (err) {
     console.error('membox: failed to load document', err);
     showToast(`Could not load from membox: ${err.message}`);

@@ -919,6 +919,49 @@ func TestAnnotationNoteMarksTargetDocumentModified(t *testing.T) {
 	t.Fatal("page document missing after note creation")
 }
 
+func TestSelectionNoteRelatedSourceCarriesReturnAnchor(t *testing.T) {
+	baseURL, docID, _ := startServer(t)
+
+	savedBody := postJSON(t, baseURL+"/api/doc/"+docID+"/annotations", map[string]any{
+		"format":  "miru-annotations",
+		"version": 2,
+		"annotations": []map[string]any{{
+			"start": 18, "exact": "body", "prefix": "Flash Attention\n", "suffix": "",
+			"note": "A long explanation with its own quoted example.\n\n> quoted inside the note",
+		}},
+	})
+	var saved struct {
+		Annotations []struct {
+			Ref string `json:"ref"`
+		} `json:"annotations"`
+	}
+	mustUnmarshal(t, savedBody, &saved)
+	if len(saved.Annotations) != 1 || saved.Annotations[0].Ref == "" {
+		t.Fatalf("annotation note was not created: %q", savedBody)
+	}
+	noteID := saved.Annotations[0].Ref
+
+	response, err := http.Get(baseURL + "/api/doc/" + noteID + "/related")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	body, _ := io.ReadAll(response.Body)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("selection-note related list failed: status=%d body=%q", response.StatusCode, body)
+	}
+	var related struct {
+		Related []struct {
+			ID            string `json:"id"`
+			AnnotationRef string `json:"annotation_ref"`
+		} `json:"related"`
+	}
+	mustUnmarshal(t, body, &related)
+	if len(related.Related) != 1 || related.Related[0].ID != docID || related.Related[0].AnnotationRef != noteID {
+		t.Fatalf("source return anchor missing from related list: %q", body)
+	}
+}
+
 func TestServerRelatedCreatesLinkedPlainDocument(t *testing.T) {
 	baseURL, docID, notesDir := startServer(t)
 
