@@ -1,20 +1,43 @@
 /* membox-only chrome. Miru's own stylesheet remains product-neutral. */
+/* Document navigation is one compact control: the current document opens the
+   file picker; the speech-bubble button opens its note index. */
+.membox-document-navigation {
+  max-width: min(420px, 48vw);
+  height: 36px;
+  display: inline-flex;
+  align-items: stretch;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--paper-raised);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.membox-document-navigation[hidden] {
+  display: none;
+}
+
+.membox-document-navigation:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-soft) 54%, transparent);
+}
+
 .membox-document-switcher {
   appearance: none;
+  min-width: 0;
   max-width: min(360px, 42vw);
-  height: 36px;
+  height: 34px;
   padding: 0 10px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--paper-raised);
+  border: 0;
+  background: transparent;
   color: var(--ink-soft);
   font-family: var(--font-sans);
   cursor: pointer;
-  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+  transition: color 0.15s ease, background 0.15s ease;
 }
 
 .membox-document-switcher[hidden] {
@@ -24,8 +47,7 @@
 .membox-document-switcher:hover,
 .membox-document-switcher:focus-visible {
   color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 38%, var(--line));
-  background: color-mix(in srgb, var(--accent-soft) 52%, var(--paper-raised));
+  background: color-mix(in srgb, var(--accent-soft) 52%, transparent);
   outline: none;
 }
 
@@ -53,11 +75,31 @@
 }
 
 @media (max-width: 768px) {
-  .topbar-center:has(.membox-document-switcher) {
+  .topbar:has(.membox-document-navigation) {
+    width: 100%;
+    max-width: 100vw;
+    min-width: 0;
+    justify-content: flex-start;
+  }
+
+  .topbar-left {
+    flex: 0 0 auto;
+  }
+
+  .topbar-center:has(.membox-document-navigation) {
     position: static;
     transform: none;
-    margin-right: auto;
+    margin-right: 0;
     margin-left: 12px;
+  }
+
+  .topbar-actions {
+    flex: 0 0 auto;
+    margin-left: auto;
+  }
+
+  .membox-document-navigation {
+    max-width: none;
   }
 
   .membox-document-switcher {
@@ -68,6 +110,49 @@
   .membox-document-switcher-label,
   .membox-document-switcher-chevron {
     display: none;
+  }
+}
+
+/* On phone-width bars, trade labels for recognizable icons so document
+   navigation and the native actions all remain visible without overflow. */
+@media (max-width: 520px) {
+  .topbar {
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+
+  .brand-name {
+    display: none;
+  }
+
+  .topbar-center:has(.membox-document-navigation) {
+    margin-left: 8px;
+  }
+
+  .topbar-actions {
+    gap: 2px;
+  }
+
+  .fold-toggle,
+  .theme-toggle {
+    display: none;
+  }
+
+  .toc-toggle {
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .toc-toggle > span {
+    font-size: 0;
+  }
+
+  .toc-toggle > span::before {
+    content: '☰';
+    font-size: 16px;
   }
 }
 
@@ -253,9 +338,64 @@
   }
 }
 
-/* Bottom-left actions: add a relation, then browse notes. */
-.membox-add-related,
+/* The notes browser is paired with the file picker but uses a deliberately
+   different speech-bubble silhouette. */
 .membox-browse-notes {
+  position: relative;
+  appearance: none;
+  width: 42px;
+  height: 34px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  border: 0;
+  border-left: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.membox-browse-notes[hidden],
+.membox-notes-count[hidden] {
+  display: none;
+}
+
+.membox-browse-notes svg {
+  width: 18px;
+  height: 18px;
+}
+
+.membox-notes-count {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  min-width: 13px;
+  height: 13px;
+  padding: 0 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--paper);
+  font-family: var(--font-mono);
+  font-size: 8px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.membox-browse-notes:hover,
+.membox-browse-notes:focus-visible {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent-soft) 62%, transparent);
+  outline: none;
+}
+
+/* The bottom-left cluster now contains persistence and relation actions only. */
+.membox-add-related {
   appearance: none;
   width: 32px;
   height: 30px;
@@ -263,47 +403,22 @@
   align-items: center;
   justify-content: center;
   border: 0;
-  border-radius: 0;
+  border-radius: 0 999px 999px 0;
   background: transparent;
   color: var(--muted);
   font-family: var(--font-sans);
+  font-size: 18px;
+  font-weight: 300;
   line-height: 1;
   cursor: pointer;
   transition: color 0.15s ease, background 0.15s ease;
 }
 
-.membox-add-related {
-  font-size: 18px;
-  font-weight: 300;
-}
-
-.membox-browse-notes {
-  width: 42px;
-  gap: 3px;
-  border-radius: 0 999px 999px 0;
-}
-
-.membox-add-related[hidden],
-.membox-browse-notes[hidden] {
+.membox-add-related[hidden] {
   display: none;
 }
 
-.membox-browse-notes svg {
-  width: 14px;
-  height: 14px;
-  flex: 0 0 auto;
-}
-
-.membox-notes-count {
-  min-width: 9px;
-  font-family: var(--font-mono);
-  font-size: 9px;
-  line-height: 1;
-  text-align: left;
-}
-
-.membox-add-related:hover,
-.membox-browse-notes:hover {
+.membox-add-related:hover {
   color: var(--accent);
   background: color-mix(in srgb, var(--accent-soft) 62%, transparent);
 }

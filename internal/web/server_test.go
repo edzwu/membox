@@ -89,8 +89,10 @@ func TestServerServesReaderAndMarkdown(t *testing.T) {
 	if !strings.Contains(string(adapterBody), "membox-document-switcher") || !strings.Contains(string(adapterBody), "Switch document · Ctrl+O") {
 		t.Fatal("membox adapter does not inject the document switcher")
 	}
-	if !strings.Contains(string(adapterBody), "membox-browse-notes") || !strings.Contains(string(adapterBody), "Notes in this document") {
-		t.Fatal("membox adapter does not inject the filterable note picker")
+	if !strings.Contains(string(adapterBody), "membox-document-navigation") ||
+		!strings.Contains(string(adapterBody), "membox-browse-notes") ||
+		!strings.Contains(string(adapterBody), "Notes in this document") {
+		t.Fatal("membox adapter does not inject the topbar note picker")
 	}
 
 	docResp, err := http.Get(baseURL + "/api/doc/" + docID)

@@ -66,6 +66,16 @@ function createConnectionButton() {
 
 const connectionButton = createConnectionButton();
 
+function createDocumentNavigation() {
+  const navigation = document.createElement('div');
+  navigation.className = 'membox-document-navigation';
+  navigation.hidden = true;
+  document.querySelector('.topbar-center')?.appendChild(navigation);
+  return navigation;
+}
+
+const documentNavigation = createDocumentNavigation();
+
 function createDocumentSwitcher() {
   const button = document.createElement('button');
   button.type = 'button';
@@ -84,7 +94,7 @@ function createDocumentSwitcher() {
     <svg class="membox-document-switcher-chevron" viewBox="0 0 16 16" aria-hidden="true">
       <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
     </svg>`;
-  document.querySelector('.topbar-center')?.appendChild(button);
+  documentNavigation.appendChild(button);
   button.addEventListener('click', openDocumentPicker);
   return button;
 }
@@ -92,6 +102,7 @@ function createDocumentSwitcher() {
 const documentSwitcher = createDocumentSwitcher();
 
 function renderDocumentSwitcher() {
+  documentNavigation.hidden = !connected;
   documentSwitcher.hidden = !connected;
   const liveTitle = document.getElementById('doc-title')?.textContent?.replace(/\s+/g, ' ').trim();
   const title = liveTitle || state.docTitle || 'Open document';
@@ -163,7 +174,8 @@ async function renameCurrentDocument(titleElement, previousTitle, nextTitle) {
   }
 }
 
-// Bottom-left cluster: save/copy status, add-related, and note navigation.
+// Bottom-left cluster: save/copy status and add-related. Document navigation,
+// including the notes browser, belongs together in the top bar.
 // A hollow circle means there are changes to save; a filled circle means the
 // document is durable and can be clicked to copy its UUID.
 function createStatusCluster() {
@@ -224,11 +236,11 @@ function createBrowseNotesButton() {
   button.setAttribute('aria-label', 'Browse notes in this document');
   button.innerHTML = `
     <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M6 3h9l3 3v15H6z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
-      <path d="M15 3v4h3M9 11h6M9 15h6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M5 4.5h14a1.5 1.5 0 0 1 1.5 1.5v9a1.5 1.5 0 0 1-1.5 1.5h-8l-5.5 4v-4H5A1.5 1.5 0 0 1 3.5 15V6A1.5 1.5 0 0 1 5 4.5Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+      <path d="M8 9h8M8 12.5h5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
     </svg>
-    <span class="membox-notes-count">0</span>`;
-  statusCluster.appendChild(button);
+    <span class="membox-notes-count" hidden>0</span>`;
+  documentNavigation.appendChild(button);
   button.addEventListener('click', openNotesModal);
   return button;
 }
@@ -241,13 +253,16 @@ function noteCount() {
 
 function renderBrowseNotesButton() {
   const count = noteCount();
-  browseNotesButton.querySelector('.membox-notes-count').textContent = String(count);
+  const countBadge = browseNotesButton.querySelector('.membox-notes-count');
+  countBadge.textContent = String(count);
+  countBadge.hidden = count === 0;
   browseNotesButton.setAttribute('aria-label', `Browse ${count} note${count === 1 ? '' : 's'} in this document`);
   browseNotesButton.title = count === 1 ? 'Browse 1 note' : `Browse ${count} notes`;
 }
 
 function renderDocStatus() {
   if (!connected) {
+    documentNavigation.hidden = true;
     statusCluster.hidden = true;
     statusBadge.hidden = true;
     addRelatedButton.hidden = true;
