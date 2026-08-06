@@ -154,6 +154,10 @@ func (s *Server) handleDocument(writer http.ResponseWriter, request *http.Reques
 		s.handleRelatedCandidates(writer, request, strings.TrimSuffix(selector, "/related/candidates"))
 		return
 	}
+	if strings.HasSuffix(selector, "/rename") {
+		s.handleDocumentRename(writer, request, strings.TrimSuffix(selector, "/rename"))
+		return
+	}
 	if strings.HasSuffix(selector, "/annotations") {
 		s.handleAnnotations(writer, request, strings.TrimSuffix(selector, "/annotations"))
 		return
@@ -196,11 +200,41 @@ func (s *Server) handleDocumentCandidates(writer http.ResponseWriter, request *h
 	s.handleRelatedCandidates(writer, request, strings.TrimSpace(request.URL.Query().Get("focus")))
 }
 
+func (s *Server) handleDocumentRename(writer http.ResponseWriter, request *http.Request, selector string) {
+	if request.Method != http.MethodPost {
+		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if selector == "" {
+		http.Error(writer, "document selector is required", http.StatusBadRequest)
+		return
+	}
+	var payload struct {
+		Filename string `json:"filename"`
+	}
+	if !decodeJSON(writer, request, &payload) {
+		return
+	}
+	result, err := s.service.RenameDocument(request.Context(), selector, payload.Filename)
+	if err != nil {
+		http.Error(writer, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+	writer.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(writer).Encode(map[string]string{
+		"id":       string(result.DocumentID),
+		"path":     result.Path,
+		"filename": filepath.Base(result.Path),
+	})
+}
+
 // handleRelatedCandidates powers both document switching and the
 // existing-related picker. An empty query returns recently opened documents
-// (newest first); a non-empty query matches literal UUID/title/path fragments.
-// Both omit the focus and internal selection-note documents; related mode also
-// omits existing graph neighbors.
+// first, then fills the list from all membox documents by newest modification;
+// a non-empty query matches literal UUID/title/path fragments. Both omit the
+// focus and internal selection-note documents; related mode also omits existing
+// graph neighbors.
 func (s *Server) handleRelatedCandidates(writer http.ResponseWriter, request *http.Request, selector string) {
 	if request.Method != http.MethodGet {
 		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
@@ -215,8 +249,8 @@ func (s *Server) handleRelatedCandidates(writer http.ResponseWriter, request *ht
 	limit := 8
 	if raw := request.URL.Query().Get("limit"); raw != "" {
 		parsed, err := strconv.Atoi(raw)
-		if err != nil || parsed < 1 || parsed > 20 {
-			http.Error(writer, "limit must be between 1 and 20", http.StatusBadRequest)
+		if err != nil || parsed < 1 || parsed > 100 {
+			http.Error(writer, "limit must be between 1 and 100", http.StatusBadRequest)
 			return
 		}
 		limit = parsed
@@ -255,8 +289,9 @@ func (s *Server) handleRelatedCandidates(writer http.ResponseWriter, request *ht
 		OpenedAt string `json:"opened_at,omitempty"`
 	}
 	candidates := make([]candidateView, 0, limit)
+	included := make(map[string]bool, limit)
 	appendCandidate := func(id, title, documentPath, openedAt string) bool {
-		if excluded[id] || strings.HasSuffix(documentPath, "-note.md") {
+		if excluded[id] || included[id] || strings.HasSuffix(documentPath, "-note.md") {
 			return false
 		}
 		title = strings.TrimSpace(title)
@@ -264,6 +299,7 @@ func (s *Server) handleRelatedCandidates(writer http.ResponseWriter, request *ht
 			title = path.Base(documentPath)
 		}
 		candidates = append(candidates, candidateView{ID: id, Title: title, Path: documentPath, OpenedAt: openedAt})
+		included[id] = true
 		return len(candidates) == limit
 	}
 	if query == "" {
@@ -275,6 +311,18 @@ func (s *Server) handleRelatedCandidates(writer http.ResponseWriter, request *ht
 		for _, document := range recent {
 			if appendCandidate(string(document.DocumentID), document.Title, document.Path, document.OpenedAt) {
 				break
+			}
+		}
+		if len(candidates) < limit {
+			modified, modifiedErr := s.service.ListRecentlyModifiedDocuments(request.Context(), fetchLimit)
+			if modifiedErr != nil {
+				http.Error(writer, modifiedErr.Error(), http.StatusInternalServerError)
+				return
+			}
+			for _, document := range modified {
+				if appendCandidate(string(document.DocumentID), document.Title, document.Path, "") {
+					break
+				}
 			}
 		}
 	} else {

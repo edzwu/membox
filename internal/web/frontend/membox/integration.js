@@ -301,7 +301,7 @@ function createRelatedModal() {
       <div class="membox-related-picker" data-panel="existing" role="tabpanel">
         <input class="membox-related-search" type="search" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="membox-related-options" placeholder="Search by title or UUID\u2026" autocomplete="off" spellcheck="false">
         <div class="membox-related-options" id="membox-related-options" role="listbox" aria-label="Matching documents"></div>
-        <div class="membox-modal-hint">Recently opened files appear first · type a title or UUID to search.</div>
+        <div class="membox-modal-hint">Recently opened files appear first, followed by recently modified files.</div>
       </div>
       <div class="membox-related-create" data-panel="new" role="tabpanel" hidden>
         <input class="membox-modal-input" type="text" placeholder="Title" maxlength="200" spellcheck="false">
@@ -427,7 +427,7 @@ function scheduleRelatedSearch() {
   relatedSearchGeneration++;
   const query = relatedModal.searchInput.value.trim();
   if (!query) {
-    renderRelatedOptions([], 'Loading recent files\u2026');
+    renderRelatedOptions([], 'Loading files\u2026');
     relatedSearchTimer = window.setTimeout(() => void searchRelatedCandidates(''), 0);
     return;
   }
@@ -441,7 +441,7 @@ async function searchRelatedCandidates(query) {
   const generation = ++relatedSearchGeneration;
   try {
     const params = new URLSearchParams({
-      limit: '8',
+      limit: '100',
       purpose: pickerPurpose === 'open' ? 'open' : 'related',
     });
     if (query) params.set('q', query);
@@ -458,8 +458,8 @@ async function searchRelatedCandidates(query) {
     if (generation !== relatedSearchGeneration || relatedModal.backdrop.hidden) return;
     const candidates = Array.isArray(data.candidates) ? data.candidates : [];
     const emptyMessage = pickerPurpose === 'open'
-      ? query ? 'No matching documents' : 'No recently opened files'
-      : query ? 'No matching unlinked documents' : 'No recently opened unlinked files';
+      ? query ? 'No matching documents' : 'No available documents'
+      : query ? 'No matching unlinked documents' : 'No available unlinked documents';
     renderRelatedOptions(candidates, candidates.length ? '' : emptyMessage);
   } catch (err) {
     if (err.name === 'AbortError') return;
@@ -501,15 +501,15 @@ function openPicker(purpose) {
   relatedModal.dialogTitle.textContent = pickerPurpose === 'open' ? 'Open document' : 'Add related document';
   relatedModal.tablist.hidden = pickerPurpose === 'open';
   relatedModal.hint.textContent = pickerPurpose === 'open'
-    ? 'Recently opened files appear first · type a title or UUID to search · ⌘K'
-    : 'Recently opened files appear first · type a title or UUID to search.';
+    ? 'Recently opened first · remaining files are sorted by recent changes · Ctrl+O'
+    : 'Recently opened first · remaining files are sorted by recent changes.';
   relatedModal.searchInput.value = '';
   relatedModal.titleInput.value = '';
   relatedModal.bodyInput.value = '';
   selectedRelatedCandidate = null;
   relatedModal.backdrop.hidden = false;
   setRelatedModalMode('existing');
-  renderRelatedOptions([], 'Loading recent files\u2026');
+  renderRelatedOptions([], 'Loading files\u2026');
   void searchRelatedCandidates('');
 }
 

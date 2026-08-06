@@ -874,6 +874,37 @@ LIMIT ?`, limit)
 	return documents, rows.Err()
 }
 
+func (s *Store) ListRecentlyModifiedDocuments(ctx context.Context, limit int) ([]port.ModifiedDocument, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT d.id,COALESCE(i.title,''),l.relative_path,
+MAX(COALESCE(i.source_updated_at,CASE WHEN i.mtime>0 THEN i.mtime/1000000 ELSE d.updated_at END),
+    COALESCE((SELECT MAX(MAX(an.updated_at,COALESCE(ni.source_updated_at,0)))
+              FROM annotation_notes an
+              LEFT JOIN document_index ni ON ni.document_id=an.note_document_id
+              WHERE an.target_document_id=d.id
+                AND an.note_document_id NOT IN (SELECT document_id FROM document_trash)),0)) AS modified_at
+FROM documents d
+JOIN document_locations l ON l.document_id=d.id
+LEFT JOIN document_index i ON i.document_id=d.id
+WHERE l.status='active' AND `+notTrashedClause+`
+ORDER BY modified_at DESC,d.id
+LIMIT ?`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("listing recently modified documents: %w", err)
+	}
+	defer rows.Close()
+	var documents []port.ModifiedDocument
+	for rows.Next() {
+		var document port.ModifiedDocument
+		var modifiedAt int64
+		if err := rows.Scan(&document.DocumentID, &document.Title, &document.Path, &modifiedAt); err != nil {
+			return nil, err
+		}
+		document.ModifiedAt = fromMillis(modifiedAt)
+		documents = append(documents, document)
+	}
+	return documents, rows.Err()
+}
+
 func (s *Store) ResolveTopic(ctx context.Context, selector string) (*catalog.Document, string, error) {
 	selector = strings.TrimSpace(selector)
 	if selector == "" {

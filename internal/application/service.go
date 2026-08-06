@@ -680,6 +680,16 @@ func (s *Service) ListRecentDocuments(ctx context.Context, limit int) ([]port.Re
 	return s.store.ListRecentDocuments(ctx, limit)
 }
 
+func (s *Service) ListRecentlyModifiedDocuments(ctx context.Context, limit int) ([]port.ModifiedDocument, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 100 {
+		return nil, errors.New("modified document limit cannot exceed 100")
+	}
+	return s.store.ListRecentlyModifiedDocuments(ctx, limit)
+}
+
 type SyncDocumentResult struct {
 	DocumentID catalog.DocumentID
 	Path       string

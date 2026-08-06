@@ -116,6 +116,15 @@ type RecentDocument struct {
 	OpenedAt   string
 }
 
+// ModifiedDocument is a compact picker-oriented view ordered by source or
+// annotation modification time, newest first.
+type ModifiedDocument struct {
+	DocumentID catalog.DocumentID
+	Title      string
+	Path       string
+	ModifiedAt time.Time
+}
+
 // TrashRecord marks a document as soft-deleted. Rows and relations survive;
 // the file sits in the path's trash directory until restore or purge.
 type TrashRecord struct {
@@ -157,6 +166,7 @@ type CatalogStore interface {
 	SaveDocumentReadState(ctx context.Context, state DocumentReadState) error
 	GetDocumentReadState(ctx context.Context, documentID catalog.DocumentID) (DocumentReadState, bool, error)
 	ListRecentDocuments(ctx context.Context, limit int) ([]RecentDocument, error)
+	ListRecentlyModifiedDocuments(ctx context.Context, limit int) ([]ModifiedDocument, error)
 	Search(ctx context.Context, query string, limit int) ([]SearchHit, error)
 	SuggestDocuments(ctx context.Context, query string, limit int) ([]SearchHit, error)
 	ListDocuments(ctx context.Context, limit int, includeUnavailable bool) ([]DocumentRecord, error)

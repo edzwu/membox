@@ -1031,11 +1031,11 @@ func TestServerRelatedCandidatesDefaultToRecentlyOpenedDocuments(t *testing.T) {
 	}
 
 	recent := listRecent()
-	if len(recent) != 2 || recent[0].ID != newerID || recent[1].ID != olderID {
-		t.Fatalf("recent candidates are not newest first: %+v", recent)
+	if len(recent) != 3 || recent[0].ID != newerID || recent[1].ID != olderID || recent[2].ID != unopenedID {
+		t.Fatalf("picker should keep recently opened first and fill from membox: %+v", recent)
 	}
-	if recent[0].OpenedAt == "" || recent[1].OpenedAt == "" {
-		t.Fatalf("recent candidates do not include opened_at: %+v", recent)
+	if recent[0].OpenedAt == "" || recent[1].OpenedAt == "" || recent[2].OpenedAt != "" {
+		t.Fatalf("picker did not distinguish opened history from modified fallback: %+v", recent)
 	}
 
 	// Loading a document counts as opening it even if the reader never scrolls.
