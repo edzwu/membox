@@ -960,6 +960,46 @@ func TestSelectionNoteRelatedSourceCarriesReturnAnchor(t *testing.T) {
 	if len(related.Related) != 1 || related.Related[0].ID != docID || related.Related[0].AnnotationRef != noteID {
 		t.Fatalf("source return anchor missing from related list: %q", body)
 	}
+
+	openPickerIDs := func(query string) []string {
+		t.Helper()
+		endpoint := baseURL + "/api/documents/candidates?purpose=open&focus=" + url.QueryEscape(docID) + "&q=" + url.QueryEscape(query)
+		response, getErr := http.Get(endpoint)
+		if getErr != nil {
+			t.Fatal(getErr)
+		}
+		defer response.Body.Close()
+		var result struct {
+			Candidates []struct {
+				ID string `json:"id"`
+			} `json:"candidates"`
+		}
+		if decodeErr := json.NewDecoder(response.Body).Decode(&result); decodeErr != nil {
+			t.Fatal(decodeErr)
+		}
+		ids := make([]string, 0, len(result.Candidates))
+		for _, candidate := range result.Candidates {
+			ids = append(ids, candidate.ID)
+		}
+		return ids
+	}
+	containsID := func(ids []string, want string) bool {
+		for _, id := range ids {
+			if id == want {
+				return true
+			}
+		}
+		return false
+	}
+	if ids := openPickerIDs(noteID[len(noteID)-8:]); !containsID(ids, noteID) {
+		t.Fatalf("Ctrl+O UUID fragment did not find selection note %s: %v", noteID, ids)
+	}
+	if ids := openPickerIDs(docID); !containsID(ids, docID) {
+		t.Fatalf("Ctrl+O UUID did not find its current document %s: %v", docID, ids)
+	}
+	if ids := openPickerIDs("body"); containsID(ids, noteID) {
+		t.Fatalf("Ctrl+O exposed an internal selection note through non-UUID text: %v", ids)
+	}
 }
 
 func TestServerRelatedCreatesLinkedPlainDocument(t *testing.T) {

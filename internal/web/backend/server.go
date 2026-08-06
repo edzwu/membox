@@ -256,16 +256,17 @@ func (s *Server) handleDocumentRename(writer http.ResponseWriter, request *http.
 
 // handleRelatedCandidates powers both document switching and the
 // existing-related picker. An empty query returns recently opened documents
-// first, then fills the list from all membox documents by newest modification;
-// a non-empty query matches literal UUID/title/path fragments. Both omit the
-// focus and internal selection-note documents; related mode also omits existing
-// graph neighbors.
+// first, then fills the list from all membox documents by newest modification.
+// A non-empty query matches literal UUID/title/path fragments. The open picker
+// normally omits its focus and internal selection notes, but an explicit UUID
+// fragment can find either; related mode always omits existing graph neighbors.
 func (s *Server) handleRelatedCandidates(writer http.ResponseWriter, request *http.Request, selector string) {
 	if request.Method != http.MethodGet {
 		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	query := strings.TrimSpace(request.URL.Query().Get("q"))
+	queryLower := strings.ToLower(query)
 	purpose := strings.TrimSpace(request.URL.Query().Get("purpose"))
 	if purpose != "open" && selector == "" {
 		http.Error(writer, "document selector is required", http.StatusBadRequest)
@@ -288,7 +289,13 @@ func (s *Server) handleRelatedCandidates(writer http.ResponseWriter, request *ht
 				http.Error(writer, err.Error(), http.StatusNotFound)
 				return
 			}
-			excluded[string(focus.ID)] = true
+			focusID := string(focus.ID)
+			// Keep the current document out of the ordinary switcher list, but
+			// let an explicit UUID fragment find it. This makes pasting the ID a
+			// reliable identity lookup rather than an apparently empty search.
+			if queryLower == "" || !strings.Contains(strings.ToLower(focusID), queryLower) {
+				excluded[focusID] = true
+			}
 		} else {
 			focus, graph, err := s.service.GetDocumentGraph(request.Context(), selector)
 			if err != nil {
@@ -316,7 +323,14 @@ func (s *Server) handleRelatedCandidates(writer http.ResponseWriter, request *ht
 	candidates := make([]candidateView, 0, limit)
 	included := make(map[string]bool, limit)
 	appendCandidate := func(id, title, documentPath, openedAt string) bool {
-		if excluded[id] || included[id] || strings.HasSuffix(documentPath, "-note.md") {
+		if excluded[id] || included[id] {
+			return false
+		}
+		// Selection-note documents stay out of normal title/recent browsing,
+		// but their durable UUID is still a valid Ctrl+O identity. Include one
+		// when the entered fragment actually occurs in that UUID.
+		if strings.HasSuffix(documentPath, "-note.md") &&
+			(purpose != "open" || queryLower == "" || !strings.Contains(strings.ToLower(id), queryLower)) {
 			return false
 		}
 		title = strings.TrimSpace(title)
