@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"membox/internal/application"
+	"membox/internal/domain/catalog"
 )
 
 const bridgeTokenHeader = "X-Membox-Token"
@@ -532,8 +533,15 @@ func (s *Server) handleIngest(writer http.ResponseWriter, request *http.Request)
 
 	// Idempotent page clips: same source_url keeps one UUID. Without overwrite
 	// the client must confirm; with overwrite we SyncDocument in place.
+	// Trashed/unavailable clips never block a fresh save.
 	if sourceURL != "" && clipMode == "page" {
-		if existingID := s.findPageDocumentID(ctx, sourceURL); existingID != "" {
+		existingID := s.findPageDocumentID(ctx, sourceURL)
+		if existingID != "" {
+			if doc, _, resolveErr := s.service.ResolveDocument(ctx, existingID); resolveErr != nil || doc == nil || doc.Status != catalog.DocumentActive {
+				existingID = "" // stale reference — fall through and create fresh
+			}
+		}
+		if existingID != "" {
 			if !payload.Overwrite {
 				doc, abs, _ := s.service.ResolveDocument(ctx, existingID)
 				existingTitle := title

@@ -428,7 +428,7 @@ func (s *Store) ListDocumentsBySourceURL(ctx context.Context, sourceURLNorm stri
 	}
 	query := documentSelect + `
 JOIN document_sources ds ON ds.document_id = d.id
-WHERE l.status='active' AND ds.source_url_norm=?
+WHERE l.status='active' AND ` + notTrashedClause + ` AND ds.source_url_norm=?
 `
 	args := []any{sourceURLNorm}
 	if selectionNotesOnly {

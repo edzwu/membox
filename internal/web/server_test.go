@@ -588,6 +588,76 @@ func TestServerIngestPageOverwriteKeepsUUID(t *testing.T) {
 	}
 }
 
+func TestIngestAfterTrashingPreviousClipCreatesFreshDocument(t *testing.T) {
+	// Regression: a trashed page clip kept its document_sources row, so a new
+	// save of the same URL was blocked by clip_exists pointing into the trash.
+	ctx := context.Background()
+	home := t.TempDir()
+	notesDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(notesDir, "seed.md"), []byte("# Seed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	service, err := bootstrap.Open(filepath.Join(home, "membox.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = service.Close() })
+	if _, err := service.AddPath(ctx, notesDir); err != nil {
+		t.Fatal(err)
+	}
+	server := web.NewServer(service)
+	baseURL, err := server.Start(ctx, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = server.Shutdown(ctx) })
+
+	source := "https://example.com/trashed-clip"
+	first := postJSON(t, baseURL+"/api/ingest", map[string]any{
+		"title": "Trashed Page", "body": "# Trashed Page\n\nv1\n",
+		"source_url": source, "clip_mode": "page",
+	})
+	var created struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, first, &created)
+	if created.ID == "" {
+		t.Fatal("first ingest missing id")
+	}
+
+	// User deletes the clip (soft delete into .membox-trash).
+	if _, _, err := service.TrashDocumentFile(ctx, created.ID); err != nil {
+		t.Fatalf("trash failed: %v", err)
+	}
+
+	// Same URL again, without overwrite: must create a fresh document, not 409.
+	data, _ := json.Marshal(map[string]any{
+		"title": "Trashed Page", "body": "# Trashed Page\n\nv2\n",
+		"source_url": source, "clip_mode": "page",
+	})
+	resp, err := http.Post(baseURL+"/api/ingest", "application/json", strings.NewReader(string(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("re-ingest after trash = %d %s, want 200 fresh create", resp.StatusCode, body)
+	}
+	var fresh struct {
+		ID      string `json:"id"`
+		Created bool   `json:"created"`
+		Path    string `json:"path"`
+	}
+	mustUnmarshal(t, body, &fresh)
+	if !fresh.Created || fresh.ID == "" || fresh.ID == created.ID {
+		t.Fatalf("expected a new document, got %+v", fresh)
+	}
+	if strings.Contains(fresh.Path, ".membox-trash") {
+		t.Fatalf("fresh clip landed in trash: %s", fresh.Path)
+	}
+}
+
 func TestServerIngestCreatesDocumentAndViewURL(t *testing.T) {
 	baseURL, _, notesDir := startServer(t)
 

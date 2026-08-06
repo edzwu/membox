@@ -108,9 +108,23 @@ export async function ingestClip(
           '(TUI must be running so the bridge is up)',
       );
     }
-    throw new Error(text || `ingest failed (${response.status})`);
+    throw new Error(extractErrorMessage(text, response.status));
   }
   return JSON.parse(text) as IngestResult;
+}
+
+/** Prefer a structured error message over dumping raw JSON into the UI. */
+function extractErrorMessage(text: string, status: number): string {
+  try {
+    const parsed = JSON.parse(text) as {
+      error?: { message?: string; code?: string };
+    };
+    if (parsed?.error?.message) return parsed.error.message;
+  } catch {
+    /* not JSON — use raw text */
+  }
+  const trimmed = text.trim();
+  return trimmed || `request failed (${status})`;
 }
 
 export async function fetchClipsBySource(

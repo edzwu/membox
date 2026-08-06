@@ -3090,7 +3090,7 @@ func (m Model) commandMenuView() string {
 
 func (m Model) statusBar() string {
 	width := max(20, m.width)
-	left := dimStyle.Render(m.hints()) + "  " + m.webBadge()
+	left := dimStyle.Render(m.hints()) + "  " + m.webBadge() + m.agentStatusBarBadge()
 	right := ""
 	if m.loading {
 		right = m.spinner.View() + " " + right
@@ -3149,18 +3149,7 @@ func (m Model) modeBadge() string {
 		background = lipgloss.AdaptiveColor{Dark: "#555555", Light: "#dddddd"}
 		foreground = lipgloss.AdaptiveColor{Dark: "#ffffff", Light: "#333333"}
 	case inputModeAgent:
-		switch m.agent.badge {
-		case "READY":
-			mode = " AGENT READY "
-		case "RUNNING":
-			mode = " AGENT RUNNING "
-		case "CONNECTING":
-			mode = " AGENT CONNECTING "
-		case "ERROR":
-			mode = " AGENT ERROR "
-		default:
-			mode = " AGENT OFF "
-		}
+		mode = " AGENT "
 		background = lipgloss.AdaptiveColor{Dark: "#7048a8", Light: "#eadcff"}
 		foreground = lipgloss.AdaptiveColor{Dark: "#ffffff", Light: "#3c1f63"}
 	default:

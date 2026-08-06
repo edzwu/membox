@@ -440,6 +440,35 @@ func newIdempotencyKey() string {
 	return id.String()
 }
 
+// agentStatusBarBadge renders the agent connection/run state in the permanent
+// status bar, next to the WEB badge. The input-field mode badge stays a plain
+// "AGENT" mode indicator; live state belongs in the status bar. It stays
+// hidden until the agent is actually used so the bar stays quiet.
+func (m Model) agentStatusBarBadge() string {
+	if m.agent.badge == "OFF" && m.agent.client == nil && m.inputMode != inputModeAgent {
+		return ""
+	}
+	switch m.agent.badge {
+	case "ERROR":
+		label := "error"
+		if m.agent.err != nil {
+			label = m.agent.err.Error()
+		}
+		if runes := []rune(label); len(runes) > 40 {
+			label = string(runes[:37]) + "…"
+		}
+		return "  " + errorStyle.Render("AGENT ! "+label)
+	case "CONNECTING":
+		return "  " + dimStyle.Render("AGENT ◐ connecting")
+	case "RUNNING":
+		return "  " + webWarnStyle.Render("AGENT ● running")
+	case "READY":
+		return "  " + webOKStyle.Render("AGENT ● ready")
+	default:
+		return "  " + dimStyle.Render("AGENT ○ off")
+	}
+}
+
 func summarizeAgentMessage(raw json.RawMessage) (agentLine, bool) {
 	var msg struct {
 		Role    string          `json:"role"`
