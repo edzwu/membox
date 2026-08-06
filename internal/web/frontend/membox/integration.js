@@ -71,7 +71,7 @@ function createDocumentSwitcher() {
   button.id = 'membox-document-switcher';
   button.className = 'membox-document-switcher';
   button.hidden = true;
-  button.title = 'Switch document · ⌘K';
+  button.title = 'Switch document · Ctrl+O';
   button.setAttribute('aria-label', 'Switch document');
   button.innerHTML = `
     <svg class="membox-document-switcher-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -1127,7 +1127,7 @@ document.addEventListener('drop', (event) => {
 
 document.addEventListener('keydown', (event) => {
   if (event.repeat || event.altKey || event.shiftKey) return;
-  if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'k') return;
+  if (!event.ctrlKey || event.metaKey || event.key.toLowerCase() !== 'o') return;
   if (!connected) return;
   event.preventDefault();
   if (!relatedModal.backdrop.hidden && pickerPurpose === 'open') {

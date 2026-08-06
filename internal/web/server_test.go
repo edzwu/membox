@@ -83,7 +83,7 @@ func TestServerServesReaderAndMarkdown(t *testing.T) {
 	if adapterResp.StatusCode != http.StatusOK || !strings.Contains(string(adapterBody), "membox-connection") {
 		t.Fatalf("membox adapter unavailable: status=%d", adapterResp.StatusCode)
 	}
-	if !strings.Contains(string(adapterBody), "membox-document-switcher") || !strings.Contains(string(adapterBody), "Switch document · ⌘K") {
+	if !strings.Contains(string(adapterBody), "membox-document-switcher") || !strings.Contains(string(adapterBody), "Switch document · Ctrl+O") {
 		t.Fatal("membox adapter does not inject the document switcher")
 	}
 
