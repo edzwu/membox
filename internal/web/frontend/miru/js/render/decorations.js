@@ -65,6 +65,12 @@ function normalizeSourceHeading(text) {
     .replace(/!?\[([^\[\]]*)\]\([^)]*\)/g, (_, label) =>
       HEADERLINK_GLYPHS.has(label.trim()) ? ' ' : ` ${label} `)
     .replace(/[*_`]/g, '')
+    // markdown-it's typographer changes straight punctuation in the rendered
+    // heading. Normalize both DOM labels and raw Markdown before matching so
+    // a heading such as "MemGPT's" keeps its attributed copy source.
+    .replace(/[‘’]/g, "'")
+    .replace(/[“”]/g, '"')
+    .replace(/[–—]/g, '-')
     .replace(/\s+/g, ' ')
     .trim();
 }
