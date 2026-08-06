@@ -150,6 +150,9 @@ function loadSnippetDocument(code, lang) {
   state.sectionSources = [];
   hideAnnotToolbar();
   elements.article.innerHTML = '';
+  elements.article.classList.remove('has-note-rail');
+  elements.annotationLayer.classList.remove('is-rail', 'is-stack');
+  elements.annotationLayer.replaceChildren();
 
   const { filename } = renderSnippet(code, lang);
   const base = (state.droppedFilename || filename).replace(/\.[^.]+$/, '');
@@ -192,6 +195,9 @@ export function loadDocument(text) {
   const rawHtml = md.render(processedText);
   const cleanHtml = sanitize(rawHtml);
   elements.article.innerHTML = cleanHtml;
+  elements.article.classList.remove('has-note-rail');
+  elements.annotationLayer.classList.remove('is-rail', 'is-stack');
+  elements.annotationLayer.replaceChildren();
   processArticle();
 
   if (meta) {
@@ -214,9 +220,11 @@ export function clearDocument() {
   resetAnnotationSession();
   hideAnnotToolbar();
   elements.article.classList.remove('has-note-rail');
+  elements.annotationLayer.classList.remove('is-rail', 'is-stack');
   state.leadingSource = '';
   state.sectionSources = [];
   elements.article.innerHTML = '';
+  elements.annotationLayer.replaceChildren();
   resetToc();
   setEmptyState();
   const behavior = prefersReducedMotion() ? 'auto' : 'smooth';

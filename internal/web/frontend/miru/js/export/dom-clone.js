@@ -76,19 +76,54 @@ function cleanExportClone(source, mode = 'site') {
   return clone;
 }
 
-export function cleanArticleForExport(mode = 'site') {
-  return cleanExportClone(elements.article, mode);
+function cleanAnnotationLayerForExport(mode, annotationIds = null) {
+  const layer = cleanExportClone(elements.annotationLayer, mode);
+  if (annotationIds) {
+    layer.querySelectorAll('.annot-note').forEach((note) => {
+      if (!annotationIds.has(String(note.dataset.annotId))) note.remove();
+    });
+  }
+  if (!layer.querySelector('.annot-note')) return null;
+  // Portable sites and isolated sections use a dedicated stacked notes region;
+  // full PNG snapshots retain the live rail geometry.
+  if (mode !== 'pin' || annotationIds) {
+    layer.classList.remove('is-rail');
+    layer.classList.add('is-stack');
+    layer.querySelectorAll('.annot-note-in-rail').forEach((note) => {
+      note.classList.remove('annot-note-in-rail');
+      note.style.removeProperty('top');
+      note.style.removeProperty('z-index');
+      note.hidden = false;
+    });
+  }
+  return layer;
 }
 
-// A section needs an article ancestor so all `.article …` typography and
-// annotation rules still apply when the subtree is rendered in isolation.
+function exportSurface(article, annotationLayer) {
+  const surface = document.createElement('div');
+  surface.className = 'reading-surface export-reading-surface';
+  surface.appendChild(article);
+  if (annotationLayer) surface.appendChild(annotationLayer);
+  return surface;
+}
+
+export function cleanArticleForExport(mode = 'site') {
+  const article = cleanExportClone(elements.article, mode);
+  const annotationLayer = cleanAnnotationLayerForExport(mode);
+  return exportSurface(article, annotationLayer);
+}
+
+// A section needs an article ancestor so all `.article …` typography rules
+// still apply. Its notes remain a separate sibling layer and are filtered to
+// anchors contained by this section.
 export function cleanSectionForExport(section) {
   const article = document.createElement('article');
-  article.className = elements.article.classList.contains('has-note-rail')
-    ? 'article has-note-rail'
-    : 'article';
+  article.className = 'article';
   article.appendChild(cleanExportClone(section, 'pin'));
-  return article;
+  const annotationIds = new Set(Array.from(section.querySelectorAll('span.annot-note-ref[data-annot-id]'))
+    .map((anchor) => String(anchor.dataset.annotId)));
+  const annotationLayer = cleanAnnotationLayerForExport('site', annotationIds);
+  return exportSurface(article, annotationLayer);
 }
 
 // Fetch every <img> in the subtree and inline it as a base64 data URI. An

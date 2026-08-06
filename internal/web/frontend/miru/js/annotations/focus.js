@@ -17,14 +17,13 @@ function pairFor(id) {
   return {
     id: key,
     anchor: elements.article.querySelector(`span.annot[data-annot-id="${key}"]`),
-    card: elements.article.querySelector(`.annot-note[data-annot-id="${key}"]`),
+    card: elements.annotationLayer.querySelector(`.annot-note[data-annot-id="${key}"]`),
   };
 }
 
 function clearFocusClasses() {
-  elements.article.querySelectorAll('.anchor-active, .note-focus').forEach((el) => {
-    el.classList.remove('anchor-active', 'note-focus');
-  });
+  elements.article.querySelectorAll('.anchor-active').forEach((el) => el.classList.remove('anchor-active'));
+  elements.annotationLayer.querySelectorAll('.note-focus').forEach((el) => el.classList.remove('note-focus'));
 }
 
 export function clearNoteFocus() {
@@ -109,4 +108,6 @@ function onHover(e) {
 export function initNoteFocus() {
   elements.article.addEventListener('mouseover', onHover);
   elements.article.addEventListener('mouseout', onHover);
+  elements.annotationLayer.addEventListener('mouseover', onHover);
+  elements.annotationLayer.addEventListener('mouseout', onHover);
 }

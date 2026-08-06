@@ -28,7 +28,10 @@ function getPNGExportWidth(source) {
   let width = parts.reduce((max, part) => {
     return Math.max(max, part.getBoundingClientRect().width, part.scrollWidth);
   }, 0);
-  if (source.querySelector('.annot-note-in-rail')) {
+  const includesLiveRail = source === elements.article &&
+    elements.annotationLayer.classList.contains('is-rail') &&
+    elements.annotationLayer.querySelector('.annot-note-in-rail');
+  if (includesLiveRail) {
     const articleMax = parseFloat(getComputedStyle(elements.article).getPropertyValue('--article-max')) || 860;
     width = Math.max(width, articleMax + NOTE_RAIL_GAP + NOTE_RAIL_WIDTH);
   }

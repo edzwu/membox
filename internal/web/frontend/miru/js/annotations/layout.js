@@ -1,7 +1,7 @@
-/* Miru — margin note layout.
-   Wide screens: notes sit in a collision-resolved right rail next to the
-   reading column. Narrow screens: notes fall back to in-flow asides after
-   their anchor block. The reading column itself is never punctured. */
+/* Miru — layout the annotation layer independently from article content.
+   Wide screens align cards in a right rail beside their anchors. Narrower
+   screens keep the same sibling layer as a dedicated notes region below the
+   article; cards are never inserted into the prose DOM. */
 
 import { elements } from '../dom.js';
 import { NOTE_RAIL_WIDTH, NOTE_RAIL_GAP, NOTE_RAIL_OUTER_GUTTER, NOTE_RAIL_STACK_GAP } from '../constants.js';
@@ -14,79 +14,86 @@ export function refreshNoteNumbers() {
     const label = String(index + 1);
     const badge = ref.querySelector('.annot-note-num');
     if (badge) badge.textContent = label;
-    const card = elements.article.querySelector(`.annot-note[data-annot-id="${ref.dataset.annotId}"]`);
+    const card = elements.annotationLayer.querySelector(`.annot-note[data-annot-id="${ref.dataset.annotId}"]`);
     const cardLabel = card && card.querySelector('.annot-note-label');
     if (cardLabel) cardLabel.textContent = label;
   });
 }
 
-// Drop leftover float-era chrome if an old session or export left any behind.
 function scrubLegacyFloatChrome() {
-  elements.article.querySelectorAll('.annot-ghost, .annot-ghost-clear, .annot-leader').forEach((n) => n.remove());
-  elements.article.querySelectorAll('.annot-note-floated').forEach((card) => {
+  elements.article.querySelectorAll('.annot-ghost, .annot-ghost-clear, .annot-leader').forEach((node) => node.remove());
+  elements.annotationLayer.querySelectorAll('.annot-note-floated').forEach((card) => {
     card.classList.remove('annot-note-floated', 'is-dragging', 'will-dock');
     card.style.removeProperty('left');
     card.style.removeProperty('width');
   });
-  elements.article.querySelectorAll('.has-annot-ghost').forEach((el) => {
-    el.classList.remove('has-annot-ghost');
+  elements.article.querySelectorAll('.has-annot-ghost').forEach((element) => {
+    element.classList.remove('has-annot-ghost');
   });
+}
+
+function cardsInAnchorOrder() {
+  const cards = Array.from(elements.article.querySelectorAll('span.annot-note-ref[data-annot-id]'))
+    .map((anchor) => elements.annotationLayer.querySelector(`.annot-note[data-annot-id="${anchor.dataset.annotId}"]`))
+    .filter(Boolean);
+  cards.forEach((card, index) => {
+    const current = elements.annotationLayer.children[index];
+    if (current !== card) elements.annotationLayer.insertBefore(card, current || null);
+  });
+  return cards;
 }
 
 export function layoutMarginNotes() {
   scrubLegacyFloatChrome();
   refreshNoteNumbers();
-  layoutRailCards();
-}
 
-function layoutRailCards() {
-  const cards = Array.from(elements.article.querySelectorAll('.annot-note:not(.annot-note-in-cell)'));
+  const cards = cardsInAnchorOrder();
   if (!cards.length) {
     elements.article.classList.remove('has-note-rail');
+    elements.annotationLayer.classList.remove('is-rail', 'is-stack');
     return;
   }
 
-  const articleRect = elements.article.getBoundingClientRect();
+  const surfaceRect = elements.readingSurface.getBoundingClientRect();
   const articleMax = parseFloat(getComputedStyle(elements.article).getPropertyValue('--article-max')) || 860;
-  const readingWidth = Math.min(articleMax, articleRect.width);
-  const neededWidth = readingWidth + NOTE_RAIL_GAP + NOTE_RAIL_WIDTH + NOTE_RAIL_OUTER_GUTTER * 2;
-  const useRail = window.innerWidth > 900 && articleRect.width >= neededWidth;
-  elements.article.classList.toggle('has-note-rail', useRail);
+  const neededWidth = articleMax + NOTE_RAIL_GAP + NOTE_RAIL_WIDTH + NOTE_RAIL_OUTER_GUTTER * 2;
+  const useRail = window.innerWidth > 900 && surfaceRect.width >= neededWidth;
 
+  elements.article.classList.toggle('has-note-rail', useRail);
+  elements.annotationLayer.classList.toggle('is-rail', useRail);
+  elements.annotationLayer.classList.toggle('is-stack', !useRail);
   cards.forEach((card) => {
     card.hidden = false;
     card.classList.toggle('annot-note-in-rail', useRail);
-    if (!useRail) card.style.removeProperty('top');
+    card.classList.remove('annot-note-in-cell');
+    if (!useRail) {
+      card.style.removeProperty('top');
+      card.style.removeProperty('z-index');
+    }
   });
   if (!useRail) return;
 
+  const layerRect = elements.annotationLayer.getBoundingClientRect();
   const positioned = cards
     .map((card) => {
       const anchor = elements.article.querySelector(`span.annot[data-annot-id="${card.dataset.annotId}"]`);
       if (!anchor || anchor.getClientRects().length === 0) {
-        // Anchor is in a collapsed section (or gone): park the card out of
-        // the way until the section opens and layout runs again.
         card.hidden = true;
         return null;
       }
-      const parent = card.offsetParent;
-      if (!(parent instanceof HTMLElement)) return null;
       return {
-        anchorTop: anchor.getBoundingClientRect().top,
+        anchorTop: anchor.getBoundingClientRect().top - layerRect.top,
         card,
         height: card.getBoundingClientRect().height,
-        parent,
       };
     })
     .filter(Boolean)
-    .sort((a, b) => a.anchorTop - b.anchorTop);
+    .sort((left, right) => left.anchorTop - right.anchorTop);
 
   let previousBottom = -Infinity;
   positioned.forEach((item, index) => {
     const top = Math.max(item.anchorTop, previousBottom + NOTE_RAIL_STACK_GAP);
-    const parentTop = item.parent.getBoundingClientRect().top;
-    item.card.style.top = Math.round(top - parentTop) + 'px';
-    // Later cards stack above earlier ones when they overlap during scroll.
+    item.card.style.top = `${Math.round(top)}px`;
     item.card.style.zIndex = String(4 + index);
     previousBottom = top + item.height;
   });

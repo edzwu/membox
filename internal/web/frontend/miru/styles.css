@@ -462,8 +462,57 @@ button {
   }
 }
 
+.reading-surface {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+}
+
 .article {
   width: 100%;
+}
+
+/* Notes are a sibling layer, never descendants of article content. */
+.annotation-layer:empty {
+  display: none;
+}
+
+.annotation-layer.is-rail {
+  position: absolute;
+  inset: 0 auto 0 calc(var(--article-max) + var(--annot-rail-gap));
+  width: var(--annot-rail-width);
+  pointer-events: none;
+}
+
+.annotation-layer.is-rail .annot-note {
+  pointer-events: auto;
+}
+
+.annotation-layer.is-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: var(--article-max);
+  margin: 32px auto 0;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+.annotation-layer.is-stack::before {
+  content: 'Notes';
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+@media (min-width: 1200px) {
+  .annotation-layer.is-stack {
+    margin-left: 0;
+    margin-right: auto;
+  }
 }
 
 /* --------------------------------------------------------------------------
@@ -1004,14 +1053,13 @@ textarea.annot-note-input {
   cursor: pointer;
 }
 
-/* Notes never squeeze prose. Default: in-flow aside after the block.
-   Wide layouts promote them into a right margin rail (see layout.js). */
+/* Note cards live exclusively in .annotation-layer. */
 .annot-note {
   position: relative;
-  width: min(32em, 100%);
+  width: 100%;
   max-width: 100%;
   box-sizing: border-box;
-  margin: 0.45em 0 0.65em auto;
+  margin: 0;
   padding: 0.4em 0.65em;
   background: var(--paper-raised);
   border: 1px solid var(--line);
@@ -1067,7 +1115,7 @@ textarea.annot-note-input {
   margin-bottom: 0;
 }
 
-.article .annot-note-text pre {
+.annot-note-text pre {
   width: 100%;
   max-width: 100%;
   min-width: 0;
@@ -1079,7 +1127,7 @@ textarea.annot-note-input {
   overflow-y: hidden;
 }
 
-.article .annot-note-text pre code {
+.annot-note-text pre code {
   display: block;
   width: max-content;
   min-width: 100%;
@@ -1103,20 +1151,11 @@ textarea.annot-note-input {
   color: color-mix(in srgb, var(--accent) 70%, var(--ink));
 }
 
-/* Table notes stay inside their originating cell. */
-.annot-note.annot-note-in-cell {
-  clear: both;
-  width: 100%;
-  margin: 0.55em 0 0.1em;
-  padding: 0.45em 0.65em;
-  cursor: default;
-}
-
-.annot-note.annot-note-in-rail:not(.annot-note-in-cell) {
+.annot-note.annot-note-in-rail {
   position: absolute;
-  left: calc(100% + var(--annot-rail-gap));
+  left: 0;
   z-index: 4;
-  width: var(--annot-rail-width);
+  width: 100%;
   margin: 0;
 }
 

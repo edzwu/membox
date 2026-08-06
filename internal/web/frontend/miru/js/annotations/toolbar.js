@@ -282,13 +282,16 @@ export function initAnnotations() {
     }
   });
 
-  // Click an annotated passage (or a note card button) to edit it.
+  // Passage anchors and note cards live in separate sibling layers but share
+  // one interaction handler through their data-annot-id relationship.
   elements.article.addEventListener('click', onAnnotPassageClick);
+  elements.annotationLayer.addEventListener('click', onAnnotPassageClick);
 
   window.addEventListener('resize', scheduleNoteLayout);
   if (typeof window.ResizeObserver === 'function') {
     noteResizeObserver = new ResizeObserver(scheduleNoteLayout);
     noteResizeObserver.observe(elements.article);
+    noteResizeObserver.observe(elements.annotationLayer);
   }
   if (document.fonts && document.fonts.ready) {
     document.fonts.ready.then(scheduleNoteLayout);

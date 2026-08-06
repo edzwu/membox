@@ -74,6 +74,9 @@ func TestServerServesReaderAndMarkdown(t *testing.T) {
 	if strings.Contains(string(indexBody), "brand-social") || !strings.Contains(string(indexBody), `class="topbar-center"`) {
 		t.Fatal("host-neutral topbar should expose an empty center slot without personal links")
 	}
+	if !strings.Contains(string(indexBody), `id="reading-surface"`) || !strings.Contains(string(indexBody), `id="annotation-layer"`) {
+		t.Fatal("reader should keep article content and annotation cards in separate sibling layers")
+	}
 	adapterResp, err := http.Get(baseURL + "/membox/integration.js")
 	if err != nil {
 		t.Fatal(err)

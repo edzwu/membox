@@ -1,6 +1,6 @@
 /* Miru — annotation data model: create/toggle/delete highlights, underlines
-   and margin notes, and keep their DOM (inline <span class="annot"> +
-   .annot-note card) in sync with the in-memory `state.annotations` list. */
+   and margin notes. Inline anchors live in `.article`; note cards live in the
+   sibling `.annotation-layer`, linked only by data-annot-id and model state. */
 
 import { elements } from '../dom.js';
 import { state } from '../state.js';
@@ -137,43 +137,7 @@ function buildNoteBtn(kind) {
   return b;
 }
 
-function closestBlock(el) {
-  const blocks = ['P', 'LI', 'BLOCKQUOTE', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'PRE', 'TD', 'TH'];
-  let node = el.parentElement;
-  while (node && node !== elements.article) {
-    if (blocks.includes(node.tagName)) return node;
-    node = node.parentElement;
-  }
-  return null;
-}
-
-export function insertCardNaturally(card, refSpan) {
-  const cell = refSpan.closest('td, th');
-  if (cell) {
-    // A sibling of <td>/<th> would become an invalid child of <tr> and can
-    // scramble the table. Keep the card in-flow at the end of its own cell.
-    card.classList.add('annot-note-in-cell');
-    cell.appendChild(card);
-    return;
-  }
-  const block = closestBlock(refSpan);
-  if (block && block.tagName === 'LI') {
-    // Keep list structure valid: <ul>/<ol> may only own <li> children.
-    block.appendChild(card);
-  } else if (block && block.classList.contains('fold-heading')) {
-    const section = block.closest('.fold-section');
-    const body = section && Array.from(section.children)
-      .find((child) => child.classList.contains('fold-body'));
-    if (body) body.insertBefore(card, body.firstChild);
-    else block.insertAdjacentElement('afterend', card);
-  } else if (block && block.parentNode) {
-    block.parentNode.insertBefore(card, block.nextSibling);
-  } else {
-    refSpan.appendChild(card);
-  }
-}
-
-function insertNoteCard(id, noteText, refSpan) {
+function insertNoteCard(id, noteText) {
   const card = document.createElement('aside');
   card.className = 'annot-note';
   card.dataset.annotId = id;
@@ -186,7 +150,7 @@ function insertNoteCard(id, noteText, refSpan) {
   card.appendChild(body);
   card.appendChild(buildNoteBtn('edit'));
   card.appendChild(buildNoteBtn('del'));
-  insertCardNaturally(card, refSpan);
+  elements.annotationLayer.appendChild(card);
   return card;
 }
 
@@ -206,7 +170,7 @@ export function applyAnnotationRange(range, flags) {
   wrapRange(range, span);
   if (flags.note) {
     attachNoteBadge(span, id);
-    insertNoteCard(id, flags.note, span);
+    insertNoteCard(id, flags.note);
   }
   state.annotations.push({
     id,
@@ -248,14 +212,14 @@ export function applyNote(range, noteText) {
 export function setNoteOnPassage(entry, annotEl, text) {
   if (entry.note) {
     entry.note = text;
-    const card = elements.article.querySelector(`.annot-note[data-annot-id="${entry.id}"]`);
+    const card = elements.annotationLayer.querySelector(`.annot-note[data-annot-id="${entry.id}"]`);
     const textEl = card && card.querySelector('.annot-note-text');
     if (textEl) renderNoteText(textEl, text);
   } else {
     entry.note = text;
     annotEl.classList.add('annot-note-ref');
     attachNoteBadge(annotEl, entry.id);
-    insertNoteCard(entry.id, text, annotEl);
+    insertNoteCard(entry.id, text);
     requestAnimationFrame(() => focusNote(entry.id, { scrollTo: 'card', duration: 1600 }));
   }
   refreshNoteNumbers();
@@ -265,7 +229,7 @@ export function setNoteOnPassage(entry, annotEl, text) {
 
 export function deleteAnnotation(id) {
   const annotEl = elements.article.querySelector(`span.annot[data-annot-id="${id}"]`);
-  const card = elements.article.querySelector(`.annot-note[data-annot-id="${id}"]`);
+  const card = elements.annotationLayer.querySelector(`.annot-note[data-annot-id="${id}"]`);
   if (card) card.remove();
   if (annotEl) unwrapAnnotEl(annotEl);
   refreshNoteNumbers();
