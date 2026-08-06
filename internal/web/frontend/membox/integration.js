@@ -996,6 +996,14 @@ function renderConnection() {
         ? 'Disconnected — notes remain available in this session'
         : 'Disconnected from membox — click to connect';
   connectionButton.setAttribute('aria-label', label);
+  // Keep the companion's tab census fresh whenever connection or dirty state
+  // changes; the interval covers quiet periods.
+  if (connected) {
+    startPresenceHeartbeat();
+    reportPresence(false);
+  } else {
+    window.clearInterval(presenceTimer);
+  }
   connectionButton.title = label;
   setDownloadMeaning();
   renderDocStatus();
@@ -1226,6 +1234,59 @@ window.addEventListener('miru-annotations-changed', () => {
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') flushReadingStateSave();
 });
+
+// ---------------------------------------------------------------------------
+// Presence heartbeat: this tab reports itself to the Web Companion so the TUI
+// can show how many readers are connected and whether any hold unsaved notes.
+// Best-effort; failures never disturb reading.
+// ---------------------------------------------------------------------------
+const presenceTabId = (() => {
+  try {
+    const key = 'membox-presence-tab';
+    let id = window.sessionStorage.getItem(key);
+    if (!id) {
+      id = Math.random().toString(36).slice(2) + Date.now().toString(36);
+      window.sessionStorage.setItem(key, id);
+    }
+    return id;
+  } catch (err) {
+    return Math.random().toString(36).slice(2) + Date.now().toString(36);
+  }
+})();
+
+let presenceTimer = 0;
+let lastPresenceAt = 0;
+
+function reportPresence(gone) {
+  if (!connected && !gone) return;
+  // Throttle live heartbeats; renders fire faster than the server needs them.
+  const now = Date.now();
+  if (!gone && now - lastPresenceAt < 1000) return;
+  lastPresenceAt = now;
+  const params = new URLSearchParams();
+  params.set('tab', presenceTabId);
+  if (gone) {
+    params.set('gone', '1');
+  } else {
+    params.set('dirty', annotationsDirty ? '1' : '0');
+  }
+  const url = `/api/companion/presence?${params.toString()}`;
+  if (gone && typeof navigator.sendBeacon === 'function') {
+    try {
+      if (navigator.sendBeacon(url)) return;
+    } catch (err) {
+      /* fall through to keepalive fetch */
+    }
+  }
+  fetch(url, { method: 'GET', keepalive: gone, cache: 'no-store' }).catch(() => {});
+}
+
+function startPresenceHeartbeat() {
+  window.clearInterval(presenceTimer);
+  presenceTimer = window.setInterval(() => reportPresence(false), 10000);
+}
+
+window.addEventListener('pagehide', () => reportPresence(true));
 
 function unbindDocument() {
   replaceDocumentID('');
