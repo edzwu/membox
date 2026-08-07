@@ -45,6 +45,13 @@ function makeTurndown(): TurndownService {
   // degrades to inline text and the layout is lost (the tw93 agent article
   // clipped that way). GFM emits proper |---| pipe tables.
   turndown.use(gfm);
+  // Scripts/styles/noscripts carry no readable content, yet turndown keeps
+  // them as plain text — bearblog's inline upvote widget (a <script> inside
+  // <main>) leaked into the karpathy clip as garbage. Drop script-like chrome.
+  turndown.addRule('dropScriptLike', {
+    filter: ['script', 'noscript', 'style', 'template', 'iframe', 'object', 'embed', 'canvas'],
+    replacement: () => '',
+  });
   // Preserve fenced language tags (```mermaid, ```typescript, …).
   turndown.addRule('fencedCodeBlock', {
     filter: (node) => {

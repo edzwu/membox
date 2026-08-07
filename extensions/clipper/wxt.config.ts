@@ -8,7 +8,7 @@ export default defineConfig({
   manifest: {
     name: 'membox clipper',
     description: 'Save the current page to membox and open it in Miru',
-    version: '0.1.11',
+    version: '0.1.12',
     permissions: ['activeTab', 'storage', 'scripting', 'tabs'],
     // 127.0.0.1 = membox bridge. http(s)://*/ = clip any normal webpage
     // (content script + optional programmatic inject after user gesture).
