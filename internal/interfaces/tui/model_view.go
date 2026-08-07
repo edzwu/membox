@@ -102,7 +102,7 @@ func (m Model) filterOptionsView() string {
 	for index, row := range rows {
 		label := fitWidth(row[0], 10)
 		options := []string{}
-		onValue, offValue := "word", row[1]
+		onValue, offValue := "exact", row[1]
 		if index == 1 {
 			onValue = "sensitive"
 		}
