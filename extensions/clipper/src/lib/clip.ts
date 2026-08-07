@@ -1,5 +1,6 @@
 import { Readability } from '@mozilla/readability';
 import TurndownService from 'turndown';
+import { gfm } from 'turndown-plugin-gfm';
 import type { ClipPayload } from './types';
 import { normalizeSourceURL } from './url';
 
@@ -40,6 +41,10 @@ function makeTurndown(): TurndownService {
     codeBlockStyle: 'fenced',
     bulletListMarker: '-',
   });
+  // Tables are NOT part of core turndown — without the GFM plugin a <table>
+  // degrades to inline text and the layout is lost (the tw93 agent article
+  // clipped that way). GFM emits proper |---| pipe tables.
+  turndown.use(gfm);
   // Preserve fenced language tags (```mermaid, ```typescript, …).
   turndown.addRule('fencedCodeBlock', {
     filter: (node) => {
