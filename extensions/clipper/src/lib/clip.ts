@@ -201,24 +201,57 @@ function visibleBodyText(doc: Document): string {
   return deepText(body);
 }
 
-/** Fetch the pristine (pre-JS) HTML when possible; null otherwise. */
+/** Fetch the pristine (pre-JS) HTML when possible; null otherwise.
+ *  Tries same-origin then cookie-less: WeChat flags same-origin XHR/fetch and
+ *  serves a verify page, but its public articles load fine without cookies.
+ *  Returns whichever copy carries the most real content. */
 async function fetchRawDocument(): Promise<Document | null> {
-  try {
-    const response = await fetch(location.href, {
-      credentials: 'same-origin',
-      cache: 'force-cache',
-    });
-    if (response.ok) {
+  let best: Document | null = null;
+  let bestScore = 0;
+  const attempts: RequestCredentials[] = ['same-origin', 'omit'];
+  for (const credentials of attempts) {
+    try {
+      const response = await fetch(location.href, {
+        credentials,
+        cache: 'no-store',
+      });
+      if (!response.ok) continue;
       const text = await response.text();
-      if (text && /<html[\s>]/i.test(text)) {
-        const parsed = new DOMParser().parseFromString(text, 'text/html');
-        if (parsed.body) return parsed;
+      if (!text || !/<html[\s>]/i.test(text)) continue;
+      const parsed = new DOMParser().parseFromString(text, 'text/html');
+      if (!parsed.body) continue;
+      const score = contentScore(parsed);
+      if (score > bestScore) {
+        bestScore = score;
+        best = parsed;
       }
+    } catch {
+      // try the next credential mode
     }
-  } catch {
-    // fall through
   }
+  // Require substantial content; shells / verify pages should not shadow the
+  // live DOM, which is compared in pickBestDocument.
+  if (best && bestScore >= 500) return best;
   return null;
+}
+
+/** Give lazy-loaded pages (WeChat bodies, infinite-scroll feeds) up to ms to
+ *  settle: wait while the visible body text is still growing. */
+async function waitForBodySettle(ms: number): Promise<void> {
+  const deadline = Date.now() + ms;
+  let last = -1;
+  let stable = 0;
+  while (Date.now() < deadline) {
+    const len = (document.body as HTMLElement | null)?.innerText?.length ?? 0;
+    if (len === last) {
+      stable++;
+      if (stable >= 2) return; // two consecutive identical reads = settled
+    } else {
+      stable = 0;
+      last = len;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
 }
 
 /**
@@ -297,6 +330,9 @@ export async function clipCurrentDocument(overrideSourceUrl?: string): Promise<C
   // exists after client-side rendering (alphaxiv etc.).
   const liveDoc = document;
   const rawDoc = await fetchRawDocument();
+  // Lazy-loaded pages (WeChat bodies) may still be filling in — give them a
+  // moment so the live DOM competes fairly with the raw copy.
+  await waitForBodySettle(1500);
   const doc = pickBestDocument(rawDoc, liveDoc);
   if (!doc.body) {
     const body = doc.createElement('body');
