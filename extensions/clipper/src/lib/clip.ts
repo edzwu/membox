@@ -240,15 +240,12 @@ export async function clipCurrentDocument(overrideSourceUrl?: string): Promise<C
   const turndown = makeTurndown();
   const title = (article?.title || titleHint || 'Clipped page').trim();
   let html = article?.content || '';
-  if (!html) {
-    const root =
-      documentClone.querySelector(
-        'article, main, [role="main"], .post, .entry-content, .article-content, .content',
-      ) ||
-      documentClone.body ||
-      document.querySelector('article, main, [role="main"]') ||
-      document.body;
-    html = root ? (root as HTMLElement).innerHTML : '';
+  if (!html || textLenOf(html) < 200) {
+    // Readability produced nothing usable (complex SPAs often do). Hunt for a
+    // main content container instead of grabbing the whole body (which would
+    // include nav chrome, as seen on Tailwind/React pages without landmarks).
+    const main = findMainContent(documentClone);
+    if (main) html = main.innerHTML;
   }
   if (!html) {
     const text = document.body?.innerText?.trim() || '';
@@ -284,6 +281,83 @@ export async function clipCurrentDocument(overrideSourceUrl?: string): Promise<C
     clipMode: 'page',
     body: buildMarkdown(title, sourceUrl, markdownBody, { clip_mode: 'page' }),
   };
+}
+
+// Chrome elements that never hold primary article content.
+const CONTENT_CHROME_SELECTOR =
+  'nav, header, footer, aside, form, script, style, [role="navigation"], [role="banner"], ' +
+  '.nav, .navbar, .menu, .topbar, .sidebar, .breadcrumb, .footer, .header, .ad, .advert, .toolbar';
+
+const MAIN_CONTENT_SELECTOR =
+  'article, main, [role="main"], .post, .entry-content, .article-content, .content, ' +
+  '.overview, .paper, .paper-content, .discussion, .reading-content, .doc-content, .markdown-body';
+
+/** Layout-independent text length (scripts/styles stripped by chrome filter). */
+function textLenOf(el: Element | string | null | undefined): number {
+  if (!el) return 0;
+  if (typeof el === 'string') {
+    return el.replace(/\s+/g, ' ').trim().length;
+  }
+  return (el.textContent || '').replace(/\s+/g, ' ').trim().length;
+}
+
+/**
+ * Locate the main content container in a page that may lack semantic
+ * landmarks (Tailwind/React SPAs). Strategy: prefer semantic containers;
+ * otherwise drop chrome elements and find the largest text-bearing block,
+ * then squeeze down to the smallest descendant still holding most of the text.
+ */
+function findMainContent(root: ParentNode): HTMLElement | null {
+  const body = (root as Document).body;
+  if (!body) return null;
+
+  // Pass 1: semantic landmarks.
+  let best: HTMLElement | null = null;
+  let bestScore = 0;
+  body.querySelectorAll(MAIN_CONTENT_SELECTOR).forEach((el) => {
+    const s = textLenOf(el);
+    if (s > bestScore) {
+      bestScore = s;
+      best = el as HTMLElement;
+    }
+  });
+  if (best && bestScore >= 200) return best;
+
+  // Pass 2: chrome-free largest block.
+  best = null;
+  bestScore = 0;
+  body.querySelectorAll<HTMLElement>('div, section, main, article, td, li').forEach((el) => {
+    if (el.closest(CONTENT_CHROME_SELECTOR)) return;
+    const s = textLenOf(el);
+    if (s > bestScore) {
+      bestScore = s;
+      best = el;
+    }
+  });
+  if (!best || bestScore < 200) return null;
+
+  // Squeeze: descend to the smallest descendant carrying ~80% of the text so
+  // we don't clip a giant wrapper that also contains nav.
+  let current: HTMLElement = best;
+  let guard = 0;
+  while (current.children.length && guard++ < 12) {
+    const total = textLenOf(current);
+    if (total === 0) break;
+    let next: HTMLElement | null = null;
+    let nextScore = 0;
+    for (const child of Array.from(current.children)) {
+      const c = child as HTMLElement;
+      if (c.closest(CONTENT_CHROME_SELECTOR)) continue;
+      const s = textLenOf(c);
+      if (s > nextScore) {
+        nextScore = s;
+        next = c;
+      }
+    }
+    if (!next || nextScore < total * 0.8) break;
+    current = next;
+  }
+  return current;
 }
 
 function collectMermaidSources(root: ParentNode): string[] {
