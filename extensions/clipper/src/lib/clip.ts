@@ -414,6 +414,11 @@ export async function clipCurrentDocument(overrideSourceUrl?: string): Promise<C
   }
 
   html = stripHeadingPermalinkHtml(html);
+  // A page clip is one article: sole h1 = page title; body outline starts at h2.
+  // CMS skins (WeChat mdnice etc.) mark every section <h1> — that is presentation,
+  // not document structure. Normalize before turndown so levels are decided once.
+  const title = titleHint;
+  html = normalizeArticleHeadingOutline(html, title);
 
   let markdownBody = '';
   try {
@@ -430,8 +435,9 @@ export async function clipCurrentDocument(overrideSourceUrl?: string): Promise<C
   markdownBody = stripHeadingPermalinkMarkdown(markdownBody);
   markdownBody = stripWeChatPromo(markdownBody);
   markdownBody = restoreMermaidFences(markdownBody, mermaidSources);
-  const title = titleHint;
-  if (!/^#\s/m.test(markdownBody)) {
+  // Body outline is h2+ after normalize; document title is the sole h1.
+  // Match ATX h1 only (`# title`), not h2+ (`## title`).
+  if (!/^#\s+[^#\s]/m.test(markdownBody)) {
     markdownBody = `# ${title}\n\n${markdownBody}`;
   }
 
@@ -656,4 +662,88 @@ function stripWeChatPromo(markdown: string): string {
     /^在小说阅读器读本章\s*[\s\S]*?在小说阅读器中沉浸阅读\s*/m,
     '',
   );
+}
+
+/**
+ * Normalize the extracted article fragment to a real document outline.
+ *
+ * Model: one clipped page = one article document.
+ *   - Sole h1 comes from the page title (added after turndown).
+ *   - Body headings are sections/subsections → start at h2.
+ *
+ * Many CMS skins (WeChat mdnice, some blog themes) paint every section as
+ * <h1> for visual weight. Trusting those tags yields N document titles and
+ * a broken outline. Fix at the HTML layer (before turndown), not by rewriting
+ * Markdown after the fact:
+ *   1. Drop a leading heading that only repeats the page title.
+ *   2. Shift ranks so the shallowest remaining heading becomes h2.
+ *   3. Unwrap presentational <strong>/<b> that wrap an entire heading.
+ */
+function normalizeArticleHeadingOutline(html: string, pageTitle: string): string {
+  if (!html.trim()) return html;
+  const doc = new DOMParser().parseFromString(
+    `<div id="mbx-root">${html}</div>`,
+    'text/html',
+  );
+  const root = doc.getElementById('mbx-root');
+  if (!root) return html;
+
+  const headings = () =>
+    Array.from(root.querySelectorAll('h1,h2,h3,h4,h5,h6')) as HTMLElement[];
+
+  // 1. Leading heading that restates the page title is not a section.
+  const first = headings()[0];
+  if (first && headingTextEqualsTitle(first, pageTitle)) {
+    first.remove();
+  }
+
+  const list = headings();
+  if (!list.length) return root.innerHTML;
+
+  // 2. Compact ranks under the document title: shallowest body level → h2.
+  const min = Math.min(...list.map((h) => headingLevel(h)));
+  const shift = 2 - min; // min=1 → +1; min=2 → 0; min=3 → -1 (pull up to h2)
+  for (const h of list) {
+    unwrapHeadingEmphasis(h);
+    const next = clampHeadingLevel(headingLevel(h) + shift);
+    if (next === headingLevel(h)) continue;
+    const repl = doc.createElement(`h${next}`);
+    while (h.firstChild) repl.appendChild(h.firstChild);
+    for (const attr of Array.from(h.attributes)) {
+      repl.setAttribute(attr.name, attr.value);
+    }
+    h.replaceWith(repl);
+  }
+
+  return root.innerHTML;
+}
+
+function headingLevel(el: Element): number {
+  return Number(el.tagName[1]) || 6;
+}
+
+function clampHeadingLevel(n: number): number {
+  return Math.min(6, Math.max(2, n)); // body outline never uses h1
+}
+
+function normHeadingText(s: string): string {
+  return s.replace(/\s+/g, '').toLowerCase();
+}
+
+function headingTextEqualsTitle(el: Element, title: string): boolean {
+  const a = normHeadingText(el.textContent || '');
+  const b = normHeadingText(title || '');
+  if (!a || !b) return false;
+  return a === b || a.includes(b) || b.includes(a);
+}
+
+/** mdnice wraps titles in span/strong for paint — the heading tag already carries rank. */
+function unwrapHeadingEmphasis(h: HTMLElement): void {
+  // Peel single-child presentational wrappers (span/strong/b/font) until real content.
+  while (h.children.length === 1 && h.childNodes.length === 1) {
+    const inner = h.firstElementChild!;
+    if (!/^(STRONG|B|SPAN|FONT)$/.test(inner.tagName)) break;
+    while (inner.firstChild) h.insertBefore(inner.firstChild, inner);
+    inner.remove();
+  }
 }
