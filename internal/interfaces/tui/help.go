@@ -37,7 +37,7 @@ func helpSections() []helpSection {
 			{"enter / tab", "open document / tree ⇄ board"},
 			{"space", "details · ×2 opens filter input"},
 			{"e / o / d", "edit / open app / move to trash"},
-			{"p / s / ctrl+h", "pin / sort / toggle *-note.md"},
+			{"r / p / s / ctrl+h", "rename file / pin / sort / toggle *-note.md"},
 			{"q", "back"},
 		}},
 		{title: "Filter & commands", entries: []helpEntry{
@@ -46,6 +46,7 @@ func helpSections() []helpSection {
 			{"ctrl+k", "agent input"},
 		}},
 		{title: "General", entries: []helpEntry{
+			{"ctrl+r", "refresh / rescan documents"},
 			{"ctrl+o / ctrl+d", "settings · web / quit (asks about web)"},
 			{"esc", "close panels / this help"},
 		}},

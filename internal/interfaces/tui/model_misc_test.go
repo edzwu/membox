@@ -506,6 +506,39 @@ func TestModel_RenameCommandKeepsUUIDAndRefreshes(t *testing.T) {
 	}
 }
 
+func TestModel_RKeyOpensPrefilledRenameInput(t *testing.T) {
+	app := &fakeApp{}
+	model := New(context.Background(), app, fakeLauncher{})
+	model.width, model.height = 100, 30
+	model.items = documentItems([]membox.DocumentView{
+		{ID: "019-alpha", Title: "Alpha", Path: "/tmp/alpha.md", RelativePath: "alpha.md"},
+	})
+	model.refreshFilter()
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	model = updated.(Model)
+	if !model.inputVisible || model.inputMode != inputModeCmd {
+		t.Fatalf("r should open the command input: visible=%v mode=%q", model.inputVisible, model.inputMode)
+	}
+	want := "rename alpha.md"
+	if model.input.Value() != want {
+		t.Fatalf("r should prefill %q, got %q", want, model.input.Value())
+	}
+	// Enter executes the prefilled rename against the selected document.
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	message := command()
+	if batch, ok := message.(tea.BatchMsg); ok {
+		message = batch[1]()
+	}
+	if _, ok := message.(renamedMsg); !ok {
+		t.Fatalf("expected renamedMsg from prefilled r, got %T", message)
+	}
+	if app.renamedTo != "alpha.md" {
+		t.Fatalf("prefilled rename passed %q, want alpha.md", app.renamedTo)
+	}
+}
+
 func TestModel_ColonOpensCommandPaletteDirectly(t *testing.T) {
 	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})

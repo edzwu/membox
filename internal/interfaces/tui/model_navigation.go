@@ -141,7 +141,15 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "r":
-		return m, m.startScan()
+		// Rename the highlighted file: open the command palette prefilled with
+		// `rename <current-filename>` so only the name needs editing (Enter
+		// reuses the existing rename command; esc cancels).
+		if document, ok := m.selectedDocument(); ok {
+			cmd := m.openInput(inputModeCmd)
+			m.input.SetValue("rename " + documentFilename(document))
+			m.input.CursorEnd()
+			return m, cmd
+		}
 	case "e":
 		if document, ok := m.selectedDocument(); ok {
 			m.loading = true
@@ -628,7 +636,7 @@ func (m *Model) refreshFilter() {
 	}
 }
 
-// startScan runs path scan then reloads the document tree (ctrl+r / r).
+// startScan runs path scan then reloads the document tree (ctrl+r).
 func (m *Model) startScan() tea.Cmd {
 	m.loading = true
 	m.err = nil

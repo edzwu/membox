@@ -346,7 +346,7 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		// Refresh works from any surface (tree, input, config) so a clipper
-		// import can be picked up without hunting for the bare "r" binding.
+		// import can be picked up; the bare r key is now the rename shortcut.
 		if msg.String() == "ctrl+r" {
 			if m.configVisible {
 				m.configVisible = false
