@@ -172,19 +172,37 @@ export function readSelection(): {
   return { excerptText, excerptHTML, rect };
 }
 
-/** Estimated readable-text length of a body (rendered text incl. open shadow). */
-function bodyTextLength(body: HTMLElement | null): number {
-  return (body?.innerText || '').replace(/\s+/g, ' ').trim().length;
+/** Text of a subtree including open shadow roots; skips script/style/noscript. */
+function deepText(root: Node | null | undefined): string {
+  if (!root) return '';
+  const parts: string[] = [];
+  const walk = (node: Node) => {
+    if (node.nodeType === 3) {
+      parts.push(node.textContent || '');
+      return;
+    }
+    if (node.nodeType !== 1) return;
+    const el = node as HTMLElement;
+    const tag = el.tagName;
+    if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT') return;
+    if (el.shadowRoot) walk(el.shadowRoot);
+    for (const child of el.childNodes) walk(child);
+  };
+  walk(root);
+  return parts.join(' ');
 }
 
-/** Prefer network HTML (pre-JS) so client-side mermaid init has not replaced
- *  ```mermaid sources with SVG yet. Falls back to a live DOM clone.
- *
- *  Client-rendered SPAs (React/Next/Vite…) ship a *shell*: the raw HTML has
- *  only nav text, while the real content exists in the live DOM. When the raw
- *  body is much smaller than the live one, use the live DOM so we never clip
- *  an empty root or a “Sign In” page. */
-async function loadDocumentForClip(): Promise<Document> {
+/** Visible text of a body: innerText on the live doc, deepText otherwise. */
+function visibleBodyText(doc: Document): string {
+  const body = doc.body as HTMLElement | null;
+  if (!body) return '';
+  const inner = (body as HTMLElement & { innerText?: string }).innerText;
+  if (typeof inner === 'string' && inner.trim()) return inner;
+  return deepText(body);
+}
+
+/** Fetch the pristine (pre-JS) HTML when possible; null otherwise. */
+async function fetchRawDocument(): Promise<Document | null> {
   try {
     const response = await fetch(location.href, {
       credentials: 'same-origin',
@@ -194,20 +212,79 @@ async function loadDocumentForClip(): Promise<Document> {
       const text = await response.text();
       if (text && /<html[\s>]/i.test(text)) {
         const parsed = new DOMParser().parseFromString(text, 'text/html');
-        if (parsed.body) {
-          const raw = bodyTextLength(parsed.body);
-          const live = bodyTextLength(document.body);
-          if (live > 200 && raw < live * 0.5) {
-            return document.cloneNode(true) as Document;
-          }
-          return parsed;
-        }
+        if (parsed.body) return parsed;
       }
     }
   } catch {
     // fall through
   }
-  return document.cloneNode(true) as Document;
+  return null;
+}
+
+/**
+ * Pick the document with the most real content. Client-rendered SPAs ship a
+ * shell in the raw HTML (nav only) while the live DOM holds the content, so
+ * the live DOM wins when it has noticeably more text. Static/mermaid pages
+ * have equal content in both — the raw copy wins the tie so mermaid sources
+ * that client-side init replaced with SVG are preserved.
+ */
+function pickBestDocument(raw: Document | null, live: Document): Document {
+  if (!raw) return live;
+  const rawScore = contentScore(raw);
+  const liveScore = contentScore(live);
+  return liveScore > rawScore * 1.2 ? live : raw;
+}
+
+/** How much real content a document carries (main block text length). */
+function contentScore(doc: Document): number {
+  const main = findMainContent(doc);
+  if (main) return textLenOf(main);
+  return deepText(doc.body).replace(/\s+/g, ' ').trim().length;
+}
+
+/** Wrap plain text as paragraphs for turndown. */
+function plainTextHtml(text: string): string {
+  return `<p>${escapeHtml(text).replace(/\n\n+/g, '</p><p>').replace(/\n/g, '<br>')}</p>`;
+}
+
+/** Extract the main article HTML from one document (never mutates it). */
+function extractMainHtml(doc: Document): string {
+  // 1. Readability (on a clone — it mutates its input).
+  try {
+    const article = new Readability(doc.cloneNode(true) as Document).parse();
+    if (article?.content && textLenOf(article.content) >= 200) return article.content;
+  } catch {
+    // continue
+  }
+  // 2. Main content block (semantic landmark, else largest chrome-free block).
+  const main = findMainContent(doc);
+  if (main) return main.innerHTML;
+  // 3. Plain visible text (shadow-aware; preserves paragraph breaks on live).
+  const text = visibleBodyText(doc).replace(/\s+/g, ' ').trim();
+  return text ? plainTextHtml(text) : '';
+}
+
+/** Same-origin iframes often hold paper viewers / embeds. Return their best
+ *  main-content HTML when it beats the given score. */
+function extractFromSameOriginIframes(current: number): { html: string; score: number } {
+  let best = { html: '', score: current };
+  const frames = Array.from(document.querySelectorAll('iframe'));
+  for (const frame of frames) {
+    let frameDoc: Document | null = null;
+    try {
+      frameDoc = frame.contentDocument;
+    } catch {
+      /* cross-origin */
+    }
+    if (!frameDoc || !frameDoc.body) continue;
+    const score = contentScore(frameDoc);
+    if (score > best.score) {
+      const html = extractMainHtml(frameDoc);
+      const s = textLenOf(html);
+      if (s > best.score) best = { html, score: s };
+    }
+  }
+  return best;
 }
 
 /** Runs inside the extension content script (isolated world + full DOM). */
@@ -215,44 +292,33 @@ export async function clipCurrentDocument(overrideSourceUrl?: string): Promise<C
   const sourceUrl = normalizeSourceURL(overrideSourceUrl || location.href);
   const titleHint = (document.title || 'Clipped page').trim();
 
-  // Prefer pristine HTML: mdbook/mermaid-init rewrites language-mermaid blocks
-  // into rendered SVGs in the live DOM, which turndown then flattens to junk
-  // ("Unsupported markdown: list" + concatenated node labels).
-  const documentClone = await loadDocumentForClip();
-  if (!documentClone.body) {
-    const body = documentClone.createElement('body');
+  // Choose the document with the most real content: the pristine HTML keeps
+  // mermaid sources alive (mdbook), the live DOM carries SPA content that only
+  // exists after client-side rendering (alphaxiv etc.).
+  const liveDoc = document;
+  const rawDoc = await fetchRawDocument();
+  const doc = pickBestDocument(rawDoc, liveDoc);
+  if (!doc.body) {
+    const body = doc.createElement('body');
     body.innerHTML = document.body?.innerHTML || titleHint;
-    documentClone.documentElement.appendChild(body);
+    doc.documentElement.appendChild(body);
   }
 
-  const mermaidSources = collectMermaidSources(documentClone);
+  const mermaidSources = collectMermaidSources(doc);
   if (!mermaidSources.length) {
     mermaidSources.push(...collectMermaidSources(document));
   }
 
-  let article: { title?: string | null; content?: string | null } | null = null;
-  try {
-    article = new Readability(documentClone).parse();
-  } catch {
-    article = null;
-  }
-
   const turndown = makeTurndown();
-  const title = (article?.title || titleHint || 'Clipped page').trim();
-  let html = article?.content || '';
-  if (!html || textLenOf(html) < 200) {
-    // Readability produced nothing usable (complex SPAs often do). Hunt for a
-    // main content container instead of grabbing the whole body (which would
-    // include nav chrome, as seen on Tailwind/React pages without landmarks).
-    const main = findMainContent(documentClone);
-    if (main) html = main.innerHTML;
+  let html = extractMainHtml(doc);
+  if (textLenOf(html) < 200) {
+    // The main document yielded little — check same-origin iframes (paper
+    // viewers / embeds) before giving up.
+    const frame = extractFromSameOriginIframes(textLenOf(html));
+    if (frame.html) html = frame.html;
   }
-  if (!html) {
-    const text = document.body?.innerText?.trim() || '';
-    if (!text) {
-      throw new Error('Page has no extractable text');
-    }
-    html = `<p>${escapeHtml(text).replace(/\n\n+/g, '</p><p>').replace(/\n/g, '<br>')}</p>`;
+  if (!html.trim()) {
+    throw new Error('Page has no extractable text');
   }
 
   html = stripHeadingPermalinkHtml(html);
@@ -266,11 +332,12 @@ export async function clipCurrentDocument(overrideSourceUrl?: string): Promise<C
     );
   }
   if (!markdownBody) {
-    const text = document.body?.innerText?.trim() || '';
+    const text = visibleBodyText(document).trim();
     markdownBody = text || `_(No extractable content from ${sourceUrl})_`;
   }
   markdownBody = stripHeadingPermalinkMarkdown(markdownBody);
   markdownBody = restoreMermaidFences(markdownBody, mermaidSources);
+  const title = titleHint;
   if (!/^#\s/m.test(markdownBody)) {
     markdownBody = `# ${title}\n\n${markdownBody}`;
   }
@@ -292,13 +359,13 @@ const MAIN_CONTENT_SELECTOR =
   'article, main, [role="main"], .post, .entry-content, .article-content, .content, ' +
   '.overview, .paper, .paper-content, .discussion, .reading-content, .doc-content, .markdown-body';
 
-/** Layout-independent text length (scripts/styles stripped by chrome filter). */
+/** Layout-independent text length (shadow-aware; scripts/styles skipped). */
 function textLenOf(el: Element | string | null | undefined): number {
   if (!el) return 0;
   if (typeof el === 'string') {
     return el.replace(/\s+/g, ' ').trim().length;
   }
-  return (el.textContent || '').replace(/\s+/g, ' ').trim().length;
+  return deepText(el).replace(/\s+/g, ' ').trim().length;
 }
 
 /**
