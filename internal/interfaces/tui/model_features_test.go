@@ -724,19 +724,44 @@ func TestModel_FilterOptionsPanelCtrlOAndStatusBar(t *testing.T) {
 		t.Fatal("esc closed the input too")
 	}
 
-	// Exact + case matching: "alpha" must NOT match "Alpha" (case), and exact
-	// "alpha" must not match "alpha.md" via substring.
-	model.input.SetValue("alpha")
-	model.inputMode = inputModeSearch
+	// Whole-word semantics (the user's example): "rust" must NOT select the
+	// doc whose title contains "Trust", but MUST select the one with a
+	// standalone "Rust" word.
+	model.items = documentItems([]membox.DocumentView{
+		{ID: "019fbe56-64c3-7e3c-861d-000000000001", Title: "Proof-or-Stop: Don't Trust the Agent", Path: "/tmp/proof-or-stop-trust-the-agent.md", RelativePath: "proof-or-stop-trust-the-agent.md"},
+		{ID: "019fbe56-64c3-7e3c-861d-000000000002", Title: "The Rust I Wanted Had No Future", Path: "/tmp/the-rust-i-wanted-had-no-future.md", RelativePath: "the-rust-i-wanted-had-no-future.md"},
+	})
+	model.filterExact, model.filterCase = true, false
+	model.input.SetValue("rust")
 	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(Model)
-	if len(model.textFilters) != 1 || !model.textFilters[0].Exact || !model.textFilters[0].Case {
+	if len(model.textFilters) != 1 || !model.textFilters[0].Exact || model.textFilters[0].Case {
 		t.Fatalf("committed filter did not freeze semantics: %+v", model.textFilters)
 	}
-	if !strings.Contains(model.inputView(), "N=c: alpha") {
-		t.Fatalf("tag does not encode exact+case: %q", model.inputView())
+	if !strings.Contains(model.inputView(), "N=: rust") {
+		t.Fatalf("tag does not encode word mode: %q", model.inputView())
 	}
+	if len(model.filtered) != 1 || !strings.Contains(model.filtered[0].document.Title, "Rust I Wanted") {
+		t.Fatalf("word match selected wrong docs: %+v", model.filtered)
+	}
+
+	// Substring mode selects both (Trust contains rust).
+	model.textFilters = nil
+	model.filterExact = false
+	model.input.SetValue("rust")
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if len(model.filtered) != 2 {
+		t.Fatalf("contains mode should select both docs: %+v", model.filtered)
+	}
+
+	// Word + case-sensitive: "RUST" matches neither (title has Rust, slug rust).
+	model.textFilters = nil
+	model.filterExact, model.filterCase = true, true
+	model.input.SetValue("RUST")
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
 	if len(model.filtered) != 0 {
-		t.Fatalf("exact+case alpha matched documents: %+v", model.filtered)
+		t.Fatalf("word+case RUST should match nothing: %+v", model.filtered)
 	}
 }

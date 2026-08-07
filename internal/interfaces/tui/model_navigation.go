@@ -782,23 +782,61 @@ func matchesTextFilters(title, filename, match string, filters []textFilter) boo
 	return true
 }
 
-// matchNameFilter applies one name-mode filter. Exact (全匹配) compares the
-// whole title/filename/path, not a substring; Case keeps the original casing.
+// matchNameFilter applies one name-mode filter. Word (全匹配) requires the
+// query to occur as a whole word (word chars = [A-Za-z0-9_]; CJK and
+// punctuation act as boundaries, so Chinese substrings still match):
+// "rust" hits "The Rust I Wanted…" but not the "Trust" inside
+// "Don't Trust the Agent". Case keeps the original casing.
 func matchNameFilter(title, filename, match string, filter textFilter) bool {
 	query := strings.TrimSpace(filter.Value)
 	if query == "" {
 		return true
 	}
 	if filter.Exact {
-		if filter.Case {
-			return title == query || filename == query || match == query
+		// Every query word must appear as a whole word somewhere in the
+		// title/path/filename/status/id haystack (space-joined as `match`).
+		for _, word := range strings.Fields(query) {
+			if !wholeWordMatch(match, word, filter.Case) {
+				return false
+			}
 		}
-		return strings.EqualFold(title, query) || strings.EqualFold(filename, query) || strings.EqualFold(match, query)
+		return true
 	}
 	if filter.Case {
 		return wordsMatchCase(title, query) || wordsMatchCase(filename, query) || wordsMatchCase(match, query)
 	}
 	return wordsMatch(title+" "+filename+" "+match, strings.ToLower(query))
+}
+
+func isWordChar(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_'
+}
+
+// wholeWordMatch reports whether needle occurs in haystack as a whole word:
+// the characters right before and after the occurrence must not be word chars.
+// CJK bytes are never word chars, so Chinese runs behave as boundaries and
+// CJK substrings match whole-word style (no spaces to split on).
+func wholeWordMatch(haystack, needle string, caseSensitive bool) bool {
+	if needle == "" {
+		return true
+	}
+	if !caseSensitive {
+		haystack = strings.ToLower(haystack)
+		needle = strings.ToLower(needle)
+	}
+	for i := 0; ; {
+		j := strings.Index(haystack[i:], needle)
+		if j < 0 {
+			return false
+		}
+		pos := i + j
+		before := pos == 0 || !isWordChar(rune(haystack[pos-1]))
+		after := pos+len(needle) >= len(haystack) || !isWordChar(rune(haystack[pos+len(needle)]))
+		if before && after {
+			return true
+		}
+		i = pos + 1
+	}
 }
 
 func wordsMatch(value, query string) bool {

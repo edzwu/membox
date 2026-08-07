@@ -82,7 +82,7 @@ type textFilter struct {
 	Value    string
 	Mode     string
 	Sequence uint64
-	Exact    bool // 全匹配: true = title/filename 精确全等
+	Exact    bool // 全匹配: true = 整词匹配（词边界，非子串）
 	Case     bool // 区分大小写
 }
 

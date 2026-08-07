@@ -95,14 +95,14 @@ func (m Model) filterOptionsView() string {
 	width := max(10, m.width-2)
 	border := lipgloss.NewStyle().Width(width).MaxWidth(width).Border(lipgloss.NormalBorder(), true, false, false, false).BorderForeground(colors.BorderAccent)
 	rows := [][2]string{
-		{"match", "contains"}, // label, off-option (on = exact)
+		{"match", "contains"}, // label, off-option (on = whole word)
 		{"case", "ignore"},    // label, off-option (on = sensitive)
 	}
 	lines := []string{accentStyle.Render("filter options")}
 	for index, row := range rows {
 		label := fitWidth(row[0], 10)
 		options := []string{}
-		onValue, offValue := "exact", row[1]
+		onValue, offValue := "word", row[1]
 		if index == 1 {
 			onValue = "sensitive"
 		}
