@@ -589,31 +589,46 @@ func (m Model) effectiveNameFilters() []textFilter {
 	return filters
 }
 
-func (m Model) fullTextFilterQuery() string {
+// fullTextFilter returns the combined content-search query plus whether every
+// contributing filter wants exact (whole-token) matching. Committed filters
+// freeze their own semantics; the live draft follows the options panel.
+func (m Model) fullTextFilter() (string, bool) {
 	queries := make([]string, 0, len(m.textFilters)+1)
+	exact := true
 	for _, filter := range m.textFilters {
 		if filter.Mode == searchModeFull {
 			queries = append(queries, filter.Value)
+			if !filter.Exact {
+				exact = false
+			}
 		}
 	}
 	if m.inputVisible && m.searchMode == searchModeFull {
 		if draft := textFilterQuery(m.input.Value()); draft != "" {
 			queries = append(queries, draft)
+			if !m.filterExact {
+				exact = false
+			}
 		}
 	}
-	return strings.Join(queries, " ")
+	return strings.Join(queries, " "), exact
+}
+
+func (m Model) fullTextFilterQuery() string {
+	query, _ := m.fullTextFilter()
+	return query
 }
 
 func (m *Model) filterChanged(inputCommand tea.Cmd) tea.Cmd {
 	m.filterErr = nil
 	m.applyPreviewContent()
-	if query := m.fullTextFilterQuery(); query != "" {
+	if query, exact := m.fullTextFilter(); query != "" {
 		m.loading = true
-		commands := []tea.Cmd{inputCommand, m.spinner.Tick, searchDocumentsCmd(m.ctx, m.app, query)}
+		commands := []tea.Cmd{inputCommand, m.spinner.Tick, searchDocumentsCmd(m.ctx, m.app, query, exact)}
 		// The visible thread filters by the same full-text query: body hits
 		// arrive via threadSearchMsg and intersect the linked cards.
 		if m.graphFocusID != "" {
-			commands = append(commands, m.threadSearchCmd(query))
+			commands = append(commands, m.threadSearchCmd(query, exact))
 		}
 		return tea.Batch(commands...)
 	}
@@ -859,10 +874,10 @@ func wordsMatchCase(value, query string) bool {
 	return true
 }
 
-func searchDocumentsCmd(ctx context.Context, app App, query string) tea.Cmd {
+func searchDocumentsCmd(ctx context.Context, app App, query string, exact bool) tea.Cmd {
 	return func() tea.Msg {
-		results, err := app.SearchDocuments(ctx, membox.SearchDocumentsQuery{Query: query, Limit: 100})
-		return searchMsg{query: strings.TrimSpace(query), results: results, err: err}
+		results, err := app.SearchDocuments(ctx, membox.SearchDocumentsQuery{Query: query, Limit: 100, Exact: exact})
+		return searchMsg{query: strings.TrimSpace(query), exact: exact, results: results, err: err}
 	}
 }
 func listDocumentsCmd(ctx context.Context, app App, sequence uint64) tea.Cmd {

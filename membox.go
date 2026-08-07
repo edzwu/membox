@@ -323,6 +323,9 @@ func (b *Box) ScanPaths(ctx context.Context, command ScanPathsCommand) (ScanRepo
 type SearchDocumentsQuery struct {
 	Query string
 	Limit int
+	// Exact forces whole-token matching in the FTS query (no prefix
+	// wildcard): "wal" then no longer hits "wall"/"wallet".
+	Exact bool
 }
 type SearchResult struct {
 	DocumentID string `json:"document_id"`
@@ -332,7 +335,7 @@ type SearchResult struct {
 }
 
 func (b *Box) SearchDocuments(ctx context.Context, query SearchDocumentsQuery) ([]SearchResult, error) {
-	hits, err := b.service.Search(ctx, query.Query, query.Limit)
+	hits, err := b.service.Search(ctx, query.Query, query.Limit, query.Exact)
 	if err != nil {
 		return nil, err
 	}

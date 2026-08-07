@@ -201,6 +201,7 @@ type Model struct {
 
 type searchMsg struct {
 	query   string
+	exact   bool
 	results []membox.SearchResult
 	err     error
 }
@@ -450,7 +451,7 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.clearExecutedCommand()
 		}
 	case searchMsg:
-		if m.fullTextFilterQuery() == msg.query {
+		if query, exact := m.fullTextFilter(); query == msg.query && exact == msg.exact {
 			m.loading, m.err = false, msg.err
 			if msg.err == nil {
 				m.filtered = searchResultItems(m.items, msg.results, m.dateFilters, m.effectiveNameFilters(), m.hideNotes)
@@ -472,9 +473,9 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				m.items = documentItems(msg.documents)
 				m.refreshFilter()
 				m.restoreSelection(previousID)
-				if query := m.fullTextFilterQuery(); query != "" {
+				if query, exact := m.fullTextFilter(); query != "" {
 					m.loading = true
-					commands = append(commands, m.spinner.Tick, searchDocumentsCmd(m.ctx, m.app, query))
+					commands = append(commands, m.spinner.Tick, searchDocumentsCmd(m.ctx, m.app, query, exact))
 				} else {
 					commands = append(commands, m.loadPreview())
 				}
@@ -601,8 +602,8 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.graphSearchQuery, m.graphSearchHits = "", nil
 			// An already-active full-text filter applies to the fresh thread too.
-			if query := m.fullTextFilterQuery(); query != "" {
-				commands = append(commands, m.threadSearchCmd(query))
+			if query, exact := m.fullTextFilter(); query != "" {
+				commands = append(commands, m.threadSearchCmd(query, exact))
 			}
 		}
 		m.clearExecutedCommand()

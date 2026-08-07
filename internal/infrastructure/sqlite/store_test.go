@@ -106,3 +106,38 @@ CREATE TABLE graph_edges (
 		t.Fatal("legacy graph_nodes table still exists")
 	}
 }
+
+func TestSearchExactSkipsPrefixMatches(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "membox.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err := store.db.Exec(`
+INSERT INTO paths(id,root_path,created_at,status,last_error) VALUES(1,'/notes',1,'ready','');
+INSERT INTO documents(id,created_at,updated_at,pinned) VALUES('wal-doc',1,1,0),('wall-doc',1,1,0);
+INSERT INTO document_locations(document_id,path_id,relative_path,file_key,status,last_seen_at) VALUES
+  ('wal-doc',1,'wal.md','w','active',1),('wall-doc',1,'wall.md','wl','active',1);
+INSERT INTO document_index(document_id,title,mtime,size,sha256,indexed_at,source_created_at,source_updated_at) VALUES
+  ('wal-doc','Wal',0,0,'',1,1,1),('wall-doc','Wall',0,0,'',1,1,1);
+INSERT INTO document_fts(document_id,title,path,body) VALUES
+  ('wal-doc','Wal','/notes/wal.md','wal'),
+  ('wall-doc','Wall','/notes/wall.md','wall');`); err != nil {
+		t.Fatal(err)
+	}
+
+	prefix, err := store.Search(context.Background(), "wal", 20, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prefix) != 2 {
+		t.Fatalf("prefix search should hit wal AND wall: %+v", prefix)
+	}
+	exact, err := store.Search(context.Background(), "wal", 20, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(exact) != 1 || exact[0].DocumentID != "wal-doc" {
+		t.Fatalf("exact search should hit only wal: %+v", exact)
+	}
+}

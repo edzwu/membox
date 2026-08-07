@@ -262,11 +262,11 @@ func (m *Model) scrollGraphToSelection() {
 // threadSearchCmd runs the full-text query against the index so the thread
 // tree can filter cards by body content — the same FTS path the document list
 // uses. Name-mode filters never need it.
-func (m *Model) threadSearchCmd(query string) tea.Cmd {
+func (m *Model) threadSearchCmd(query string, exact bool) tea.Cmd {
 	m.graphSearchSequence++
 	sequence := m.graphSearchSequence
 	return func() tea.Msg {
-		results, err := m.app.SearchDocuments(m.ctx, membox.SearchDocumentsQuery{Query: query, Limit: 100})
+		results, err := m.app.SearchDocuments(m.ctx, membox.SearchDocumentsQuery{Query: query, Limit: 100, Exact: exact})
 		return threadSearchMsg{query: query, sequence: sequence, results: results, err: err}
 	}
 }

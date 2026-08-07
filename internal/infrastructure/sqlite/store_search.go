@@ -10,8 +10,8 @@ import (
 	"membox/internal/domain/catalog"
 )
 
-func (s *Store) Search(ctx context.Context, query string, limit int) ([]port.SearchHit, error) {
-	ftsQuery := plainFTSQuery(query)
+func (s *Store) Search(ctx context.Context, query string, limit int, exact bool) ([]port.SearchHit, error) {
+	ftsQuery := plainFTSQuery(query, exact)
 	if ftsQuery == "" {
 		return nil, errors.New("search query is required")
 	}
@@ -71,13 +71,20 @@ LIMIT ?`, query, limit)
 	return hits, rows.Err()
 }
 
-func plainFTSQuery(query string) string {
+func plainFTSQuery(query string, exact bool) string {
 	fields := strings.Fields(query)
 	parts := make([]string, 0, len(fields))
 	for _, field := range fields {
 		field = strings.ReplaceAll(field, `"`, `""`)
 		if field != "" {
-			parts = append(parts, `"`+field+`"*`)
+			// Prefix wildcard by default ("wal" hits "wall") for forgiving
+			// content search; exact matching quotes the token with no `*` so
+			// whole-token hits only ("wal" then excludes "wall").
+			if exact {
+				parts = append(parts, `"`+field+`"`)
+			} else {
+				parts = append(parts, `"`+field+`"*`)
+			}
 		}
 	}
 	return strings.Join(parts, " ")

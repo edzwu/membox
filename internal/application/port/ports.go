@@ -176,7 +176,7 @@ type CatalogStore interface {
 	GetDocumentReadState(ctx context.Context, documentID catalog.DocumentID) (DocumentReadState, bool, error)
 	ListRecentDocuments(ctx context.Context, limit int) ([]RecentDocument, error)
 	ListRecentlyModifiedDocuments(ctx context.Context, limit int) ([]ModifiedDocument, error)
-	Search(ctx context.Context, query string, limit int) ([]SearchHit, error)
+	Search(ctx context.Context, query string, limit int, exact bool) ([]SearchHit, error)
 	SuggestDocuments(ctx context.Context, query string, limit int) ([]SearchHit, error)
 	ListDocuments(ctx context.Context, limit int, includeUnavailable bool) ([]DocumentRecord, error)
 	ResolveDocument(ctx context.Context, selector string) (*catalog.Document, string, error)

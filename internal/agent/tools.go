@@ -118,7 +118,7 @@ func (t *ServiceDocumentTools) SearchDocuments(ctx context.Context, query string
 	if limit > 50 {
 		limit = 50
 	}
-	hits, err := t.Service.Search(ctx, query, limit)
+	hits, err := t.Service.Search(ctx, query, limit, false)
 	if err != nil {
 		return nil, err
 	}

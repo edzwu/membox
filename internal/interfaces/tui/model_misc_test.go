@@ -488,7 +488,7 @@ func TestModel_ThreadViewFullModeFiltersByBody(t *testing.T) {
 		t.Fatalf("pending full search should keep all cards visible: %v", indices)
 	}
 
-	message := model.threadSearchCmd(model.fullTextFilterQuery())()
+	message := model.threadSearchCmd(model.fullTextFilterQuery(), model.filterExact)()
 	updated, _ := model.Update(message)
 	model = updated.(Model)
 

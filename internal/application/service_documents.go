@@ -24,7 +24,7 @@ func (s *Service) ListDocuments(ctx context.Context, limit int, includeUnavailab
 	return s.store.ListDocuments(ctx, limit, includeUnavailable)
 }
 
-func (s *Service) Search(ctx context.Context, query string, limit int) ([]port.SearchHit, error) {
+func (s *Service) Search(ctx context.Context, query string, limit int, exact bool) ([]port.SearchHit, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return nil, errors.New("search query is required")
@@ -35,7 +35,7 @@ func (s *Service) Search(ctx context.Context, query string, limit int) ([]port.S
 	if limit > 1000 {
 		return nil, errors.New("search limit cannot exceed 1000")
 	}
-	return s.store.Search(ctx, query, limit)
+	return s.store.Search(ctx, query, limit, exact)
 }
 
 // SuggestDocuments finds active documents by UUID, title, or path substring.
