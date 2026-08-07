@@ -17,9 +17,15 @@ export function preprocessMath(text) {
   // Additionally, code blocks and inline code are protected so that the math
   // rules do not touch them. During protection, escaped parens used as array
   // indices (e.g. Q\(q_block\)) are normalized to square brackets (Q[q_block]).
-  const hasMathMarker = (s) => /\\[a-zA-Z]/.test(s) || /[a-zA-Z][_^]/.test(s);
+  // Internal protection placeholders (__MIRU_LINK_0__ etc.) look like LaTeX
+  // subscripts (letter + underscore) and must never count as math markers —
+  // otherwise a parenthesized prose group containing a protected link gets
+  // wrapped in \(...\) and KaTeX swallows the hyperlinks (the MCP blog's
+  // "No handshake or sessions" section rendered SEP-2575 as math glyphs).
+  const stripPlaceholders = (s) => s.replace(/__MIRU_[A-Z]+_\d+__/g, '');
+  const hasMathMarker = (s) => /\\[a-zA-Z]/.test(stripPlaceholders(s)) || /[a-zA-Z][_^]/.test(stripPlaceholders(s));
   const looksLikeParenMath = (s) => {
-    const value = s.trim();
+    const value = stripPlaceholders(s.trim());
     if (!value || value.length > 80) return false;
     if (/\\[a-zA-Z]/.test(value) || /[a-zA-Z][_^]/.test(value)) return true;
     if (/^[a-zA-Z]$/.test(value)) return true;
