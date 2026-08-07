@@ -200,6 +200,50 @@ func TestModel_ThreadTreeWalkKeepsRootAfterOpen(t *testing.T) {
 	}
 }
 
+func TestModel_ReindexAfterEditRefreshesFileList(t *testing.T) {
+	// After vim wq (note new / e-edit), reindex success must refresh both the
+	// preview and the document tree so the new/edited file shows up directly.
+	app := &fakeApp{}
+	model := New(context.Background(), app, fakeLauncher{})
+	model.width, model.height = 100, 24
+
+	updated, command := model.Update(reindexMsg{err: nil})
+	model = updated.(Model)
+	if command == nil {
+		t.Fatal("reindex success should schedule preview + list reload")
+	}
+	var scheduled []tea.Cmd
+	if message := command(); message != nil {
+		if batch, ok := message.(tea.BatchMsg); ok {
+			scheduled = batch
+		}
+	}
+	if len(scheduled) == 0 {
+		scheduled = []tea.Cmd{command}
+	}
+	var docs documentsMsg
+	for _, cmd := range scheduled {
+		if cmd == nil {
+			continue
+		}
+		msg := cmd()
+		if d, ok := msg.(documentsMsg); ok {
+			docs = d
+		}
+	}
+	if docs.err != nil {
+		t.Fatal(docs.err)
+	}
+	updated, _ = model.Update(docs)
+	model = updated.(Model)
+	if len(model.items) != 2 {
+		t.Fatalf("tree not refreshed after edit: %d items", len(model.items))
+	}
+	if model.items[0].document.ID != "019-alpha" {
+		t.Fatalf("unexpected tree contents after refresh: %q", model.items[0].document.ID)
+	}
+}
+
 func TestModel_HideNotesFiltersClippedNotes(t *testing.T) {
 	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
 	model.width, model.height = 120, 24

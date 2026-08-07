@@ -511,7 +511,9 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case reindexMsg:
 		m.loading, m.err = false, msg.err
 		if msg.err == nil {
-			commands = append(commands, m.loadPreview())
+			// Refresh both the preview and the tree so edits made in the editor
+			// (new note via vim wq, or e-edit) are reflected in the file list.
+			commands = append(commands, m.loadPreview(), listDocumentsCmd(m.ctx, m.app, m.listSequence))
 		}
 	case pinMsg:
 		m.loading, m.err = false, msg.err
@@ -540,8 +542,10 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusMessage = shortID(msg.document.ID) + " " + filepath.Base(msg.document.Path)
 			m.clearExecutedCommand()
 			if msg.command != nil {
+				// The note is opened in the editor (vim), not a viewer: on wq the
+				// standard edit-completion path runs (reindex + list refresh).
 				return m, tea.ExecProcess(msg.command, func(err error) tea.Msg {
-					return editorDoneMsg{selector: msg.document.ID, viewer: true, err: err}
+					return editorDoneMsg{selector: msg.document.ID, viewer: false, err: err}
 				})
 			}
 		}
