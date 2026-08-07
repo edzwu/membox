@@ -665,19 +665,13 @@ function stripWeChatPromo(markdown: string): string {
 }
 
 /**
- * Normalize the extracted article fragment to a real document outline.
+ * Page clip = one article: sole h1 is the page title; body sections are h2+.
  *
- * Model: one clipped page = one article document.
- *   - Sole h1 comes from the page title (added after turndown).
- *   - Body headings are sections/subsections → start at h2.
- *
- * Many CMS skins (WeChat mdnice, some blog themes) paint every section as
- * <h1> for visual weight. Trusting those tags yields N document titles and
- * a broken outline. Fix at the HTML layer (before turndown), not by rewriting
- * Markdown after the fact:
- *   1. Drop a leading heading that only repeats the page title.
- *   2. Shift ranks so the shallowest remaining heading becomes h2.
- *   3. Unwrap presentational <strong>/<b> that wrap an entire heading.
+ * Keep it simple (MarkSnip-style cleanup, no outline algebra):
+ *   1. Drop display:none debris (mdnice leaves hidden <span>unset</span>).
+ *   2. Drop a leading heading that only repeats the page title.
+ *   3. Rename every remaining <h1> → <h2> (CMS paint, not document rank).
+ *   4. Unwrap span/strong shells around heading text.
  */
 function normalizeArticleHeadingOutline(html: string, pageTitle: string): string {
   if (!html.trim()) return html;
@@ -688,42 +682,32 @@ function normalizeArticleHeadingOutline(html: string, pageTitle: string): string
   const root = doc.getElementById('mbx-root');
   if (!root) return html;
 
-  const headings = () =>
-    Array.from(root.querySelectorAll('h1,h2,h3,h4,h5,h6')) as HTMLElement[];
-
-  // 1. Leading heading that restates the page title is not a section.
-  const first = headings()[0];
-  if (first && headingTextEqualsTitle(first, pageTitle)) {
-    first.remove();
+  // 1. Hidden nodes must not become Markdown text.
+  for (const el of Array.from(root.querySelectorAll('*'))) {
+    if (isHiddenElement(el)) el.remove();
   }
 
-  const list = headings();
-  if (!list.length) return root.innerHTML;
+  const headings = Array.from(
+    root.querySelectorAll('h1,h2,h3,h4,h5,h6'),
+  ) as HTMLElement[];
 
-  // 2. Compact ranks under the document title: shallowest body level → h2.
-  const min = Math.min(...list.map((h) => headingLevel(h)));
-  const shift = 2 - min; // min=1 → +1; min=2 → 0; min=3 → -1 (pull up to h2)
-  for (const h of list) {
+  // 2. Leading title duplicate.
+  if (headings[0] && headingTextEqualsTitle(headings[0], pageTitle)) {
+    headings[0].remove();
+    headings.shift();
+  }
+
+  // 3–4. Body h1 → h2; unwrap paint wrappers.
+  for (const h of headings) {
+    if (!h.isConnected) continue;
     unwrapHeadingEmphasis(h);
-    const next = clampHeadingLevel(headingLevel(h) + shift);
-    if (next === headingLevel(h)) continue;
-    const repl = doc.createElement(`h${next}`);
-    while (h.firstChild) repl.appendChild(h.firstChild);
-    for (const attr of Array.from(h.attributes)) {
-      repl.setAttribute(attr.name, attr.value);
-    }
-    h.replaceWith(repl);
+    if (h.tagName !== 'H1') continue;
+    const h2 = doc.createElement('h2');
+    while (h.firstChild) h2.appendChild(h.firstChild);
+    h.replaceWith(h2);
   }
 
   return root.innerHTML;
-}
-
-function headingLevel(el: Element): number {
-  return Number(el.tagName[1]) || 6;
-}
-
-function clampHeadingLevel(n: number): number {
-  return Math.min(6, Math.max(2, n)); // body outline never uses h1
 }
 
 function normHeadingText(s: string): string {
@@ -737,9 +721,8 @@ function headingTextEqualsTitle(el: Element, title: string): boolean {
   return a === b || a.includes(b) || b.includes(a);
 }
 
-/** mdnice wraps titles in span/strong for paint — the heading tag already carries rank. */
+/** Peel span/strong/b/font wrappers mdnice puts around heading text. */
 function unwrapHeadingEmphasis(h: HTMLElement): void {
-  // Peel single-child presentational wrappers (span/strong/b/font) until real content.
   while (h.children.length === 1 && h.childNodes.length === 1) {
     const inner = h.firstElementChild!;
     if (!/^(STRONG|B|SPAN|FONT)$/.test(inner.tagName)) break;
