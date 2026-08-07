@@ -94,13 +94,14 @@ func (s *Service) CreateNote(ctx context.Context, opts CreateNoteOptions) (Creat
 	if err := s.writer.WriteNew(ctx, absolute, body); err != nil {
 		return CreateNoteResult{}, err
 	}
-	report, err := s.scanOne(ctx, indexedPath)
+	_, err = s.scanOne(ctx, indexedPath)
 	if err != nil {
 		return CreateNoteResult{}, err
 	}
-	if report.Added == 0 {
-		return CreateNoteResult{}, fmt.Errorf("created note %q was not indexed", absolute)
-	}
+	// The note is verified by path below, not by the scan's add/update split:
+	// when the file already existed in the catalog (e.g. deleted externally and
+	// recreated, or a rename matched it), the scan reports Updated instead of
+	// Added — the note is still correctly indexed.
 	relative, err := filepath.Rel(indexedPath.Root, absolute)
 	if err != nil {
 		return CreateNoteResult{}, err
