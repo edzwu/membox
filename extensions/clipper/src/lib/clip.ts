@@ -235,23 +235,35 @@ async function fetchRawDocument(): Promise<Document | null> {
   return null;
 }
 
-/** Give lazy-loaded pages (WeChat bodies, infinite-scroll feeds) up to ms to
- *  settle: wait while the visible body text is still growing. */
-async function waitForBodySettle(ms: number): Promise<void> {
+/** Wait for the page body to fill in, up to ms. Lazy-loaded pages (WeChat
+ *  bodies) may need a scroll to trigger loading; scroll once if the content
+ *  is stable but still tiny. Returns the visible text length reached. */
+async function waitForBodySettle(ms: number, minChars = 2000): Promise<number> {
   const deadline = Date.now() + ms;
   let last = -1;
   let stable = 0;
+  let scrolled = false;
   while (Date.now() < deadline) {
     const len = (document.body as HTMLElement | null)?.innerText?.length ?? 0;
+    if (len >= minChars) return len;
     if (len === last) {
       stable++;
-      if (stable >= 2) return; // two consecutive identical reads = settled
+      if (stable >= 3) {
+        if (!scrolled) {
+          scrolled = true;
+          window.scrollTo(0, document.body.scrollHeight); // trigger lazy load
+          window.scrollTo(0, 0);
+        } else {
+          return len;
+        }
+      }
     } else {
       stable = 0;
       last = len;
     }
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await new Promise((resolve) => setTimeout(resolve, 300));
   }
+  return (document.body as HTMLElement | null)?.innerText?.length ?? 0;
 }
 
 /**
@@ -330,10 +342,14 @@ export async function clipCurrentDocument(overrideSourceUrl?: string): Promise<C
   // exists after client-side rendering (alphaxiv etc.).
   const liveDoc = document;
   const rawDoc = await fetchRawDocument();
-  // Lazy-loaded pages (WeChat bodies) may still be filling in — give them a
-  // moment so the live DOM competes fairly with the raw copy.
-  await waitForBodySettle(1500);
+  // Lazy-loaded pages (WeChat bodies) may still be filling in — wait up to 5s,
+  // scrolling once to trigger lazy load, so the live DOM competes fairly.
+  const liveChars = await waitForBodySettle(5000, 2000);
   const doc = pickBestDocument(rawDoc, liveDoc);
+  console.debug('[membox-clip] raw fetched:', !!rawDoc,
+    '| live body chars:', liveChars,
+    '| raw score:', rawDoc ? contentScore(rawDoc) : 0,
+    '| live score:', contentScore(liveDoc));
   if (!doc.body) {
     const body = doc.createElement('body');
     body.innerHTML = document.body?.innerHTML || titleHint;
@@ -347,13 +363,15 @@ export async function clipCurrentDocument(overrideSourceUrl?: string): Promise<C
 
   const turndown = makeTurndown();
   let html = extractMainHtml(doc);
+  console.debug('[membox-clip] extracted html chars:', textLenOf(html));
   if (textLenOf(html) < 800) {
     // Suspiciously little content: the page may still be lazy-loading its
-    // body (WeChat). Wait a beat, let the live DOM settle, then re-extract
-    // from whichever document now has more content.
-    await waitForBodySettle(2000);
+    // body (WeChat). Wait a beat (with a scroll to trigger lazy load), let the
+    // live DOM settle, then re-extract from whichever document has more.
+    await waitForBodySettle(5000, 2000);
     const retryDoc = pickBestDocument(rawDoc, document);
     const retryHtml = extractMainHtml(retryDoc);
+    console.debug('[membox-clip] retry extracted chars:', textLenOf(retryHtml));
     if (textLenOf(retryHtml) > textLenOf(html)) {
       html = retryHtml;
     }
@@ -395,6 +413,7 @@ export async function clipCurrentDocument(overrideSourceUrl?: string): Promise<C
     sourceUrl,
     clipMode: 'page',
     body: buildMarkdown(title, sourceUrl, markdownBody, { clip_mode: 'page' }),
+    bodyLength: markdownBody.length,
   };
 }
 

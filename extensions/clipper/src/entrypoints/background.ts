@@ -74,6 +74,7 @@ async function ingestPayload(
       await ensurePageClip(settings, opts.tabId, payload.sourceUrl);
     }
     const result = await ingestClip(settings, payload, { overwrite: opts.overwrite });
+    if (payload.bodyLength != null) result.body_length = payload.bodyLength;
     const shouldOpen = opts.open && settings.autoOpen && result.view_url;
     if (shouldOpen) {
       await browser.tabs.create({ url: result.view_url });

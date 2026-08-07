@@ -150,7 +150,11 @@ clipBtn.addEventListener('click', async () => {
     }
     const { id, path, view_url: viewUrl, created, updated } = response.result;
     const action = updated ? 'Updated' : created === false ? 'Saved' : 'Created';
-    showMessage(`${action} ${String(id).slice(0, 8)}…\n${path}\n${viewUrl}`);
+    // Body size helps spot extraction problems (a header-only clip is short).
+    const bodyLen = response.result.body_length ?? 0;
+    showMessage(
+      `${action} ${String(id).slice(0, 8)}… · ${bodyLen.toLocaleString()} chars\n${path}\n${viewUrl}`,
+    );
     await refreshStatus();
   } catch (err) {
     showMessage(err instanceof Error ? err.message : String(err));

@@ -14,6 +14,8 @@ export type ClipPayload = {
   title: string;
   sourceUrl: string;
   body: string;
+  /** Length of the extracted Markdown body (debug/diagnostic). */
+  bodyLength?: number;
   /** "selection" | "page" — stored in membox document_sources */
   clipMode?: 'selection' | 'page';
   /** Raw selection text (pre-Markdown) used for annotation anchoring. */
@@ -26,6 +28,7 @@ export type IngestResult = {
   created: boolean;
   updated?: boolean;
   view_url: string;
+  body_length?: number;
   linked?: string;
   title?: string;
 };
