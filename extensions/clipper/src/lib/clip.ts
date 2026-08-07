@@ -172,8 +172,18 @@ export function readSelection(): {
   return { excerptText, excerptHTML, rect };
 }
 
+/** Estimated readable-text length of a body (rendered text incl. open shadow). */
+function bodyTextLength(body: HTMLElement | null): number {
+  return (body?.innerText || '').replace(/\s+/g, ' ').trim().length;
+}
+
 /** Prefer network HTML (pre-JS) so client-side mermaid init has not replaced
- *  ```mermaid sources with SVG yet. Falls back to a live DOM clone. */
+ *  ```mermaid sources with SVG yet. Falls back to a live DOM clone.
+ *
+ *  Client-rendered SPAs (React/Next/Vite…) ship a *shell*: the raw HTML has
+ *  only nav text, while the real content exists in the live DOM. When the raw
+ *  body is much smaller than the live one, use the live DOM so we never clip
+ *  an empty root or a “Sign In” page. */
 async function loadDocumentForClip(): Promise<Document> {
   try {
     const response = await fetch(location.href, {
@@ -184,7 +194,14 @@ async function loadDocumentForClip(): Promise<Document> {
       const text = await response.text();
       if (text && /<html[\s>]/i.test(text)) {
         const parsed = new DOMParser().parseFromString(text, 'text/html');
-        if (parsed.body) return parsed;
+        if (parsed.body) {
+          const raw = bodyTextLength(parsed.body);
+          const live = bodyTextLength(document.body);
+          if (live > 200 && raw < live * 0.5) {
+            return document.cloneNode(true) as Document;
+          }
+          return parsed;
+        }
       }
     }
   } catch {
