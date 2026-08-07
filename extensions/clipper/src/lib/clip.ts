@@ -383,6 +383,7 @@ export async function clipCurrentDocument(overrideSourceUrl?: string): Promise<C
     markdownBody = text || `_(No extractable content from ${sourceUrl})_`;
   }
   markdownBody = stripHeadingPermalinkMarkdown(markdownBody);
+  markdownBody = stripWeChatPromo(markdownBody);
   markdownBody = restoreMermaidFences(markdownBody, mermaidSources);
   const title = titleHint;
   if (!/^#\s/m.test(markdownBody)) {
@@ -595,5 +596,13 @@ function stripHeadingPermalinkMarkdown(markdown: string): string {
   return markdown.replace(
     /^(#{1,6}[ \t].+?)\s*\[Permalink\]\([^)]*\)/gim,
     '$1',
+  );
+}
+
+/** Remove WeChat's in-article "read in the novel reader" promo block. */
+function stripWeChatPromo(markdown: string): string {
+  return markdown.replace(
+    /^在小说阅读器读本章\s*[\s\S]*?在小说阅读器中沉浸阅读\s*/m,
+    '',
   );
 }
