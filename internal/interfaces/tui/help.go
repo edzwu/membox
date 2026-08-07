@@ -42,7 +42,8 @@ func helpSections() []helpSection {
 		}},
 		{title: "Filter & commands", entries: []helpEntry{
 			{":", "palette: note new, rename, link list/graph …"},
-			{"tab", "in input: name ⇄ full-text search"},
+			{"tab", "in input: name ⇄ content search"},
+			{"ctrl+o", "in input: match options (exact · case)"},
 			{"ctrl+k", "agent input"},
 		}},
 		{title: "General", entries: []helpEntry{

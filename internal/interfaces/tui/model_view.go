@@ -87,6 +87,43 @@ func (m Model) deleteConfirmView() string {
 	return border.Render(content)
 }
 
+// filterOptionsView is the match-semantics panel opened with ctrl+o while the
+// filter input is focused: 全匹配 (contains ⇄ exact) and 大小写 (case).
+// Both are orthogonal to the name/content scope chip; the status bar segment
+// reflects them immediately.
+func (m Model) filterOptionsView() string {
+	width := max(10, m.width-2)
+	border := lipgloss.NewStyle().Width(width).MaxWidth(width).Border(lipgloss.NormalBorder(), true, false, false, false).BorderForeground(colors.BorderAccent)
+	rows := [][2]string{
+		{"match", "contains"}, // label, off-option (on = exact)
+		{"case", "ignore"},    // label, off-option (on = sensitive)
+	}
+	lines := []string{accentStyle.Render("filter options")}
+	for index, row := range rows {
+		label := fitWidth(row[0], 10)
+		options := []string{}
+		onValue, offValue := "exact", row[1]
+		if index == 1 {
+			onValue = "sensitive"
+		}
+		on := (index == 0 && m.filterExact) || (index == 1 && m.filterCase)
+		if on {
+			options = append(options, dimStyle.Render(" "+offValue+" "), accentStyle.Render("["+onValue+"]"))
+		} else {
+			options = append(options, accentStyle.Render("["+offValue+"]"), dimStyle.Render(" "+onValue+" "))
+		}
+		rowText := label + " " + strings.Join(options, "")
+		if index == m.filterOptionsSelected {
+			rowText = lipgloss.NewStyle().Foreground(colors.Accent).Background(colors.SelectedBG).Width(width).Inline(true).Render("> " + rowText)
+		} else {
+			rowText = lipgloss.NewStyle().Width(width).Inline(true).Render("  " + rowText)
+		}
+		lines = append(lines, rowText)
+	}
+	lines = append(lines, dimStyle.Render("↑↓ select • ←→ toggle • esc close"))
+	return border.Render(strings.Join(lines, "\n"))
+}
+
 // updateConfigPanel handles keys while the settings panel is open: ↑↓ selects
 // a row, ←→ cycles the value (saving immediately), esc/enter closes.
 func (m Model) configPanelView() string {
@@ -289,12 +326,12 @@ func (m Model) visibleGraphIndices() []int {
 		return nil
 	}
 	indices := []int{0}
-	nameQueries := m.nameTextFilterQueries()
+	nameFilters := m.effectiveNameFilters()
 	fullQuery := m.fullTextFilterQuery()
 	// Only apply body hits once they belong to the current query; before the
 	// async result arrives the thread keeps showing its cards.
 	fullReady := fullQuery != "" && m.graphSearchQuery == fullQuery && m.graphSearchHits != nil
-	if len(nameQueries) == 0 && len(m.dateFilters) == 0 && !fullReady {
+	if len(nameFilters) == 0 && len(m.dateFilters) == 0 && !fullReady {
 		for i := 1; i < len(m.graphCards); i++ {
 			indices = append(indices, i)
 		}
@@ -305,7 +342,7 @@ func (m Model) visibleGraphIndices() []int {
 			continue
 		}
 		candidate := documentItems([]membox.DocumentView{doc})[0]
-		if matchesTextFilters(candidate.match, nameQueries) && matchesDateFilters(doc, m.dateFilters) {
+		if matchesTextFilters(candidate.title, candidate.filename, candidate.match, nameFilters) && matchesDateFilters(doc, m.dateFilters) {
 			indices = append(indices, original+1)
 		}
 	}
@@ -599,11 +636,21 @@ func (m Model) tagsView() string {
 		tags = append(tags, renderedTag{sequence: filter.Sequence, value: style.Render(" " + filter.Label + " ")})
 	}
 	for _, filter := range m.textFilters {
-		mode := "N"
-		if filter.Mode == searchModeFull {
-			mode = "F"
+		// Scope: N = name, C = content (full-text). Match semantics ride on
+		// the name prefix: N= exact, Nc case-sensitive, N=c both.
+		switch filter.Mode {
+		case searchModeFull:
+			tags = append(tags, renderedTag{sequence: filter.Sequence, value: textStyle.Render(" C: " + filter.Value + " ")})
+		default:
+			prefix := "N"
+			if filter.Exact {
+				prefix += "="
+			}
+			if filter.Case {
+				prefix += "c"
+			}
+			tags = append(tags, renderedTag{sequence: filter.Sequence, value: textStyle.Render(" " + prefix + ": " + filter.Value + " ")})
 		}
-		tags = append(tags, renderedTag{sequence: filter.Sequence, value: textStyle.Render(" " + mode + ": " + filter.Value + " ")})
 	}
 	sort.SliceStable(tags, func(i, j int) bool { return tags[i].sequence < tags[j].sequence })
 	parts := make([]string, 0, len(tags))
@@ -622,6 +669,9 @@ func (m Model) inputView() string {
 	line := lipgloss.NewStyle().Width(innerWidth).MaxWidth(innerWidth).Inline(true).Render(badge + " " + field)
 	border := lipgloss.NewStyle().Width(innerWidth).MaxWidth(innerWidth).Border(lipgloss.NormalBorder(), true, false, false, false).BorderForeground(colors.BorderAccent)
 	input := border.Render(line)
+	if m.filterOptionsVisible {
+		return m.filterOptionsView() + "\n" + input
+	}
 	if menu := m.commandMenuView(); menu != "" {
 		return menu + "\n" + input
 	}
@@ -683,10 +733,23 @@ func (m Model) statusBar() string {
 				mode = "agent"
 			default:
 				if m.searchMode == searchModeFull {
-					mode = "full"
+					mode = "content"
 				}
 			}
-			right += accentStyle.Render(mode) + dimStyle.Render(fmt.Sprintf(" %d/%d", len(m.filtered), len(m.items)))
+			right += accentStyle.Render(mode)
+			// Match semantics (≈/=/Aa) are orthogonal to the scope chip; they
+			// get their own status-bar segment so toggling is always visible.
+			if m.inputMode == inputModeSearch && m.searchMode != searchModeFull {
+				if m.filterExact {
+					right += accentStyle.Render(" =")
+				} else {
+					right += dimStyle.Render(" ≈")
+				}
+				if m.filterCase {
+					right += accentStyle.Render(" Aa")
+				}
+			}
+			right += dimStyle.Render(fmt.Sprintf(" %d/%d", len(m.filtered), len(m.items)))
 			if m.cmdMenuVisible {
 				right += dimStyle.Render(fmt.Sprintf(" • %d suggestion(s)", len(m.cmdSuggestions)))
 			}
@@ -724,7 +787,7 @@ func (m Model) modeBadge() string {
 		foreground = lipgloss.AdaptiveColor{Dark: "#ffffff", Light: "#3c1f63"}
 	default:
 		if m.searchMode == searchModeFull {
-			mode = " FULL "
+			mode = " CONTENT "
 			background = lipgloss.AdaptiveColor{Dark: "#2f7d4a", Light: "#c9f0d8"}
 			foreground = lipgloss.AdaptiveColor{Dark: "#f4fff8", Light: "#173f26"}
 		}
@@ -738,7 +801,7 @@ func (m Model) hints() string {
 	return "? help"
 }
 
-func searchResultItems(items []item, results []membox.SearchResult, dateFilters []dateFilter, nameQueries []string, hideNotes bool) []item {
+func searchResultItems(items []item, results []membox.SearchResult, dateFilters []dateFilter, nameFilters []textFilter, hideNotes bool) []item {
 	allowed := make(map[string]bool, len(results))
 	for _, result := range results {
 		allowed[result.DocumentID] = true
@@ -748,7 +811,7 @@ func searchResultItems(items []item, results []membox.SearchResult, dateFilters 
 		if hideNotes && isClippedNote(candidate.filename) {
 			continue
 		}
-		if allowed[candidate.document.ID] && matchesDateFilters(candidate.document, dateFilters) && matchesTextFilters(candidate.match, nameQueries) {
+		if allowed[candidate.document.ID] && matchesDateFilters(candidate.document, dateFilters) && matchesTextFilters(candidate.title, candidate.filename, candidate.match, nameFilters) {
 			filtered = append(filtered, candidate)
 		}
 	}

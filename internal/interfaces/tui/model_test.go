@@ -766,7 +766,7 @@ func TestModel_NameAndFullTextTagsKeepTheirModesAndIntersect(t *testing.T) {
 	if len(model.textFilters) != 2 || model.textFilters[0].Mode != searchModeName || model.textFilters[1].Mode != searchModeFull {
 		t.Fatalf("text tag modes were not retained: %+v", model.textFilters)
 	}
-	if !strings.Contains(model.inputView(), "N: alpha") || !strings.Contains(model.inputView(), "F: flash attention") {
+	if !strings.Contains(model.inputView(), "N: alpha") || !strings.Contains(model.inputView(), "C: flash attention") {
 		t.Fatalf("mode labels missing from tags: %q", model.inputView())
 	}
 	updated, _ = model.Update(searchMsg{query: "flash attention", results: []membox.SearchResult{{DocumentID: "alpha"}, {DocumentID: "beta"}}})

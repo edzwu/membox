@@ -528,7 +528,13 @@ func (m *Model) commitTextFilter() bool {
 			return true
 		}
 	}
-	m.textFilters = append(m.textFilters, textFilter{Value: value, Mode: m.searchMode, Sequence: m.nextFilterSequence()})
+	m.textFilters = append(m.textFilters, textFilter{
+		Value:    value,
+		Mode:     m.searchMode,
+		Sequence: m.nextFilterSequence(),
+		Exact:    m.filterExact,
+		Case:     m.filterCase,
+	})
 	m.input.SetValue("")
 	return true
 }
@@ -559,19 +565,28 @@ func (m *Model) removeLastFilter() bool {
 	return true
 }
 
-func (m Model) nameTextFilterQueries() []string {
-	queries := make([]string, 0, len(m.textFilters)+1)
+// effectiveNameFilters returns the name-mode filters that should apply right
+// now: committed filters (semantics frozen at commit time) plus the live draft
+// (which follows the current match/case settings from the options panel).
+func (m Model) effectiveNameFilters() []textFilter {
+	filters := make([]textFilter, 0, len(m.textFilters)+1)
 	for _, filter := range m.textFilters {
 		if filter.Mode == searchModeName {
-			queries = append(queries, filter.Value)
+			filters = append(filters, filter)
 		}
 	}
 	if m.inputVisible && m.searchMode == searchModeName {
 		if draft := textFilterQuery(m.input.Value()); draft != "" {
-			queries = append(queries, draft)
+			filters = append(filters, textFilter{
+				Value:    draft,
+				Mode:     searchModeName,
+				Sequence: m.nextFilterSequence(),
+				Exact:    m.filterExact,
+				Case:     m.filterCase,
+			})
 		}
 	}
-	return queries
+	return filters
 }
 
 func (m Model) fullTextFilterQuery() string {
@@ -609,13 +624,13 @@ func (m *Model) filterChanged(inputCommand tea.Cmd) tea.Cmd {
 }
 
 func (m *Model) refreshFilter() {
-	nameQueries := m.nameTextFilterQueries()
+	nameFilters := m.effectiveNameFilters()
 	m.filtered = m.filtered[:0]
 	for _, candidate := range m.items {
 		if m.hideNotes && isClippedNote(candidate.filename) {
 			continue
 		}
-		if matchesTextFilters(candidate.match, nameQueries) && matchesDateFilters(candidate.document, m.dateFilters) {
+		if matchesTextFilters(candidate.title, candidate.filename, candidate.match, nameFilters) && matchesDateFilters(candidate.document, m.dateFilters) {
 			m.filtered = append(m.filtered, candidate)
 		}
 	}
@@ -758,17 +773,46 @@ func textFilterQuery(value string) string {
 	return value
 }
 
-func matchesTextFilters(value string, queries []string) bool {
-	for _, query := range queries {
-		if !wordsMatch(value, strings.ToLower(query)) {
+func matchesTextFilters(title, filename, match string, filters []textFilter) bool {
+	for _, filter := range filters {
+		if !matchNameFilter(title, filename, match, filter) {
 			return false
 		}
 	}
 	return true
 }
 
+// matchNameFilter applies one name-mode filter. Exact (全匹配) compares the
+// whole title/filename/path, not a substring; Case keeps the original casing.
+func matchNameFilter(title, filename, match string, filter textFilter) bool {
+	query := strings.TrimSpace(filter.Value)
+	if query == "" {
+		return true
+	}
+	if filter.Exact {
+		if filter.Case {
+			return title == query || filename == query || match == query
+		}
+		return strings.EqualFold(title, query) || strings.EqualFold(filename, query) || strings.EqualFold(match, query)
+	}
+	if filter.Case {
+		return wordsMatchCase(title, query) || wordsMatchCase(filename, query) || wordsMatchCase(match, query)
+	}
+	return wordsMatch(title+" "+filename+" "+match, strings.ToLower(query))
+}
+
 func wordsMatch(value, query string) bool {
 	value = strings.ToLower(value)
+	for _, word := range strings.Fields(query) {
+		if !strings.Contains(value, word) {
+			return false
+		}
+	}
+	return true
+}
+
+// wordsMatchCase is the case-sensitive twin of wordsMatch.
+func wordsMatchCase(value, query string) bool {
 	for _, word := range strings.Fields(query) {
 		if !strings.Contains(value, word) {
 			return false

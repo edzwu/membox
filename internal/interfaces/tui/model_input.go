@@ -24,6 +24,17 @@ func (m Model) updateFilterInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.inputMode == inputModeAgent {
 		return m.updateAgentInput(msg)
 	}
+	// ctrl+o while typing a filter opens the match/case options panel.
+	if msg.String() == "ctrl+o" {
+		m.filterOptionsVisible = !m.filterOptionsVisible
+		if m.filterOptionsVisible {
+			m.filterOptionsSelected = 0
+		}
+		return m, nil
+	}
+	if m.filterOptionsVisible {
+		return m.updateFilterOptions(msg)
+	}
 	// Ctrl+C deletes a character in the input box (it no longer quits; Ctrl+D quits).
 	if msg.String() == "ctrl+c" {
 		msg = tea.KeyMsg{Type: tea.KeyBackspace}
@@ -623,6 +634,43 @@ func (m Model) updateConfigPanel(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.spinner.Tick, webEnsureCmd(m.ctx, m.app, m.web.controllerID))
 	}
 	return m, nil
+}
+
+// updateFilterOptions handles keys while the filter-options panel is open:
+// ↑↓ picks Match or Case, ←→/space toggles, esc returns to the input.
+// Every change is applied immediately and the status bar reflects it.
+func (m Model) updateFilterOptions(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	rows := 2
+	changed := false
+	switch msg.String() {
+	case "esc", "enter", "q":
+		m.filterOptionsVisible = false
+		return m, nil
+	case "up", "k":
+		if m.filterOptionsSelected > 0 {
+			m.filterOptionsSelected--
+		}
+		return m, nil
+	case "down", "j":
+		if m.filterOptionsSelected+1 < rows {
+			m.filterOptionsSelected++
+		}
+		return m, nil
+	case "left", "h", "right", "l", "space", " ":
+		switch m.filterOptionsSelected {
+		case 0:
+			m.filterExact = !m.filterExact
+		case 1:
+			m.filterCase = !m.filterCase
+		}
+		changed = true
+	}
+	if !changed {
+		return m, nil
+	}
+	// Re-run the name filter so a live draft matches with the new semantics;
+	// the status bar segment updates on the next render either way.
+	return m, m.filterChanged(nil)
 }
 
 // openCommand builds the platform browser opener, ignoring errors until the

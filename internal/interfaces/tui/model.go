@@ -82,6 +82,8 @@ type textFilter struct {
 	Value    string
 	Mode     string
 	Sequence uint64
+	Exact    bool // 全匹配: true = title/filename 精确全等
+	Case     bool // 区分大小写
 }
 
 const (
@@ -163,9 +165,17 @@ type Model struct {
 	configVisible  bool
 	configSelected int
 	settings       []membox.SettingView
-	graphFocusID   string
-	graphCards     []membox.DocumentView
-	graphIncoming  int
+	// Filter-options panel (ctrl+o while the input is focused): match
+	// semantics (contains ⇄ exact) and case sensitivity are orthogonal to the
+	// name ⇄ content scope, so they live on their own panel and show up on the
+	// status bar, not inside the mode badge.
+	filterExact           bool // 全匹配: true = title/filename 精确全等
+	filterCase            bool // 区分大小写
+	filterOptionsVisible  bool
+	filterOptionsSelected int
+	graphFocusID          string
+	graphCards            []membox.DocumentView
+	graphIncoming         int
 	// Selection while walking the thread tree (index into graphCards).
 	graphSelected int
 	graphPreviews map[string]string
@@ -281,7 +291,7 @@ func inputPlaceholder(mode string) string {
 	case inputModeAgent:
 		return "ask the agent about your documents…"
 	default:
-		return "filter documents (tab toggles name/full search)"
+		return "filter documents (tab toggles name/content search)"
 	}
 }
 
@@ -339,6 +349,11 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if msg.String() == "ctrl+o" {
+			// While typing a filter, ctrl+o adjusts the filter options
+			// (match semantics + case); elsewhere it is the web/settings panel.
+			if m.inputActive {
+				return m.updateFilterInput(msg)
+			}
 			m.configVisible = !m.configVisible
 			if m.configVisible {
 				m.keepSelectionVisible()
@@ -438,7 +453,7 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if m.fullTextFilterQuery() == msg.query {
 			m.loading, m.err = false, msg.err
 			if msg.err == nil {
-				m.filtered = searchResultItems(m.items, msg.results, m.dateFilters, m.nameTextFilterQueries(), m.hideNotes)
+				m.filtered = searchResultItems(m.items, msg.results, m.dateFilters, m.effectiveNameFilters(), m.hideNotes)
 				m.sortFiltered()
 				m.selected = 0
 				m.keepSelectionVisible()

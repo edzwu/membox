@@ -352,7 +352,7 @@ func TestModel_TabTogglesHighlightedMode(t *testing.T) {
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyTab})
 	model = updated.(Model)
 	badge = model.modeBadge()
-	if !strings.Contains(badge, " FULL ") {
+	if !strings.Contains(badge, " CONTENT ") {
 		t.Fatalf("full mode badge=%q", badge)
 	}
 	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
@@ -673,4 +673,70 @@ func isQuitCmd(cmd tea.Cmd) bool {
 	}
 	_, ok := cmd().(tea.QuitMsg)
 	return ok
+}
+
+func TestModel_FilterOptionsPanelCtrlOAndStatusBar(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.width, model.height = 120, 24
+	model.items = documentItems([]membox.DocumentView{
+		{ID: "019fbe56-64c3-7e3c-861d-4da66742dabf", Title: "Alpha", Path: "/tmp/alpha.md", RelativePath: "alpha.md"},
+		{ID: "019fbe56-64c3-7eec-97a7-6c8813ec2d64", Title: "Beta", Path: "/tmp/beta.md", RelativePath: "beta.md"},
+	})
+	model.inputVisible, model.inputActive, model.inputMode = true, true, inputModeSearch
+	model.refreshFilter()
+
+	// ctrl+o opens the filter options panel (not the web settings panel).
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlO})
+	model = updated.(Model)
+	if !model.filterOptionsVisible || model.configVisible {
+		t.Fatalf("ctrl+o did not open filter options: opts=%v config=%v", model.filterOptionsVisible, model.configVisible)
+	}
+	if !strings.Contains(model.inputView(), "filter options") {
+		t.Fatalf("options panel not rendered: %q", model.inputView())
+	}
+
+	// Toggle exact (row 0) then case (row 1) with space.
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeySpace})
+	model = updated.(Model)
+	if !model.filterExact {
+		t.Fatalf("space did not toggle exact: %+v", model)
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = updated.(Model)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeySpace})
+	model = updated.(Model)
+	if !model.filterCase {
+		t.Fatalf("second toggle did not set case: %+v", model)
+	}
+	// The status bar must reflect both settings.
+	bar := model.statusBar()
+	if !strings.Contains(bar, " =") || !strings.Contains(bar, " Aa") {
+		t.Fatalf("status bar misses match/case segment: %q", bar)
+	}
+
+	// esc closes the panel and returns to the input (draft preserved).
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model = updated.(Model)
+	if model.filterOptionsVisible {
+		t.Fatal("esc did not close filter options")
+	}
+	if !model.inputVisible {
+		t.Fatal("esc closed the input too")
+	}
+
+	// Exact + case matching: "alpha" must NOT match "Alpha" (case), and exact
+	// "alpha" must not match "alpha.md" via substring.
+	model.input.SetValue("alpha")
+	model.inputMode = inputModeSearch
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if len(model.textFilters) != 1 || !model.textFilters[0].Exact || !model.textFilters[0].Case {
+		t.Fatalf("committed filter did not freeze semantics: %+v", model.textFilters)
+	}
+	if !strings.Contains(model.inputView(), "N=c: alpha") {
+		t.Fatalf("tag does not encode exact+case: %q", model.inputView())
+	}
+	if len(model.filtered) != 0 {
+		t.Fatalf("exact+case alpha matched documents: %+v", model.filtered)
+	}
 }
