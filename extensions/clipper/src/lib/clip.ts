@@ -292,21 +292,48 @@ function plainTextHtml(text: string): string {
   return `<p>${escapeHtml(text).replace(/\n\n+/g, '</p><p>').replace(/\n/g, '<br>')}</p>`;
 }
 
-/** Extract the main article HTML from one document (never mutates it). */
+/** Extract the main article HTML from one document (never mutates it).
+ *
+ *  Readability is tried first but is NOT trusted blindly: Mozilla Readability
+ *  strips visibility:hidden nodes, so WeChat's #js_content (hidden until JS
+ *  reveals it) is dropped and only the header (title/cover/author) remains.
+ *  We always also score findMainContent and keep whichever yields more real
+ *  text — that is what MarkSnip's hidden-content fallback does, simplified. */
 function extractMainHtml(doc: Document): string {
+  let best = '';
+  let bestScore = 0;
+
   // 1. Readability (on a clone — it mutates its input).
   try {
     const article = new Readability(doc.cloneNode(true) as Document).parse();
-    if (article?.content && textLenOf(article.content) >= 200) return article.content;
+    if (article?.content) {
+      const s = htmlTextLen(article.content);
+      if (s > bestScore) {
+        bestScore = s;
+        best = article.content;
+      }
+    }
   } catch {
     // continue
   }
+
   // 2. Main content block (semantic landmark, else largest chrome-free block).
+  //    Counts visibility:hidden text, so WeChat raw HTML still scores full.
   const main = findMainContent(doc);
-  if (main) return main.innerHTML;
+  if (main) {
+    const s = textLenOf(main);
+    if (s > bestScore) {
+      bestScore = s;
+      best = main.innerHTML;
+    }
+  }
+
   // 3. Plain visible text (shadow-aware; preserves paragraph breaks on live).
-  const text = visibleBodyText(doc).replace(/\s+/g, ' ').trim();
-  return text ? plainTextHtml(text) : '';
+  if (bestScore < 200) {
+    const text = visibleBodyText(doc).replace(/\s+/g, ' ').trim();
+    if (text) return plainTextHtml(text);
+  }
+  return best;
 }
 
 /** Same-origin iframes often hold paper viewers / embeds. Return their best
@@ -444,12 +471,17 @@ function isHiddenElement(el: Element): boolean {
   return false;
 }
 
-/** Layout-independent text length (shadow-aware; scripts/styles skipped). */
+/** Meaningful text length of an HTML fragment (tags stripped). */
+function htmlTextLen(html: string): number {
+  return html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().length;
+}
+
+/** Layout-independent text length (shadow-aware; scripts/styles skipped).
+ *  HTML strings are measured with tags stripped — otherwise a 2KB shell of
+ *  markup with 10 chars of real text would look "long enough". */
 function textLenOf(el: Element | string | null | undefined): number {
   if (!el) return 0;
-  if (typeof el === 'string') {
-    return el.replace(/\s+/g, ' ').trim().length;
-  }
+  if (typeof el === 'string') return htmlTextLen(el);
   return deepText(el).replace(/\s+/g, ' ').trim().length;
 }
 
