@@ -75,8 +75,20 @@ function trimTrailingNewlines(text: string): string {
 function fenceFromPre(pre: HTMLElement): string {
   const code = pre.querySelector('code');
   const lang = detectCodeLanguage(pre, code);
-  const text = trimTrailingNewlines((code || pre).textContent || '');
+  // textContent drops <br> (no text node) — WeChat/mdnice code & ASCII diagrams
+  // are span+br lines, so convert br→\n first (same idea as MarkSnip).
+  const text = trimTrailingNewlines(preElementText((code || pre) as HTMLElement));
   return '\n\n```' + lang + '\n' + text + '\n```\n\n';
+}
+
+/** Text of a <pre>/<code> with <br> preserved as newlines. */
+function preElementText(el: HTMLElement): string {
+  const clone = el.cloneNode(true) as HTMLElement;
+  const doc = el.ownerDocument;
+  for (const br of Array.from(clone.querySelectorAll('br'))) {
+    br.replaceWith(doc.createTextNode('\n'));
+  }
+  return (clone.textContent || '').replace(/\u00a0/g, ' ');
 }
 
 function detectCodeLanguage(pre: HTMLElement, code: Element | null): string {
