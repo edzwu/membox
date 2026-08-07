@@ -71,10 +71,11 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "space", " ":
 		if m.lastKeyAt.Add(doubleSpaceWindow).After(time.Now()) {
-			// double space confirmed: toggle input
+			// Double space always opens the filter input, regardless of which
+			// mode (cmd / agent) was used last.
 			m.spaceSequence++
 			m.lastKeyAt = time.Time{}
-			commands = append(commands, m.openInput(m.inputMode))
+			commands = append(commands, m.openInput(inputModeSearch))
 			return m, tea.Batch(commands...)
 		}
 		// first space: schedule delayed details toggle

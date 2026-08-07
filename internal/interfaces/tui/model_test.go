@@ -397,7 +397,7 @@ func TestModel_CtrlPCyclesInputModes(t *testing.T) {
 	}
 }
 
-func TestModel_InputModePersistsAcrossHideAndReopen(t *testing.T) {
+func TestModel_DoubleSpaceAlwaysOpensFilterInput(t *testing.T) {
 	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
 	space := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}}
 	updated, _ := model.Update(space)
@@ -416,12 +416,13 @@ func TestModel_InputModePersistsAcrossHideAndReopen(t *testing.T) {
 	if model.inputVisible || model.inputMode != inputModeAgent {
 		t.Fatalf("esc did not preserve hidden agent mode: visible=%v mode=%s", model.inputVisible, model.inputMode)
 	}
+	// Double space always reopens the FILTER input, never the last-closed mode.
 	updated, _ = model.Update(space)
 	model = updated.(Model)
 	updated, _ = model.Update(space)
 	model = updated.(Model)
-	if !model.inputVisible || model.inputMode != inputModeAgent || !strings.Contains(model.modeBadge(), " AGENT ") {
-		t.Fatalf("double space did not reopen agent input: visible=%v mode=%s badge=%q", model.inputVisible, model.inputMode, model.modeBadge())
+	if !model.inputVisible || model.inputMode != inputModeSearch {
+		t.Fatalf("double space should open the filter input: visible=%v mode=%s", model.inputVisible, model.inputMode)
 	}
 }
 
