@@ -357,7 +357,21 @@ const CONTENT_CHROME_SELECTOR =
 
 const MAIN_CONTENT_SELECTOR =
   'article, main, [role="main"], .post, .entry-content, .article-content, .content, ' +
-  '.overview, .paper, .paper-content, .discussion, .reading-content, .doc-content, .markdown-body';
+  '.overview, .paper, .paper-content, .discussion, .reading-content, .doc-content, .markdown-body, ' +
+  // WeChat articles: the canonical containers (js_content is static HTML; the
+  // live DOM keeps it after JS runs).
+  '#js_content, .rich_media_content, .rich_media_area_primary, .rich_media_title';
+
+/** True for elements that are not rendered (display:none, hidden, etc.). */
+function isHiddenElement(el: Element): boolean {
+  const htmlEl = el as HTMLElement;
+  if (htmlEl.hidden) return true;
+  const style = htmlEl.getAttribute && htmlEl.getAttribute('style');
+  if (style && /display\s*:\s*none|visibility\s*:\s*hidden/i.test(style)) return true;
+  const aria = htmlEl.getAttribute && htmlEl.getAttribute('aria-hidden');
+  if (aria && aria !== 'false') return true;
+  return false;
+}
 
 /** Layout-independent text length (shadow-aware; scripts/styles skipped). */
 function textLenOf(el: Element | string | null | undefined): number {
@@ -382,6 +396,7 @@ function findMainContent(root: ParentNode): HTMLElement | null {
   let best: HTMLElement | null = null;
   let bestScore = 0;
   body.querySelectorAll(MAIN_CONTENT_SELECTOR).forEach((el) => {
+    if (isHiddenElement(el)) return;
     const s = textLenOf(el);
     if (s > bestScore) {
       bestScore = s;
@@ -390,11 +405,12 @@ function findMainContent(root: ParentNode): HTMLElement | null {
   });
   if (best && bestScore >= 200) return best;
 
-  // Pass 2: chrome-free largest block.
+  // Pass 2: chrome-free largest block (skips hidden/prefetched content).
   best = null;
   bestScore = 0;
   body.querySelectorAll<HTMLElement>('div, section, main, article, td, li').forEach((el) => {
     if (el.closest(CONTENT_CHROME_SELECTOR)) return;
+    if (isHiddenElement(el)) return;
     const s = textLenOf(el);
     if (s > bestScore) {
       bestScore = s;
@@ -415,6 +431,7 @@ function findMainContent(root: ParentNode): HTMLElement | null {
     for (const child of Array.from(current.children)) {
       const c = child as HTMLElement;
       if (c.closest(CONTENT_CHROME_SELECTOR)) continue;
+      if (isHiddenElement(c)) continue;
       const s = textLenOf(c);
       if (s > nextScore) {
         nextScore = s;
