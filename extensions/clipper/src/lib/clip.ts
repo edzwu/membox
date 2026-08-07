@@ -347,6 +347,17 @@ export async function clipCurrentDocument(overrideSourceUrl?: string): Promise<C
 
   const turndown = makeTurndown();
   let html = extractMainHtml(doc);
+  if (textLenOf(html) < 800) {
+    // Suspiciously little content: the page may still be lazy-loading its
+    // body (WeChat). Wait a beat, let the live DOM settle, then re-extract
+    // from whichever document now has more content.
+    await waitForBodySettle(2000);
+    const retryDoc = pickBestDocument(rawDoc, document);
+    const retryHtml = extractMainHtml(retryDoc);
+    if (textLenOf(retryHtml) > textLenOf(html)) {
+      html = retryHtml;
+    }
+  }
   if (textLenOf(html) < 200) {
     // The main document yielded little — check same-origin iframes (paper
     // viewers / embeds) before giving up.
@@ -398,12 +409,16 @@ const MAIN_CONTENT_SELECTOR =
   // live DOM keeps it after JS runs).
   '#js_content, .rich_media_content, .rich_media_area_primary, .rich_media_title';
 
-/** True for elements that are not rendered (display:none, hidden, etc.). */
+/** True for elements that are not rendered at all (display:none, hidden, etc.).
+ *  visibility:hidden deliberately does NOT count: those elements still render
+ *  and layout, and WeChat marks its article body (#js_content) with
+ *  "visibility:hidden; opacity:0" until JS reveals it — skipping it would
+ *  lose the entire article. */
 function isHiddenElement(el: Element): boolean {
   const htmlEl = el as HTMLElement;
   if (htmlEl.hidden) return true;
   const style = htmlEl.getAttribute && htmlEl.getAttribute('style');
-  if (style && /display\s*:\s*none|visibility\s*:\s*hidden/i.test(style)) return true;
+  if (style && /display\s*:\s*none/i.test(style)) return true;
   const aria = htmlEl.getAttribute && htmlEl.getAttribute('aria-hidden');
   if (aria && aria !== 'false') return true;
   return false;
