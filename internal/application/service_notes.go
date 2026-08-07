@@ -83,7 +83,15 @@ func (s *Service) CreateNote(ctx context.Context, opts CreateNoteOptions) (Creat
 		}
 		filename = slug + "-" + contentNameFragment(opts.Body, 10) + "-note.md"
 	}
-	absolute, err := s.availableNotePath(indexedPath.Root, filename)
+	// Never reuse a catalog-tracked path: a new note must not clobber an
+	// existing document's file (active, missing, or trashed all count).
+	tracked := map[string]bool{}
+	if docs, docsErr := s.store.DocumentsForPath(ctx, indexedPath.ID); docsErr == nil {
+		for _, d := range docs {
+			tracked[filepath.ToSlash(d.Location.RelativePath)] = true
+		}
+	}
+	absolute, err := s.availableNotePath(indexedPath.Root, filename, tracked)
 	if err != nil {
 		return CreateNoteResult{}, err
 	}
@@ -196,7 +204,7 @@ func pathRootsEqual(a, b string) bool {
 	return left == right
 }
 
-func (s *Service) availableNotePath(root, filename string) (string, error) {
+func (s *Service) availableNotePath(root, filename string, tracked map[string]bool) (string, error) {
 	if strings.Contains(filename, "/") || strings.Contains(filename, "\\") || filename == "" {
 		return "", fmt.Errorf("invalid note filename %q", filename)
 	}
@@ -205,6 +213,13 @@ func (s *Service) availableNotePath(root, filename string) (string, error) {
 		if index > 0 {
 			extension := filepath.Ext(filename)
 			candidate = strings.TrimSuffix(filename, extension) + "-" + strconv.Itoa(index+1) + extension
+		}
+		// A path tracked by the catalog (active, missing, or trashed) must never
+		// be reused by a new note: writing there would clobber an existing
+		// document's file and re-point it at the new content (this is what
+		// replaced the Effective-Go article with a bubble-sort note).
+		if tracked[filepath.ToSlash(candidate)] {
+			continue
 		}
 		absolute := filepath.Join(root, candidate)
 		if _, err := os.Stat(absolute); err == nil {

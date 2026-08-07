@@ -13,12 +13,12 @@ import (
 	"membox/internal/infrastructure/system"
 )
 
-// TestCreateNoteAfterExternalFileDeletionReusesIndexedPath is a regression
-// test: a note whose file was deleted externally (catalog still tracks the
-// path) used to fail with "created note ... was not indexed" because the
-// rescan reports the path as Updated, not Added. Recreating must succeed and
-// reuse the same document identity.
-func TestCreateNoteAfterExternalFileDeletionReusesIndexedPath(t *testing.T) {
+// TestCreateNoteDoesNotClobberTrackedPath is a regression test for the
+// Effective-Go incident: creating a note whose slug collides with a
+// catalog-tracked path must never clobber that document. The note-new flow
+// now skips tracked paths (disk AND catalog), and when content differs the
+// scan's content-hash rename reconciliation cannot merge them either.
+func TestCreateNoteDoesNotClobberTrackedPath(t *testing.T) {
 	ctx := context.Background()
 	home := t.TempDir()
 	notesDir := t.TempDir()
@@ -33,27 +33,36 @@ func TestCreateNoteAfterExternalFileDeletionReusesIndexedPath(t *testing.T) {
 	if _, err := service.AddPath(ctx, notesDir); err != nil {
 		t.Fatal(err)
 	}
+	// First note at bubble-sort.md.
 	first, err := service.CreateNote(ctx, application.CreateNoteOptions{Title: "Bubble Sort"})
 	if err != nil {
 		t.Fatalf("first create: %v", err)
 	}
-	if first.Document.ID == "" {
-		t.Fatal("first note has no id")
-	}
-	// External deletion: the file vanishes but the catalog still tracks the
-	// relative path (no scan runs in between).
+	// The tracked file is deleted externally (no scan runs in between).
 	if err := os.Remove(first.Path); err != nil {
 		t.Fatal(err)
 	}
 
-	second, err := service.CreateNote(ctx, application.CreateNoteOptions{Title: "Bubble Sort"})
+	// Same slug, different content: must land on a fresh path and a fresh
+	// identity — never reuse (and thereby clobber) the tracked document.
+	second, err := service.CreateNote(ctx, application.CreateNoteOptions{
+		Title: "Bubble Sort",
+		Body:  "# bubble-sort\n\nOptimized version with early exit and linear best case.\n",
+	})
 	if err != nil {
 		t.Fatalf("recreate after external deletion: %v", err)
 	}
-	if second.Document.ID != first.Document.ID {
-		t.Fatalf("expected reused document id %s, got %s", first.Document.ID, second.Document.ID)
+	if filepath.Base(second.Path) == filepath.Base(first.Path) {
+		t.Fatalf("recreate reused the tracked filename: %s", second.Path)
+	}
+	if second.Document.ID == first.Document.ID {
+		t.Fatalf("recreate merged identities despite different content: %s", second.Document.ID)
 	}
 	if _, err := os.Stat(second.Path); err != nil {
 		t.Fatalf("recreated file missing: %v", err)
+	}
+	// The original document is untouched (still missing on disk, same id).
+	if _, err := os.Stat(first.Path); !os.IsNotExist(err) {
+		t.Fatalf("tracked document's file should stay absent: %v", err)
 	}
 }
