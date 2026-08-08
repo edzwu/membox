@@ -192,6 +192,10 @@ func (s *Server) handleDocument(writer http.ResponseWriter, request *http.Reques
 		s.handleAnnotations(writer, request, strings.TrimSuffix(selector, "/annotations"))
 		return
 	}
+	if strings.HasSuffix(selector, "/read-status") {
+		s.handleReadStatus(writer, request, strings.TrimSuffix(selector, "/read-status"))
+		return
+	}
 	if strings.HasSuffix(selector, "/related") {
 		s.handleRelated(writer, request, strings.TrimSuffix(selector, "/related"))
 		return
@@ -547,6 +551,35 @@ func (s *Server) handleRelated(writer http.ResponseWriter, request *http.Request
 	default:
 		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// handleReadStatus records the semantic reading state (unread/reading/
+// finished) reported by the reader UI: opening marks reading, scrolling to
+// the end marks finished.
+type readStatusPayload struct {
+	Status string `json:"status"`
+}
+
+func (s *Server) handleReadStatus(writer http.ResponseWriter, request *http.Request, selector string) {
+	if selector == "" {
+		http.Error(writer, "missing document selector", http.StatusBadRequest)
+		return
+	}
+	if request.Method != http.MethodPost {
+		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var payload readStatusPayload
+	if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+		http.Error(writer, "invalid read-status payload: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := s.service.SetDocumentReadStatus(request.Context(), selector, payload.Status); err != nil {
+		http.Error(writer, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(writer).Encode(map[string]string{"status": payload.Status})
 }
 
 // handleAnnotations preserves Miru's portable sidecar wire format without

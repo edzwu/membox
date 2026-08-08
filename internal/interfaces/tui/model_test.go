@@ -42,7 +42,7 @@ func TestModel_DefaultShowsUUIDAndOriginalFilename(t *testing.T) {
 	if !strings.Contains(view, "dabf") {
 		t.Fatalf("tree does not contain UUID: %q", view)
 	}
-	if !strings.Contains(view, "Online_normalize") || !strings.Contains(view, "2083") {
+	if !strings.Contains(view, "Online_normaliz") || !strings.Contains(view, "softmax_20") {
 		t.Fatalf("tree does not contain recognizable original filename: %q", view)
 	}
 	firstLine := strings.Split(view, "\n")[0]

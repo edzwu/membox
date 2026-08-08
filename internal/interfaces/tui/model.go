@@ -39,6 +39,7 @@ type App interface {
 	AddPath(context.Context, membox.AddPathCommand) (membox.AddPathResult, error)
 	SearchDocuments(context.Context, membox.SearchDocumentsQuery) ([]membox.SearchResult, error)
 	ListDocuments(context.Context, membox.ListDocumentsQuery) ([]membox.DocumentView, error)
+	SetDocumentReadStatus(context.Context, membox.SetReadStatusCommand) error
 	ReadDocument(context.Context, membox.ReadDocumentQuery) ([]byte, error)
 	ResolveDocumentLocation(context.Context, membox.ResolveLocationQuery) (membox.LocationView, error)
 	ReindexDocument(context.Context, membox.ReindexDocumentCommand) error
@@ -254,6 +255,12 @@ type reindexMsg struct{ err error }
 type pinMsg struct {
 	documentID string
 	pinned     bool
+	err        error
+}
+
+type readStatusMsg struct {
+	documentID string
+	status     string
 	err        error
 }
 type openMsg struct{ err error }
@@ -535,6 +542,11 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading, m.err = false, msg.err
 		if msg.err == nil {
 			m.applyPinnedState(msg.documentID, msg.pinned)
+		}
+	case readStatusMsg:
+		m.loading, m.err = false, msg.err
+		if msg.err == nil {
+			m.applyReadStatus(msg.documentID, msg.status)
 		}
 	case openMsg:
 		m.err = msg.err

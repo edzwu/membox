@@ -41,7 +41,7 @@ func startServer(t *testing.T) (baseURL, docID, notesDir string) {
 	if _, err := service.AddPath(ctx, notesDir); err != nil {
 		t.Fatal(err)
 	}
-	records, err := service.ListDocuments(ctx, 10, false)
+	records, err := service.ListDocuments(ctx, 10, false, "")
 	if err != nil || len(records) != 1 {
 		t.Fatalf("expected one indexed document, got %d (err=%v)", len(records), err)
 	}
@@ -597,7 +597,7 @@ func TestAnnotationNoteMarksTargetDocumentModified(t *testing.T) {
 	if _, err := service.AddPath(ctx, notesDir); err != nil {
 		t.Fatal(err)
 	}
-	records, err := service.ListDocuments(ctx, 10, false)
+	records, err := service.ListDocuments(ctx, 10, false, "")
 	if err != nil || len(records) != 1 {
 		t.Fatalf("expected 1 document, got %d (err=%v)", len(records), err)
 	}
@@ -623,7 +623,7 @@ func TestAnnotationNoteMarksTargetDocumentModified(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	records, err = service.ListDocuments(ctx, 10, false)
+	records, err = service.ListDocuments(ctx, 10, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}

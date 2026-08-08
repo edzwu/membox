@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -90,25 +91,57 @@ func plainFTSQuery(query string, exact bool) string {
 	return strings.Join(parts, " ")
 }
 
-func (s *Store) ListDocuments(ctx context.Context, limit int, includeUnavailable bool) ([]port.DocumentRecord, error) {
+func (s *Store) ListDocuments(ctx context.Context, limit int, includeUnavailable bool, statusFilter string) ([]port.DocumentRecord, error) {
 	where := "WHERE l.status='active' AND " + notTrashedClause
 	if includeUnavailable {
 		where = "WHERE " + notTrashedClause
 	}
-	rows, err := s.db.QueryContext(ctx, documentSelect+` `+where+` ORDER BY lower(COALESCE(i.title,'')), lower(l.relative_path), d.id LIMIT ?`, limit)
+	args := []any{limit}
+	if statusFilter != "" {
+		where += " AND COALESCE(r.read_status,'unread')=?"
+		args = append([]any{statusFilter}, args...)
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT d.id,d.created_at,d.updated_at,d.pinned,l.path_id,l.relative_path,l.file_key,l.status,
+COALESCE(i.title,''),COALESCE(i.summary,''),COALESCE(i.mtime,0),COALESCE(i.size,0),COALESCE(i.sha256,''),i.indexed_at,
+COALESCE(i.source_created_at,CASE WHEN i.mtime>0 THEN i.mtime/1000000 ELSE d.created_at END),
+MAX(COALESCE(i.source_updated_at,CASE WHEN i.mtime>0 THEN i.mtime/1000000 ELSE d.updated_at END),
+    COALESCE((SELECT MAX(MAX(an.updated_at,COALESCE(ni.source_updated_at,0)))
+              FROM annotation_notes an
+              LEFT JOIN document_index ni ON ni.document_id=an.note_document_id
+              WHERE an.target_document_id=d.id
+                AND an.note_document_id NOT IN (SELECT document_id FROM document_trash)),0)),p.root_path,
+COALESCE(r.read_status,'unread')
+FROM documents d JOIN document_locations l ON l.document_id=d.id
+JOIN paths p ON p.id=l.path_id LEFT JOIN document_index i ON i.document_id=d.id
+LEFT JOIN document_read_state r ON r.document_id=d.id`+` `+where+` ORDER BY lower(COALESCE(i.title,'')), lower(l.relative_path), d.id LIMIT ?`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("listing documents: %w", err)
 	}
 	defer rows.Close()
 	var records []port.DocumentRecord
 	for rows.Next() {
-		document, absolutePath, err := scanDocument(rows)
+		var readStatus string
+		// scanDocument scans 17 columns; feed the 18th (read_status) through
+		// a wrapper so both land in one rows.Scan call.
+		document, absolutePath, err := scanDocument(&rowWithExtra{rows: rows, extra: &readStatus})
 		if err != nil {
 			return nil, err
 		}
-		records = append(records, port.DocumentRecord{Document: document, AbsolutePath: absolutePath})
+		records = append(records, port.DocumentRecord{Document: document, AbsolutePath: absolutePath, ReadStatus: readStatus})
 	}
 	return records, rows.Err()
+}
+
+// rowWithExtra appends one extra destination to rows.Scan, letting shared
+// scanDocument read N columns while the caller receives one more.
+type rowWithExtra struct {
+	rows  *sql.Rows
+	extra *string
+}
+
+func (r *rowWithExtra) Scan(dest ...any) error {
+	dest = append(dest, r.extra)
+	return r.rows.Scan(dest...)
 }
 
 func (s *Store) ResolveDocument(ctx context.Context, selector string) (*catalog.Document, string, error) {

@@ -14,14 +14,32 @@ import (
 	"membox/internal/domain/catalog"
 )
 
-func (s *Service) ListDocuments(ctx context.Context, limit int, includeUnavailable bool) ([]port.DocumentRecord, error) {
+func (s *Service) ListDocuments(ctx context.Context, limit int, includeUnavailable bool, statusFilter string) ([]port.DocumentRecord, error) {
 	if limit <= 0 {
 		limit = 100
 	}
 	if limit > 1000 {
 		return nil, errors.New("document list limit cannot exceed 1000")
 	}
-	return s.store.ListDocuments(ctx, limit, includeUnavailable)
+	return s.store.ListDocuments(ctx, limit, includeUnavailable, statusFilter)
+}
+
+// SetDocumentReadStatus records the semantic reading state (unread/reading/
+// finished) for a document. Opening marks reading; scrolling to the end marks
+// finished; the TUI cycles the state with tab.
+func (s *Service) SetDocumentReadStatus(ctx context.Context, selector, status string) error {
+	document, _, err := s.ResolveDocument(ctx, selector)
+	if err != nil {
+		return err
+	}
+	if status != "unread" && status != "reading" && status != "finished" {
+		return fmt.Errorf("read status must be unread, reading or finished")
+	}
+	var finishedAt time.Time
+	if status == "finished" {
+		finishedAt = time.Now()
+	}
+	return s.store.SetDocumentReadStatus(ctx, document.ID, status, finishedAt)
 }
 
 func (s *Service) Search(ctx context.Context, query string, limit int, exact bool) ([]port.SearchHit, error) {

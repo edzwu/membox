@@ -13,23 +13,25 @@ import (
 
 func newDocCommand(runtime *runtime) *cobra.Command {
 	doc := parentCommand("doc", "Find and operate on documents", "a doc command is required")
-	doc.AddCommand(newDocListCommand(runtime), newDocSearchCommand(runtime), newDocShowCommand(runtime), newDocCatCommand(runtime), newDocEditCommand(runtime), newDocOpenCommand(runtime), newDocRenameCommand(runtime), newDocDeleteCommand(runtime))
+	doc.AddCommand(newDocListCommand(runtime), newDocSearchCommand(runtime), newDocShowCommand(runtime), newDocCatCommand(runtime), newDocEditCommand(runtime), newDocOpenCommand(runtime), newDocRenameCommand(runtime), newDocDeleteCommand(runtime), newDocMarkCommand(runtime))
 	return doc
 }
 
 func newDocListCommand(runtime *runtime) *cobra.Command {
 	var limit int
 	var all, jsonOutput bool
+	var statusFilter string
 	command := &cobra.Command{Use: "list", Short: "List known Markdown documents", Args: noArgs}
 	command.Flags().IntVar(&limit, "limit", 100, "maximum documents")
 	command.Flags().BoolVar(&all, "all", false, "include missing and untracked documents")
 	command.Flags().BoolVar(&jsonOutput, "json", false, "output JSON")
+	command.Flags().StringVar(&statusFilter, "status", "", "filter by read status: unread | reading | finished")
 	command.RunE = func(cmd *cobra.Command, _ []string) error {
 		box, err := runtime.get()
 		if err != nil {
 			return err
 		}
-		documents, err := box.ListDocuments(cmd.Context(), membox.ListDocumentsQuery{Limit: limit, All: all})
+		documents, err := box.ListDocuments(cmd.Context(), membox.ListDocumentsQuery{Limit: limit, All: all, Status: statusFilter})
 		if err != nil {
 			return err
 		}
@@ -41,11 +43,31 @@ func newDocListCommand(runtime *runtime) *cobra.Command {
 			return nil
 		}
 		writer := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-		fmt.Fprintln(writer, "ID\tTITLE\tSTATUS\tPATH")
+		fmt.Fprintln(writer, "ID\tTITLE\tREAD\tSTATUS\tPATH")
 		for _, document := range documents {
-			fmt.Fprintf(writer, "%s\t%s\t%s\t%s\n", shortID(document.ID), document.Title, document.Status, document.Path)
+			read := document.ReadStatus
+			if read == "" {
+				read = "unread"
+			}
+			fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\n", shortID(document.ID), document.Title, read, document.Status, document.Path)
 		}
 		return writer.Flush()
+	}
+	return command
+}
+
+func newDocMarkCommand(runtime *runtime) *cobra.Command {
+	command := &cobra.Command{Use: "mark <document-id> <status>", Short: "Set read status: unread | reading | finished", Args: exactArgs(2, "document ID and read status")}
+	command.RunE = func(cmd *cobra.Command, args []string) error {
+		box, err := runtime.get()
+		if err != nil {
+			return err
+		}
+		if err := box.SetDocumentReadStatus(cmd.Context(), membox.SetReadStatusCommand{Selector: args[0], Status: args[1]}); err != nil {
+			return err
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "%s marked %s\n", args[0], args[1])
+		return nil
 	}
 	return command
 }

@@ -186,6 +186,43 @@ CREATE TABLE IF NOT EXISTS document_read_state (
 			return fmt.Errorf("adding document_index.%s: %w", migration.name, err)
 		}
 	}
+	// Read state: semantic reading status (unread/reading/finished) beside
+	// the existing scroll progress. Added in two steps so older DBs migrate.
+	rsColumns := make(map[string]bool)
+	rsRows, err := s.db.Query(`PRAGMA table_info(document_read_state)`)
+	if err != nil {
+		return fmt.Errorf("checking document_read_state columns: %w", err)
+	}
+	for rsRows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull int
+		var dfltValue sql.NullString
+		var pk int
+		if err := rsRows.Scan(&cid, &name, &ctype, &notnull, &dfltValue, &pk); err != nil {
+			rsRows.Close()
+			return fmt.Errorf("scanning table_info: %w", err)
+		}
+		rsColumns[name] = true
+	}
+	if err := rsRows.Close(); err != nil {
+		return err
+	}
+	rsMigrations := []struct {
+		name string
+		sql  string
+	}{
+		{"read_status", `ALTER TABLE document_read_state ADD COLUMN read_status TEXT NOT NULL DEFAULT 'unread'`},
+		{"finished_at", `ALTER TABLE document_read_state ADD COLUMN finished_at INTEGER`},
+	}
+	for _, migration := range rsMigrations {
+		if rsColumns[migration.name] {
+			continue
+		}
+		if _, err := s.db.Exec(migration.sql); err != nil {
+			return fmt.Errorf("adding document_read_state.%s: %w", migration.name, err)
+		}
+	}
 	// Existing databases only have filesystem mtime. Use it as both source
 	// dates until an explicit Git sync supplies historical values.
 	if _, err := s.db.Exec(`UPDATE document_index SET

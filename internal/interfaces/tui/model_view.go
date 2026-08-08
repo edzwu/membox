@@ -227,11 +227,14 @@ func (m Model) treePreviewView() string {
 	listWidth, previewWidth := m.layoutWidths()
 	indices := m.treeVisibleIndices()
 	uuidWidth := 4
-	filenameWidth := max(12, listWidth-uuidWidth-8)
+	// readStatusMark (○/◐/● + space) takes two columns; keep it from
+	// squeezing the filename.
+	badgeWidth := 2
+	filenameWidth := max(12, listWidth-uuidWidth-badgeWidth-8)
 	if listWidth >= 72 {
-		filenameWidth = max(16, listWidth-uuidWidth-30)
+		filenameWidth = max(16, listWidth-uuidWidth-badgeWidth-30)
 	} else if listWidth >= 52 {
-		filenameWidth = max(14, listWidth-uuidWidth-20)
+		filenameWidth = max(14, listWidth-uuidWidth-badgeWidth-20)
 	}
 	var lines []string
 	for _, i := range indices {
@@ -249,7 +252,7 @@ func (m Model) treePreviewView() string {
 		} else if listWidth >= 52 {
 			dates = dimStyle.Render("  " + dateOnly(candidate.document.UpdatedAt))
 		}
-		line := lipgloss.NewStyle().Width(listWidth - 2).MaxWidth(listWidth - 2).Inline(true).Render(pin + uuid + "  " + filename + dates)
+		line := lipgloss.NewStyle().Width(listWidth - 2).MaxWidth(listWidth - 2).Inline(true).Render(pin + readStatusMark(candidate.document.ReadStatus) + uuid + "  " + filename + dates)
 		if i == m.selected {
 			line = lipgloss.NewStyle().Foreground(colors.Accent).Background(colors.SelectedBG).Width(listWidth - 2).Inline(true).Render("> " + line)
 		} else {
@@ -874,6 +877,20 @@ func fitWidth(value string, width int) string {
 		return ""
 	}
 	return ansi.Truncate(value, width, "…")
+}
+
+// readStatusMark renders the reading-state indicator: ○ unread, ◐ reading,
+// ● finished. Unread documents stay visually quiet (dim) so the "next to
+// read" queue pops; finished is muted so finished backlog recedes.
+func readStatusMark(status string) string {
+	switch status {
+	case "reading":
+		return lipgloss.NewStyle().Foreground(colors.Accent).Render("◐") + " "
+	case "finished":
+		return lipgloss.NewStyle().Foreground(colors.Muted).Render("●") + " "
+	default: // unread / ""
+		return dimStyle.Render("○") + " "
+	}
 }
 
 // padWidth truncates value to width (with ellipsis) then right-pads with spaces

@@ -52,7 +52,7 @@ func TestModel_UpAtFirstKeepsFocusVisible(t *testing.T) {
 		t.Fatal("up at top scheduled another preview load")
 	}
 	view := model.treePreviewView()
-	if !strings.Contains(view, "> dabf  alpha.md") {
+	if !strings.Contains(view, "> ○ dabf  alpha.md") {
 		t.Fatalf("focus is not visible at top: %q", view)
 	}
 }
@@ -590,10 +590,11 @@ func TestModel_BoardArrowKeysThroughUpdate(t *testing.T) {
 		return nm.(Model)
 	}
 
-	// Enter board mode with Tab (input is inactive by default).
-	model = send(model, tea.KeyMsg{Type: tea.KeyTab})
+	// Enter board mode with b (input is inactive by default); tab now
+	// cycles read status.
+	model = send(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
 	if model.viewMode != viewBoard {
-		t.Fatalf("Tab should enter board mode, got viewMode=%v", model.viewMode)
+		t.Fatalf("b should enter board mode, got viewMode=%v", model.viewMode)
 	}
 	if model.filtered[model.selected].document.Summary == "" {
 		t.Fatalf("after entering board, selection is on a non-displayed card idx %d", model.selected)
@@ -763,5 +764,49 @@ func TestModel_FilterOptionsPanelCtrlOAndStatusBar(t *testing.T) {
 	model = updated.(Model)
 	if len(model.filtered) != 0 {
 		t.Fatalf("word+case RUST should match nothing: %+v", model.filtered)
+	}
+}
+
+func TestModel_TabCyclesReadStatus(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.width, model.height = 120, 24
+	model.items = documentItems([]membox.DocumentView{
+		{ID: "019fbe56-64c3-7e3c-861d-4da66742dabf", Title: "Alpha", Path: "/tmp/alpha.md", RelativePath: "alpha.md"},
+	})
+	model.refreshFilter()
+
+	// unread → reading
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("tab did not schedule a status change")
+	}
+	_ = cmd // fakeApp records nothing; the msg handler applies the new status
+	// the command produces readStatusMsg; deliver it like the runtime would
+	if got := model.filtered[0].document.ReadStatus; got != "" && got != "unread" {
+		t.Fatalf("unexpected initial status: %q", got)
+	}
+	// apply next statuses through the message path
+	apply := func(m Model, status string) Model {
+		nm, _ := m.Update(readStatusMsg{documentID: model.filtered[0].document.ID, status: status})
+		return nm.(Model)
+	}
+	model = apply(model, "reading")
+	if model.filtered[0].document.ReadStatus != "reading" {
+		t.Fatalf("applyReadStatus did not set reading: %+v", model.filtered[0].document)
+	}
+	view := model.treePreviewView()
+	if !strings.Contains(view, "◐") {
+		t.Fatalf("reading badge not rendered: %q", view)
+	}
+	model = apply(model, "finished")
+	if model.filtered[0].document.ReadStatus != "finished" {
+		t.Fatal("applyReadStatus did not set finished")
+	}
+	if !strings.Contains(model.treePreviewView(), "●") {
+		t.Fatalf("finished badge not rendered: %q", model.treePreviewView())
+	}
+	if got := nextReadStatus("finished"); got != "unread" {
+		t.Fatalf("nextReadStatus(finished) = %q, want unread", got)
 	}
 }

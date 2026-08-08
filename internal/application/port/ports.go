@@ -68,6 +68,7 @@ type SearchHit struct {
 type DocumentRecord struct {
 	Document     *catalog.Document
 	AbsolutePath string
+	ReadStatus   string
 }
 
 type GraphStore interface {
@@ -105,6 +106,9 @@ type DocumentReadState struct {
 	DocumentID catalog.DocumentID
 	ProgressY  int
 	ProgressAt string
+	// ReadStatus is the semantic reading state: "unread", "reading", "finished".
+	ReadStatus string
+	FinishedAt time.Time
 }
 
 // RecentDocument is a compact picker-oriented view ordered by the last time a
@@ -178,7 +182,8 @@ type CatalogStore interface {
 	ListRecentlyModifiedDocuments(ctx context.Context, limit int) ([]ModifiedDocument, error)
 	Search(ctx context.Context, query string, limit int, exact bool) ([]SearchHit, error)
 	SuggestDocuments(ctx context.Context, query string, limit int) ([]SearchHit, error)
-	ListDocuments(ctx context.Context, limit int, includeUnavailable bool) ([]DocumentRecord, error)
+	SetDocumentReadStatus(ctx context.Context, documentID catalog.DocumentID, status string, finishedAt time.Time) error
+	ListDocuments(ctx context.Context, limit int, includeUnavailable bool, statusFilter string) ([]DocumentRecord, error)
 	ResolveDocument(ctx context.Context, selector string) (*catalog.Document, string, error)
 	// Document source URLs (browser clip provenance), stored at ingest time.
 	UpsertDocumentSource(ctx context.Context, documentID catalog.DocumentID, sourceURLNorm, clipMode string, now time.Time) error

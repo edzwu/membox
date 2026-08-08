@@ -1234,6 +1234,13 @@ async function persistReadingState(keepalive) {
 
 function scheduleReadingStateSave() {
   if (!connected || !documentID || restoring) return;
+  // Scrolled to the end → mark finished once.
+  if (atEndOfDocument()) {
+    void setReadStatus('finished');
+  } else if (lastReportedStatus === 'finished') {
+    // User scrolled back up after finishing — revert to reading.
+    void setReadStatus('reading');
+  }
   if (sidecarSaveTimer) clearTimeout(sidecarSaveTimer);
   sidecarSaveTimer = setTimeout(() => {
     sidecarSaveTimer = null;
@@ -1251,6 +1258,31 @@ function flushReadingStateSave() {
 }
 
 let pendingProgressY = 0;
+
+// Semantic reading state: opening marks reading, scrolling to the end marks
+// finished. Kept local so we only POST on actual transitions.
+let lastReportedStatus = '';
+
+async function setReadStatus(status) {
+  if (!connected || !documentID || !state.currentMarkdown) return;
+  if (lastReportedStatus === status) return;
+  lastReportedStatus = status;
+  try {
+    await fetch(`/api/doc/${encodeURIComponent(documentID)}/read-status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status }),
+      keepalive: true,
+    });
+  } catch (err) {
+    // Non-fatal: reading status is best-effort UI state.
+  }
+}
+
+function atEndOfDocument() {
+  const max = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+  return max > 0 && window.scrollY >= max - 40;
+}
 
 function applyProgressScroll() {
   if (!pendingProgressY) return;
@@ -1405,6 +1437,9 @@ async function restoreReadingState(id, markdown) {
     // ordinary saved scroll position. focusNote centers the passage after the
     // note rail has reached its final (including collapsed-preview) geometry.
     if (!sourceNoteFocused) restoreProgress(data.progress);
+    // Opening the document marks it reading (auto-transition).
+    lastReportedStatus = '';
+    void setReadStatus('reading');
   } catch (err) {
     restoring = false;
     console.warn('membox: could not restore reading state', err);

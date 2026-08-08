@@ -62,7 +62,7 @@ func TestRepairMisassignedNotes(t *testing.T) {
 	defer func() { _ = service.Close() }()
 	server := NewServer(service, fstest.MapFS{}, fstest.MapFS{})
 
-	records, err := service.ListDocuments(ctx, 1000, true)
+	records, err := service.ListDocuments(ctx, 1000, true, "")
 	if err != nil {
 		t.Fatalf("listing documents: %v", err)
 	}

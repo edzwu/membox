@@ -61,6 +61,9 @@ func (f *fakeApp) ListDocuments(context.Context, membox.ListDocumentsQuery) ([]m
 		{ID: "019-beta", Title: "Beta", Path: "/tmp/beta.md", Status: "active"},
 	}, nil
 }
+func (f *fakeApp) SetDocumentReadStatus(_ context.Context, _ membox.SetReadStatusCommand) error {
+	return nil
+}
 func (f *fakeApp) ReadDocument(context.Context, membox.ReadDocumentQuery) ([]byte, error) {
 	return []byte("body"), nil
 }

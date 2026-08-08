@@ -269,15 +269,45 @@ ON CONFLICT(document_id) DO UPDATE SET progress_y=excluded.progress_y,progress_a
 
 func (s *Store) GetDocumentReadState(ctx context.Context, documentID catalog.DocumentID) (port.DocumentReadState, bool, error) {
 	state := port.DocumentReadState{DocumentID: documentID}
-	err := s.db.QueryRowContext(ctx, `SELECT progress_y,progress_at FROM document_read_state WHERE document_id=?`, documentID).
-		Scan(&state.ProgressY, &state.ProgressAt)
+	var finishedMillis int64
+	err := s.db.QueryRowContext(ctx, `SELECT progress_y,progress_at,read_status,COALESCE(finished_at,0) FROM document_read_state WHERE document_id=?`, documentID).
+		Scan(&state.ProgressY, &state.ProgressAt, &state.ReadStatus, &finishedMillis)
 	if errors.Is(err, sql.ErrNoRows) {
 		return port.DocumentReadState{}, false, nil
 	}
 	if err != nil {
 		return port.DocumentReadState{}, false, fmt.Errorf("reading read state for document %s: %w", documentID, err)
 	}
+	if state.ReadStatus == "" {
+		state.ReadStatus = "unread"
+	}
+	if finishedMillis != 0 {
+		state.FinishedAt = fromMillis(finishedMillis)
+	}
 	return state, true, nil
+}
+
+// SetDocumentReadStatus records the semantic reading state. A reading/finished
+// document keeps its scroll progress; finished also stamps FinishedAt.
+func (s *Store) SetDocumentReadStatus(ctx context.Context, documentID catalog.DocumentID, status string, finishedAt time.Time) error {
+	if status == "" {
+		status = "unread"
+	}
+	var finishedMillis *int64
+	if status == "finished" && !finishedAt.IsZero() {
+		v := millis(finishedAt)
+		finishedMillis = &v
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO document_read_state(document_id,progress_y,progress_at,read_status,finished_at)
+VALUES(?,0,'',?,?)
+ON CONFLICT(document_id) DO UPDATE SET
+  read_status=excluded.read_status,
+  finished_at=CASE WHEN excluded.finished_at IS NOT NULL THEN excluded.finished_at ELSE finished_at END`,
+		documentID, status, finishedMillis)
+	if err != nil {
+		return fmt.Errorf("setting read status for document %s: %w", documentID, err)
+	}
+	return nil
 }
 
 func (s *Store) ListRecentDocuments(ctx context.Context, limit int) ([]port.RecentDocument, error) {

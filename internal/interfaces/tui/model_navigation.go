@@ -92,6 +92,16 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.spaceSequence, m.lastKeyAt = 0, time.Time{}
 		return m, m.openInput(inputModeAgent)
 	case "tab":
+		// With a document focused, tab cycles its read status
+		// (unread → reading → finished → unread). The tree/board toggle
+		// moved to b; tab stays free for the status cycle.
+		if document, ok := m.selectedDocument(); ok {
+			next := nextReadStatus(document.ReadStatus)
+			m.statusMessage = fmt.Sprintf("%s → %s", shortID(document.ID), next)
+			return m, setReadStatusCmd(m.ctx, m.app, document.ID, next)
+		}
+		return m, nil
+	case "b":
 		// Toggle between tree and board view when input is not active
 		m.graphFocusID = ""
 		m.graphCards = nil
@@ -925,6 +935,40 @@ func togglePinCmd(ctx context.Context, app App, selector string) tea.Cmd {
 	return func() tea.Msg {
 		result, err := app.ToggleDocumentPin(ctx, membox.ToggleDocumentPinCommand{Selector: selector})
 		return pinMsg{documentID: result.DocumentID, pinned: result.Pinned, err: err}
+	}
+}
+
+// nextReadStatus cycles unread → reading → finished → unread.
+func (m *Model) applyReadStatus(documentID, status string) {
+	for index := range m.items {
+		if m.items[index].document.ID == documentID {
+			m.items[index].document.ReadStatus = status
+			break
+		}
+	}
+	for index := range m.filtered {
+		if m.filtered[index].document.ID == documentID {
+			m.filtered[index].document.ReadStatus = status
+			break
+		}
+	}
+}
+
+func nextReadStatus(current string) string {
+	switch current {
+	case "reading":
+		return "finished"
+	case "finished":
+		return "unread"
+	default: // "" or unread
+		return "reading"
+	}
+}
+
+func setReadStatusCmd(ctx context.Context, app App, selector, status string) tea.Cmd {
+	return func() tea.Msg {
+		err := app.SetDocumentReadStatus(ctx, membox.SetReadStatusCommand{Selector: selector, Status: status})
+		return readStatusMsg{documentID: selector, status: status, err: err}
 	}
 }
 func deleteDocumentCmd(ctx context.Context, app App, selector string) tea.Cmd {

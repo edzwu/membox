@@ -347,8 +347,14 @@ func (b *Box) SearchDocuments(ctx context.Context, query SearchDocumentsQuery) (
 }
 
 type ListDocumentsQuery struct {
-	Limit int
-	All   bool
+	Limit  int
+	All    bool
+	Status string // optional filter: unread | reading | finished
+}
+
+type SetReadStatusCommand struct {
+	Selector string
+	Status   string // unread | reading | finished
 }
 
 type GetDocumentQuery struct{ Selector string }
@@ -359,6 +365,7 @@ type DocumentView struct {
 	RelativePath string     `json:"relative_path"`
 	Status       string     `json:"status"`
 	Pinned       bool       `json:"pinned"`
+	ReadStatus   string     `json:"read_status"`
 	Title        string     `json:"title"`
 	Summary      string     `json:"summary"`
 	MTime        int64      `json:"mtime"`
@@ -370,15 +377,21 @@ type DocumentView struct {
 }
 
 func (b *Box) ListDocuments(ctx context.Context, query ListDocumentsQuery) ([]DocumentView, error) {
-	records, err := b.service.ListDocuments(ctx, query.Limit, query.All)
+	records, err := b.service.ListDocuments(ctx, query.Limit, query.All, query.Status)
 	if err != nil {
 		return nil, err
 	}
 	views := make([]DocumentView, 0, len(records))
 	for _, record := range records {
-		views = append(views, documentView(record.Document, record.AbsolutePath))
+		view := documentView(record.Document, record.AbsolutePath)
+		view.ReadStatus = record.ReadStatus
+		views = append(views, view)
 	}
 	return views, nil
+}
+
+func (b *Box) SetDocumentReadStatus(ctx context.Context, command SetReadStatusCommand) error {
+	return b.service.SetDocumentReadStatus(ctx, command.Selector, command.Status)
 }
 
 func (b *Box) GetDocument(ctx context.Context, query GetDocumentQuery) (DocumentView, error) {

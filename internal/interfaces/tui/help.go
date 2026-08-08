@@ -34,7 +34,8 @@ type helpSection struct {
 func helpSections() []helpSection {
 	return []helpSection{
 		{title: "Browse", entries: []helpEntry{
-			{"enter / tab", "open document / tree ⇄ board"},
+			{"enter / b", "open document / tree ⇄ board"},
+			{"tab", "cycle read status: unread → reading → finished"},
 			{"space", "details · ×2 opens filter input"},
 			{"e / o / d", "edit / open app / move to trash"},
 			{"r / p / s / ctrl+h", "rename file / pin / sort / toggle *-note.md"},
