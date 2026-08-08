@@ -322,20 +322,24 @@ function plainTextHtml(text: string): string {
  *  strips visibility:hidden nodes, so WeChat's #js_content (hidden until JS
  *  reveals it) is dropped and only the header (title/cover/author) remains.
  *  We always also score findMainContent and keep whichever yields more real
- *  text — that is what MarkSnip's hidden-content fallback does, simplified. */
+ *  text — that is what MarkSnip's hidden-content fallback does, simplified.
+ *
+ *  Readability is preferred when it is at least 2/3 of the main-block score:
+ *  it strips nav/author/share chrome (breadcrumbs, author card, read time,
+ *  share buttons — the LangChain blog header leaked into clips because the
+ *  whole page wrapper out-scored Readability's clean article). Only fall
+ *  back to findMainContent when Readability is far smaller (WeChat's hidden
+ *  body is invisible to it: 10 chars vs 26k). */
 function extractMainHtml(doc: Document): string {
-  let best = '';
-  let bestScore = 0;
+  let readability = '';
+  let readabilityScore = 0;
 
   // 1. Readability (on a clone — it mutates its input).
   try {
     const article = new Readability(doc.cloneNode(true) as Document).parse();
     if (article?.content) {
-      const s = htmlTextLen(article.content);
-      if (s > bestScore) {
-        bestScore = s;
-        best = article.content;
-      }
+      readabilityScore = htmlTextLen(article.content);
+      readability = article.content;
     }
   } catch {
     // continue
@@ -344,20 +348,15 @@ function extractMainHtml(doc: Document): string {
   // 2. Main content block (semantic landmark, else largest chrome-free block).
   //    Counts visibility:hidden text, so WeChat raw HTML still scores full.
   const main = findMainContent(doc);
-  if (main) {
-    const s = textLenOf(main);
-    if (s > bestScore) {
-      bestScore = s;
-      best = main.innerHTML;
-    }
-  }
+  const mainScore = main ? textLenOf(main) : 0;
+  const mainHtml = main ? main.innerHTML : '';
+
+  if (readability && readabilityScore >= mainScore / 1.5) return readability;
+  if (mainScore > 0) return mainHtml;
 
   // 3. Plain visible text (shadow-aware; preserves paragraph breaks on live).
-  if (bestScore < 200) {
-    const text = visibleBodyText(doc).replace(/\s+/g, ' ').trim();
-    if (text) return plainTextHtml(text);
-  }
-  return best;
+  const text = visibleBodyText(doc).replace(/\s+/g, ' ').trim();
+  return text ? plainTextHtml(text) : '';
 }
 
 /** Same-origin iframes often hold paper viewers / embeds. Return their best
