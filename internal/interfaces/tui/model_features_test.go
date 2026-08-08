@@ -590,11 +590,11 @@ func TestModel_BoardArrowKeysThroughUpdate(t *testing.T) {
 		return nm.(Model)
 	}
 
-	// Enter board mode with b (input is inactive by default); tab now
+	// Enter board mode with ctrl+t (input is inactive by default); tab now
 	// cycles read status.
-	model = send(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	model = send(model, tea.KeyMsg{Type: tea.KeyCtrlT})
 	if model.viewMode != viewBoard {
-		t.Fatalf("b should enter board mode, got viewMode=%v", model.viewMode)
+		t.Fatalf("ctrl+t should enter board mode, got viewMode=%v", model.viewMode)
 	}
 	if model.filtered[model.selected].document.Summary == "" {
 		t.Fatalf("after entering board, selection is on a non-displayed card idx %d", model.selected)

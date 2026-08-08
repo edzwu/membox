@@ -101,7 +101,7 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, setReadStatusCmd(m.ctx, m.app, document.ID, next)
 		}
 		return m, nil
-	case "b":
+	case "ctrl+t":
 		// Toggle between tree and board view when input is not active
 		m.graphFocusID = ""
 		m.graphCards = nil
