@@ -457,6 +457,7 @@ export async function clipCurrentDocument(overrideSourceUrl?: string): Promise<C
   }
   markdownBody = stripHeadingPermalinkMarkdown(markdownBody);
   markdownBody = stripWeChatPromo(markdownBody);
+  markdownBody = stripBylineHeader(markdownBody);
   markdownBody = restoreMermaidFences(markdownBody, mermaidSources);
   // Body outline is h2+ after normalize; document title is the sole h1.
   // Match ATX h1 only (`# title`), not h2+ (`## title`).
@@ -685,6 +686,36 @@ function stripWeChatPromo(markdown: string): string {
     /^在小说阅读器读本章\s*[\s\S]*?在小说阅读器中沉浸阅读\s*/m,
     '',
   );
+}
+
+/**
+ * Strip the publication byline that Readability keeps on some sites (Medium
+ * in particular renders avatar/reading-time/recency/authors as body-like
+ * paragraphs). Patterns are anchored to the document start so real prose is
+ * never touched, and the loop handles them in any order:
+ *
+ *   [\n\n![avatar](url)\n\n](profile-url)   avatar wrapped in a link
+ *   20 min read | 1 day ago | 3 hours ago   reading time / recency
+ *   Authors: A and B                        author line
+ *   --                                       Medium's leftover rule
+ */
+function stripBylineHeader(markdown: string): string {
+  let text = markdown;
+  for (let i = 0; i < 6; i++) {
+    const before = text;
+    text = text
+      .replace(
+        /^\[\s*\n+!\[[^\]]*\]\([^)]*\)\s*\n+\]\([^)]*\)\s*/m,
+        '',
+      )
+      .replace(
+        /^(?:\d+(?:\.\d+)?\s*(?:min|hour|day|week)s?\s+read\s*|\d+(?:\.\d+)?\s*(?:min|hour|day|week)s?\s+ago\s*|Authors?:[^\n]*\s*|By\s+[^\n]*\s*|--\s*)\n?/i,
+        '',
+      )
+      .replace(/^\n+/, '');
+    if (text === before) break;
+  }
+  return text;
 }
 
 /**
