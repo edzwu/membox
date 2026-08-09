@@ -4,6 +4,7 @@
 
 import { elements } from '../dom.js';
 import { state } from '../state.js';
+import { configureTechnicalMarkdown } from '../markdown/cjk-emphasis.js';
 import { refreshNoteNumbers, scheduleNoteLayout } from './layout.js';
 import { focusNote } from './focus.js';
 import { createAnnotationClientId, notifyAnnotationsChanged } from './session.js';
@@ -66,7 +67,9 @@ function renderNoteText(el, note) {
 
   if (typeof window.markdownit === 'function' && typeof window.DOMPurify === 'function') {
     if (!noteMarkdown) {
-      noteMarkdown = window.markdownit({ html: false, linkify: true, typographer: true, breaks: true });
+      noteMarkdown = configureTechnicalMarkdown(
+        window.markdownit({ html: false, linkify: true, typographer: true, breaks: true }),
+      );
     }
     const clean = window.DOMPurify.sanitize(noteMarkdown.render(note), {
       ADD_ATTR: ['target', 'rel'],

@@ -10,6 +10,7 @@ import { showToast } from './ui/feedback.js';
 import { closeToc } from './ui/chrome.js';
 import { parseFrontmatter, renderFrontmatter } from './markdown/frontmatter.js';
 import { parseMarkdownStructure } from './markdown/structure.js';
+import { configureTechnicalMarkdown } from './markdown/cjk-emphasis.js';
 import { preprocessMath } from './markdown/math-preprocess.js';
 import { preprocessHtml } from './markdown/html-preprocess.js';
 import { wrapTables, markExternalLinks, wrapLeadingContent, addSectionActionButtons, stripHeadingHeaderLinks, attributeSectionSources } from './render/decorations.js';
@@ -32,7 +33,9 @@ export function initMarkdown() {
     return;
   }
 
-  md = window.markdownit({ html: false, linkify: true, typographer: true });
+  md = configureTechnicalMarkdown(
+    window.markdownit({ html: false, linkify: true, typographer: true }),
+  );
 
   // Use markdown-it-texmath to preserve \\[...\\] and \\(...\\) as raw LaTeX
   // inside custom <eqn> / <eq> tags. KaTeX then renders them after sanitization.
