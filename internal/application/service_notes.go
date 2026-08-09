@@ -26,10 +26,14 @@ func (s *Service) ResolveTopicSelector(ctx context.Context, selector string) (*c
 }
 
 type CreateNoteOptions struct {
-	Title        string
-	Body         string
-	FromSelector string
-	Topic        bool
+	Title string
+	Body  string
+	// AlignBodyTitle makes Title authoritative for an existing front matter
+	// title and first H1 in Body. Browser-created related documents use this so
+	// pasted Markdown cannot replace the title that also generated the filename.
+	AlignBodyTitle bool
+	FromSelector   string
+	Topic          bool
 	// Browser clip provenance (stored in document_sources, not inferred later).
 	SourceURL string
 	ClipMode  string // "selection" | "page" | ""
@@ -98,6 +102,8 @@ func (s *Service) CreateNote(ctx context.Context, opts CreateNoteOptions) (Creat
 	body := []byte(opts.Body)
 	if len(body) == 0 {
 		body = []byte("# " + title + "\n\n")
+	} else if opts.AlignBodyTitle {
+		body, _ = rewriteMarkdownDisplayTitle(body, title)
 	}
 	if err := s.writer.WriteNew(ctx, absolute, body); err != nil {
 		return CreateNoteResult{}, err

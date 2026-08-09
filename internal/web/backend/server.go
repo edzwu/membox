@@ -530,7 +530,9 @@ func (s *Server) handleRelated(writer http.ResponseWriter, request *http.Request
 			http.Error(writer, "related document title is required", http.StatusBadRequest)
 			return
 		}
-		result, err := s.service.CreateNote(ctx, application.CreateNoteOptions{Title: title, Body: payload.Body})
+		result, err := s.service.CreateNote(ctx, application.CreateNoteOptions{
+			Title: title, Body: payload.Body, AlignBodyTitle: true,
+		})
 		if err != nil {
 			http.Error(writer, err.Error(), http.StatusInternalServerError)
 			return

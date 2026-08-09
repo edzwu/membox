@@ -725,7 +725,10 @@ func TestSelectionNoteRelatedSourceCarriesReturnAnchor(t *testing.T) {
 func TestServerRelatedCreatesLinkedPlainDocument(t *testing.T) {
 	baseURL, docID, notesDir := startServer(t)
 
-	payload := `{"title":"Related Idea","body":"# Related Idea\n\nSome related content."}`
+	// The modal title is authoritative even when pasted Markdown carries a
+	// different H1. It generates the filename and must also be the title shown
+	// when the new document is opened in Miru.
+	payload := `{"title":"Related Idea","body":"# Pasted Heading\n\nSome related content."}`
 	resp, err := http.Post(baseURL+"/api/doc/"+docID+"/related", "application/json", strings.NewReader(payload))
 	if err != nil {
 		t.Fatal(err)
@@ -736,19 +739,44 @@ func TestServerRelatedCreatesLinkedPlainDocument(t *testing.T) {
 		t.Fatalf("create related failed: status=%d body=%q", resp.StatusCode, body)
 	}
 	var created struct {
-		ID   string `json:"id"`
-		Path string `json:"path"`
+		ID    string `json:"id"`
+		Path  string `json:"path"`
+		Title string `json:"title"`
 	}
 	if err := json.Unmarshal(body, &created); err != nil || created.ID == "" {
 		t.Fatalf("unexpected create response: %q", body)
+	}
+	if created.Title != "Related Idea" {
+		t.Fatalf("created title = %q, want modal title", created.Title)
 	}
 	// A plain Markdown document, not a selection note.
 	base := filepath.Base(created.Path)
 	if strings.HasSuffix(base, "-note.md") {
 		t.Fatalf("related document uses note naming: %s", base)
 	}
-	if _, err := os.Stat(filepath.Join(notesDir, base)); err != nil {
+	createdPath := filepath.Join(notesDir, base)
+	if _, err := os.Stat(createdPath); err != nil {
 		t.Fatalf("related file missing: %v", err)
+	}
+	stored, err := os.ReadFile(createdPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(stored), "# Related Idea\n") || strings.Contains(string(stored), "# Pasted Heading") {
+		t.Fatalf("created Markdown did not align its H1 with the modal title: %q", stored)
+	}
+	openResp, err := http.Get(baseURL + "/api/doc/" + created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, openResp.Body)
+	openResp.Body.Close()
+	shownTitle, err := url.PathUnescape(openResp.Header.Get("X-Membox-Title"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shownTitle != "Related Idea" {
+		t.Fatalf("web title header = %q, want modal title", shownTitle)
 	}
 
 	// The source document lists it as an incoming backlink.
