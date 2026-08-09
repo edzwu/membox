@@ -11,16 +11,22 @@
     "build:firefox": "wxt build -b firefox && node scripts/fix-popup-paths.mjs",
     "zip": "wxt zip",
     "postinstall": "wxt prepare",
-    "fix-popup-paths": "node scripts/fix-popup-paths.mjs"
+    "fix-popup-paths": "node scripts/fix-popup-paths.mjs",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@mozilla/readability": "^0.6.0",
+    "defuddle": "0.19.2",
     "turndown": "^7.2.0",
     "turndown-plugin-gfm": "^1.0.2"
   },
   "devDependencies": {
+    "@types/markdown-it": "^14.1.2",
     "@types/turndown": "^5.0.5",
+    "happy-dom": "^20.11.2",
+    "markdown-it": "14.1.0",
     "typescript": "^5.8.2",
+    "vitest": "^4.1.10",
     "wxt": "^0.20.0"
   }
 }

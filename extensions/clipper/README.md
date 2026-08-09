@@ -37,6 +37,20 @@ npm run dev          # Chrome
 npm run dev:firefox  # Firefox
 ```
 
+The clipping pipeline is deliberately split by responsibility:
+
+- `article-extractor.ts` — isolated live/raw/iframe candidates + Defuddle
+- `markdown.ts` — deterministic HTML serialization (GFM, code, Mermaid)
+- `clip.ts` — payload/frontmatter orchestration and selection notes
+
+Regression checks:
+
+```bash
+npm test
+npm run typecheck
+npm run build
+```
+
 Load the path printed by WXT (usually `.output/chrome-mv3-dev`) as an unpacked
 extension. In the popup:
 
