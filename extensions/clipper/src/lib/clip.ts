@@ -1,7 +1,7 @@
 import type { ClipPayload } from './types';
 import { extractCurrentArticle } from './article-extractor';
 import { htmlToMarkdown } from './markdown';
-import { normalizeSourceURL } from './url';
+import { currentSourceURL, normalizeSourceURL } from './url';
 
 function yamlQuote(value: string): string {
   return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, ' ')}"`;
@@ -98,8 +98,11 @@ export function readSelection(): {
 }
 
 /** Runs inside the extension content script (isolated world + full DOM). */
-export async function clipCurrentDocument(overrideSourceUrl?: string): Promise<ClipPayload> {
-  const sourceUrl = normalizeSourceURL(overrideSourceUrl || location.href);
+export async function clipCurrentDocument(): Promise<ClipPayload> {
+  // Read this at clip time, not when the content script was initialized. SPA
+  // navigations can keep the same content script alive while changing the
+  // document URL; a captured URL would attach the new article to the old one.
+  const sourceUrl = currentSourceURL();
   const article = await extractCurrentArticle();
   const title = article.title || (document.title || 'Clipped page').trim();
   const converted = htmlToMarkdown(article.html);

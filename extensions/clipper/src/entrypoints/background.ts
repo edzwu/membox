@@ -1,6 +1,7 @@
 import { fetchClipsBySource, ingestClip, IngestConflictError } from '../lib/membox-client';
 import { loadSettings } from '../lib/settings';
 import { getNotesEnabled } from '../lib/float-notes';
+import { normalizeSourceURL } from '../lib/url';
 import type { ClipPayload, IngestConflict, IngestResult, SourceClip } from '../lib/types';
 
 type IngestResponse =
@@ -154,6 +155,18 @@ async function clipTab(tabId: number): Promise<ClipPayload> {
   }
   if (!response.payload?.body?.trim()) {
     throw new Error('Extracted Markdown was empty');
+  }
+
+  // The content script can outlive an SPA navigation. Compare its payload
+  // with the tab URL at the end of extraction so a stale page cannot be saved
+  // under the current page's identity.
+  const tab = await browser.tabs.get(tabId);
+  const expected = normalizeSourceURL(tab.url || '');
+  const actual = normalizeSourceURL(response.payload.sourceUrl || '');
+  if (expected && actual !== expected) {
+    throw new Error(
+      `Page changed while clipping; reload the page and try again (expected ${expected}, got ${actual || 'no source URL'})`,
+    );
   }
   return response.payload;
 }

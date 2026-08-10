@@ -47,12 +47,12 @@ export async function extractCurrentArticle(): Promise<ExtractedArticle> {
   const candidates: ExtractedArticle[] = [];
   let liveError: unknown = null;
   try {
-    candidates.push(extractCandidate(snapshotDocument(document), pageUrl, 'live', profile));
+    candidates.push(...extractCandidates(snapshotDocument(document), pageUrl, 'live'));
   } catch (error) {
     liveError = error;
   }
 
-  const live = candidates.find((candidate) => candidate.source === 'live');
+  const live = longestCandidate(candidates.filter((candidate) => candidate.source === 'live'));
   if (
     renderedMermaid ||
     profile.preserveHidden ||
@@ -62,7 +62,7 @@ export async function extractCurrentArticle(): Promise<ExtractedArticle> {
     const rawDocuments = await fetchRawDocuments(pageUrl, Boolean(profile.preserveHidden));
     for (const raw of rawDocuments) {
       try {
-        candidates.push(extractCandidate(raw.doc, raw.url, 'raw', siteProfile(raw.url)));
+        candidates.push(...extractCandidates(raw.doc, raw.url, 'raw'));
       } catch {
         // One malformed or blocked response must not discard a valid candidate.
       }
@@ -89,9 +89,7 @@ export async function extractCurrentArticle(): Promise<ExtractedArticle> {
         // Keep the outer URL.
       }
       try {
-        candidates.push(
-          extractCandidate(snapshotDocument(frameDoc), frameUrl, 'iframe', siteProfile(frameUrl)),
-        );
+        candidates.push(...extractCandidates(snapshotDocument(frameDoc), frameUrl, 'iframe'));
       } catch {
         // Continue with the remaining same-origin viewers.
       }
@@ -103,7 +101,37 @@ export async function extractCurrentArticle(): Promise<ExtractedArticle> {
   return best;
 }
 
-/** Parse one fully isolated document. Exported for fixture tests. */
+/**
+ * Build generic and framework-aware extraction candidates for one document.
+ * Explicit site profiles remain authoritative compatibility adapters; pages
+ * without one compare generic Defuddle against a detected framework scope.
+ */
+export function extractCandidates(
+  doc: Document,
+  url: string,
+  source: CandidateSource,
+): ExtractedArticle[] {
+  const explicit = siteProfile(url);
+  const profiles = hasProfile(explicit) ? [explicit] : [{}, ...frameworkProfiles(doc)];
+  const candidates: ExtractedArticle[] = [];
+  const seen = new Set<string>();
+
+  for (const profile of profiles) {
+    const key = `${profile.contentSelector || ''}\u0000${Boolean(profile.preserveHidden)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    try {
+      candidates.push(extractCandidate(doc.cloneNode(true) as Document, url, source, profile));
+    } catch {
+      // A framework selector is only another candidate. If it becomes stale,
+      // generic Defuddle must still be able to extract the page.
+    }
+  }
+  if (!candidates.length) throw new Error('Page has no extractable candidates');
+  return candidates;
+}
+
+/** Parse one fully isolated document. Exported for focused fixture tests. */
 export function extractCandidate(
   doc: Document,
   url: string,
@@ -158,7 +186,7 @@ export function selectBestCandidate<T extends ArticleCandidate>(
   requireMermaidSource: boolean,
 ): T {
   if (!candidates.length) throw new Error('No article candidates');
-  const live = candidates.find((candidate) => candidate.source === 'live');
+  const live = longestCandidate(candidates.filter((candidate) => candidate.source === 'live'));
   const longest = candidates.reduce((best, candidate) =>
     candidate.textLength > best.textLength ? candidate : best,
   );
@@ -222,6 +250,41 @@ async function fetchRawDocuments(url: string, cookieLessFirst: boolean): Promise
     }
   }
   return documents;
+}
+
+function longestCandidate<T extends ArticleCandidate>(candidates: T[]): T | undefined {
+  return candidates.reduce<T | undefined>(
+    (best, candidate) => (!best || candidate.textLength > best.textLength ? candidate : best),
+    undefined,
+  );
+}
+
+function hasProfile(profile: SiteProfile): boolean {
+  return Boolean(profile.contentSelector || profile.preserveHidden || profile.prepare);
+}
+
+function frameworkProfiles(doc: Document): SiteProfile[] {
+  const generator =
+    doc.querySelector('meta[name="generator"]')?.getAttribute('content')?.toLowerCase() || '';
+  const looksLikeVuePress =
+    generator.includes('vuepress') ||
+    Boolean(
+      doc.querySelector(
+        '#app[data-server-rendered] .theme-container, .theme-default-content, .theme-vdoing-content.content__default',
+      ),
+    );
+  if (!looksLikeVuePress) return [];
+
+  // Ordered from the narrowest article scope to older/common VuePress themes.
+  for (const selector of [
+    '#main-content .content__default',
+    '#main-content .theme-default-content',
+    '.theme-default-content',
+    'main .content__default',
+  ]) {
+    if (doc.querySelector(selector)) return [{ contentSelector: selector }];
+  }
+  return [];
 }
 
 function siteProfile(url: string): SiteProfile {

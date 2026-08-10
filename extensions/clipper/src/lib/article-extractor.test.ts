@@ -3,6 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   extractCandidate,
+  extractCandidates,
   selectBestCandidate,
   type ArticleCandidate,
 } from './article-extractor';
@@ -77,6 +78,40 @@ describe('Defuddle article extraction', () => {
     const result = extractCandidate(doc, 'https://example.com/go', 'live');
     expect(result.html).toContain('Going deeper');
     expect(result.html).not.toMatch(/<h1[\s>]/i);
+  });
+
+  it('compares generic and VuePress-scoped candidates without a host rule', () => {
+    const doc = page(`<!doctype html><html><head>
+      <title>第1章 Go项目如何组织</title>
+      <meta name="generator" content="VuePress 1.9.5">
+      </head><body><div id="app" data-server-rendered="true"><div class="theme-container">
+      <main id="main-content">
+        <aside><a href="/pages/other/01/">第 1 课：专栏导论</a></aside>
+        <div class="theme-vdoing-content content__default">
+          <h1>第1章 Go项目如何组织</h1>
+          <p>${'正文内容应该被保留下来，而不是课程导航。 '.repeat(30)}</p>
+        </div>
+        <div class="article-list"><a href="/pages/other/03/">更多文章</a></div>
+      </main></div></div>
+    </body></html>`);
+
+    const candidates = extractCandidates(doc, 'https://docs.example.com/chapter/one', 'live');
+    const result = selectBestCandidate(candidates, false);
+    expect(candidates).toHaveLength(2);
+    expect(result.title).toBe('第1章 Go项目如何组织');
+    expect(result.html).toContain('正文内容应该被保留下来');
+    expect(result.html).not.toContain('/pages/other/01');
+    expect(result.html).not.toContain('更多文章');
+  });
+
+  it('falls back to generic Defuddle when VuePress has no known content container', () => {
+    const doc = page(`<!doctype html><html><head>
+      <title>Custom VuePress Theme</title><meta name="generator" content="VuePress 2">
+      </head><body><article><p>${'Generic article prose. '.repeat(30)}</p></article></body></html>`);
+
+    const candidates = extractCandidates(doc, 'https://docs.example.com/custom', 'live');
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]?.html).toContain('Generic article prose');
   });
 
   it('extracts hidden WeChat content through a scoped site profile', () => {

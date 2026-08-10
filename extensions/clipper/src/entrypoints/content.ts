@@ -1,13 +1,16 @@
 import { clipCurrentDocument, clipSelection, readSelection } from '../lib/clip';
 import { FloatNotesLayer, getNotesEnabled } from '../lib/float-notes';
 import { SelectionCard } from '../lib/selection-card';
-import { isMemboxReaderUrl, normalizeSourceURL } from '../lib/url';
+import { currentSourceURL, isMemboxReaderUrl } from '../lib/url';
 
 export default defineContentScript({
   matches: ['http://*/*', 'https://*/*'],
   runAt: 'document_idle',
   async main() {
-    const pageUrl = normalizeSourceURL(location.href) || location.href;
+    // Keep this initial URL for the floating-note layer, but never use it as
+    // the source of a later clip: SPA navigation can change location.href
+    // without reloading this content script.
+    const pageUrl = currentSourceURL();
     const onMemboxReader = isMemboxReaderUrl();
 
     // Note-taking is opt-in. Nothing (no composer, no floating cards) runs
@@ -33,7 +36,7 @@ export default defineContentScript({
             excerptText,
             excerptHTML,
             note,
-            sourceUrl: pageUrl,
+            sourceUrl: currentSourceURL(),
           });
           let response: { ok: true; result: { id: string } } | { ok: false; error: string };
           try {
@@ -152,7 +155,7 @@ export default defineContentScript({
         // Full-page clip is an explicit popup action — always available,
         // independent of the note-taking opt-in. Async: may re-fetch the
         // pristine HTML so mermaid sources survive client-side rendering.
-        return clipCurrentDocument(pageUrl)
+        return clipCurrentDocument()
           .then((payload) => ({ ok: true as const, payload }))
           .catch((err: unknown) => ({
             ok: false as const,
@@ -184,7 +187,7 @@ export default defineContentScript({
             try {
               const res = (await browser.runtime.sendMessage({
                 type: 'membox.clips-for-url',
-                url: pageUrl,
+                url: currentSourceURL(),
               })) as {
                 ok: boolean;
                 clips?: Array<{ id: string; excerpt?: string; note?: string; title?: string }>;
@@ -204,7 +207,7 @@ export default defineContentScript({
             try {
               const res = (await browser.runtime.sendMessage({
                 type: 'membox.clips-for-url',
-                url: pageUrl,
+                url: currentSourceURL(),
               })) as {
                 ok: boolean;
                 clips?: Array<{ id: string; excerpt?: string; note?: string; title?: string }>;

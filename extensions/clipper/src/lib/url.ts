@@ -10,6 +10,11 @@ export function isMemboxReaderUrl(href = location.href): boolean {
   }
 }
 
+/** Return the URL of the document currently shown in the content-script page. */
+export function currentSourceURL(href = globalThis.location?.href || ''): string {
+  return normalizeSourceURL(href) || href;
+}
+
 /** Normalize page URLs so WeChat share variants match the same article. */
 export function normalizeSourceURL(raw: string): string {
   const trimmed = (raw || '').trim();
