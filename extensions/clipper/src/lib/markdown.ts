@@ -44,7 +44,10 @@ function makeTurndown(): TurndownService {
   // Defuddle gives extracted equations a canonical data-latex attribute.
   // Persist explicit delimiters so Miru never has to infer math from prose.
   turndown.addRule('latexMath', {
-    filter: (node) => node.nodeName === 'MATH' && (node as Element).hasAttribute('data-latex'),
+    // MathML elements keep a lowercase nodeName in Chromium because they are
+    // in the MathML namespace; happy-dom historically uppercases it. localName
+    // is namespace-safe in both environments.
+    filter: (node) => isLatexMathElement(node),
     replacement(_, node) {
       const math = node as Element;
       const latex = math.getAttribute('data-latex')?.trim() || '';
@@ -70,6 +73,13 @@ function makeTurndown(): TurndownService {
   return turndown;
 }
 
+export function isLatexMathElement(node: Node): boolean {
+  const element = node as Element;
+  return (
+    element.localName?.toLowerCase() === 'math' && element.hasAttribute?.('data-latex') === true
+  );
+}
+
 function cleanConversionHtml(html: string): string {
   const doc = new DOMParser().parseFromString(
     `<div id="membox-conversion-root">${html}</div>`,
@@ -79,6 +89,7 @@ function cleanConversionHtml(html: string): string {
   if (!root) return html;
 
   root.querySelectorAll(DROP_ELEMENTS.join(',')).forEach((el) => el.remove());
+  normalizeRenderedMath(root);
   // Turndown classifies empty custom elements before consulting custom rules.
   // Give source-only MathML a textual child so the latexMath rule can claim it.
   root.querySelectorAll('math[data-latex]').forEach((math) => {
@@ -90,6 +101,46 @@ function cleanConversionHtml(html: string): string {
     });
   });
   return root.innerHTML;
+}
+
+// KaTeX keeps three equivalent forms in the DOM: accessible MathML, a TeX
+// annotation, and aria-hidden visual HTML. Turndown does not apply page CSS or
+// ARIA semantics, so serializing that tree verbatim duplicates every formula.
+// Collapse it to the canonical shape already consumed by the latexMath rule.
+function normalizeRenderedMath(root: HTMLElement): void {
+  for (const katex of Array.from(root.querySelectorAll('.katex'))) {
+    if (!root.contains(katex)) continue; // removed with an outer display node
+    const latex = texAnnotation(katex);
+    if (!latex) continue;
+
+    const math = root.ownerDocument.createElement('math');
+    math.setAttribute('data-latex', latex);
+    const displayContainer = katex.closest('.katex-display');
+    const mathML = katex.querySelector('math');
+    if (displayContainer || mathML?.getAttribute('display') === 'block') {
+      math.setAttribute('display', 'block');
+    }
+
+    if (displayContainer && root.contains(displayContainer)) {
+      displayContainer.replaceWith(math);
+    } else {
+      katex.replaceWith(math);
+    }
+  }
+
+  // Some renderers expose source-bearing MathML without a KaTeX wrapper.
+  root.querySelectorAll('math:not([data-latex])').forEach((math) => {
+    const latex = texAnnotation(math);
+    if (latex) math.setAttribute('data-latex', latex);
+  });
+}
+
+function texAnnotation(element: Element): string {
+  const annotation = Array.from(element.querySelectorAll('annotation')).find(
+    (candidate) =>
+      (candidate.getAttribute('encoding') || '').toLowerCase() === 'application/x-tex',
+  );
+  return annotation?.textContent?.trim() || '';
 }
 
 function isHeadingPermalink(link: HTMLAnchorElement): boolean {

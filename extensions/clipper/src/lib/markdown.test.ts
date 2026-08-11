@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { describe, expect, it } from 'vitest';
-import { htmlToMarkdown } from './markdown';
+import { htmlToMarkdown, isLatexMathElement } from './markdown';
 
 describe('htmlToMarkdown', () => {
   it('serializes GFM tables and removes executable content', () => {
@@ -25,6 +25,13 @@ describe('htmlToMarkdown', () => {
     expect(markdown).toMatch(/^````$/m);
   });
 
+  it('recognizes lowercase MathML namespace elements used by Chromium', () => {
+    const math = document.createElementNS('http://www.w3.org/1998/Math/MathML', 'math');
+    math.setAttribute('data-latex', 'x_1');
+    expect(math.nodeName).toBe('math');
+    expect(isLatexMathElement(math)).toBe(true);
+  });
+
   it('serializes standardized math with explicit delimiters', () => {
     const markdown = htmlToMarkdown(
       '<p>Inline <math data-latex="x_1 + y^2"></math>.</p>' +
@@ -32,6 +39,51 @@ describe('htmlToMarkdown', () => {
     );
     expect(markdown).toContain('$x_1 + y^2$');
     expect(markdown).toContain('$$\nE = mc^2\n$$');
+  });
+
+  it('collapses KaTeX MathML, TeX, and visual HTML to one inline formula', () => {
+    const markdown = htmlToMarkdown(String.raw`
+      <p>A retrieval problem consists of
+        <span><span class="katex">
+          <span class="katex-mathml"><math><semantics><mrow><mi>m</mi></mrow>
+            <annotation encoding="application/x-tex">m</annotation>
+          </semantics></math></span>
+          <span class="katex-html" aria-hidden="true"><span>m</span></span>
+        </span></span>
+        queries and
+        <span class="katex">
+          <span class="katex-mathml"><math><semantics><mrow><mi>A</mi></mrow>
+            <annotation encoding="application/x-tex">A \in \{0, 1\}^{m \times n}</annotation>
+          </semantics></math></span>
+          <span class="katex-html" aria-hidden="true">A VISIBLE DUPLICATE</span>
+        </span>.
+      </p>
+    `);
+
+    expect(markdown).toContain('consists of $m$ queries');
+    expect(markdown).toContain(String.raw`$A \in \{0, 1\}^{m \times n}$`);
+    expect(markdown).not.toContain('m m');
+    expect(markdown).not.toContain('VISIBLE DUPLICATE');
+  });
+
+  it('preserves KaTeX display equations as explicit math blocks', () => {
+    const markdown = htmlToMarkdown(String.raw`
+      <p>The relationship is:</p>
+      <div class="group/math-block"><span class="katex-display"><span class="katex">
+        <span class="katex-mathml"><math display="block"><semantics><mrow></mrow>
+          <annotation encoding="application/x-tex">B = U^T V</annotation>
+        </semantics></math></span>
+        <span class="katex-html" aria-hidden="true">B VISUAL DUPLICATE</span>
+      </span></span></div>
+    `);
+
+    expect(markdown).toContain('$$\nB = U^T V\n$$');
+    expect(markdown).not.toContain('VISUAL DUPLICATE');
+  });
+
+  it('extracts TeX annotations from standalone MathML', () => {
+    const markdown = htmlToMarkdown(String.raw`<p>Value <math><semantics><mrow><mi>x</mi></mrow><annotation encoding="application/x-tex">x_1</annotation></semantics></math>.</p>`);
+    expect(markdown).toContain('Value $x_1$.');
   });
 
   it('removes heading permalink controls structurally', () => {

@@ -20,6 +20,8 @@ function buildMarkdown(
     `clipped_at: ${yamlQuote(new Date().toISOString())}`,
     'clipper: membox-clipper',
   ];
+  const version = runtimeClipperVersion();
+  if (version) lines.push(`clipper_version: ${yamlQuote(version)}`);
   for (const [key, value] of Object.entries(extraFrontMatter)) {
     if (value) lines.push(`${key}: ${yamlQuote(value)}`);
   }
@@ -122,6 +124,14 @@ export async function clipCurrentDocument(): Promise<ClipPayload> {
     body: buildMarkdown(title, sourceUrl, markdownBody, extraFrontMatter),
     bodyLength: markdownBody.length,
   };
+}
+
+function runtimeClipperVersion(): string {
+  try {
+    return browser.runtime.getManifest().version || '';
+  } catch {
+    return ''; // Unit tests and non-extension consumers have no runtime API.
+  }
 }
 
 function plainTextHtml(text: string): string {
