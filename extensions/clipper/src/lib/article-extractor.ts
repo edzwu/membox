@@ -26,6 +26,19 @@ interface SiteProfile {
   contentSelector?: string;
   preserveHidden?: boolean;
   prepare?: (doc: Document) => void;
+  /**
+   * Use this container's HTML directly as the clip content, bypassing
+   * Defuddle. For non-article pages (listing/search SPAs) where readability
+   * heuristics destroy the structure or pick the wrong block.
+   */
+  directSelector?: string;
+  /**
+   * Read innerText from these live containers (computed-style aware, so
+   * CSS-hidden anti-scraping decoys never enter the text), skipping
+   * `remove`-matched chrome. Falls back to generic extraction when a
+   * selector matches nothing.
+   */
+  liveText?: { selectors: string[]; remove: string };
 }
 
 interface RawDocument {
@@ -43,6 +56,13 @@ interface RawDocument {
 export async function extractCurrentArticle(): Promise<ExtractedArticle> {
   const pageUrl = location.href;
   const profile = siteProfile(pageUrl);
+  // Anti-scraping SPAs poison the HTML text with CSS-hidden decoys. Read the
+  // live page's innerText instead: it is computed-style aware, so the decoys
+  // never enter the text.
+  if (profile.liveText) {
+    const live = extractLiveTextCandidate(profile.liveText);
+    if (live) return live;
+  }
   const renderedMermaid = hasRenderedMermaid(document);
   const candidates: ExtractedArticle[] = [];
   let liveError: unknown = null;
@@ -112,12 +132,18 @@ export function extractCandidates(
   source: CandidateSource,
 ): ExtractedArticle[] {
   const explicit = siteProfile(url);
-  const profiles = hasProfile(explicit) ? [explicit] : [{}, ...frameworkProfiles(doc)];
+  let profiles = hasProfile(explicit) ? [explicit] : [{}, ...frameworkProfiles(doc)];
+  // A direct selector is a fast path for non-article pages. When its
+  // container is absent (stale selector, unexpected page state), generic
+  // extraction must still run instead of failing the whole clip.
+  if (explicit.directSelector && !doc.querySelector(explicit.directSelector)) {
+    profiles = [{}, ...profiles];
+  }
   const candidates: ExtractedArticle[] = [];
   const seen = new Set<string>();
 
   for (const profile of profiles) {
-    const key = `${profile.contentSelector || ''}\u0000${Boolean(profile.preserveHidden)}`;
+    const key = `${profile.contentSelector || ''} ${profile.directSelector || ''} ${Boolean(profile.preserveHidden)}`;
     if (seen.has(key)) continue;
     seen.add(key);
     try {
@@ -140,6 +166,10 @@ export function extractCandidate(
 ): ExtractedArticle {
   profile.prepare?.(doc);
   normalizeMermaidSources(doc);
+
+  if (profile.directSelector) {
+    return extractDirectCandidate(doc, url, source, profile.directSelector);
+  }
 
   const options: DefuddleOptions = {
     url,
@@ -173,6 +203,49 @@ export function extractCandidate(
     author: result.author || '',
     published: result.published || '',
   };
+}
+
+/**
+ * Non-article pages (listing/search result SPAs) have no article body for
+ * Defuddle to find; the content container itself is the clip.
+ */
+function extractDirectCandidate(
+  doc: Document,
+  url: string,
+  source: CandidateSource,
+  selector: string,
+): ExtractedArticle {
+  const root = doc.querySelector(selector);
+  if (!root) throw new Error(`content container not found: ${selector}`);
+  absolutizeResourceLinks(root, url);
+  const html = root.outerHTML || '';
+  if (!html.trim()) throw new Error('Page has no extractable text');
+  return {
+    source,
+    title: cleanTitle(doc.title || 'Clipped page'),
+    html,
+    textLength: htmlTextLength(html),
+    wordCount: 0,
+    hasMermaidSource: htmlHasMermaidSource(html),
+    author: '',
+    published: '',
+  };
+}
+
+/** Resolve relative href/src against the page URL (Defuddle does this for the
+ * article path; the direct path must do it itself). */
+function absolutizeResourceLinks(root: Element, pageUrl: string): void {
+  root.querySelectorAll('a[href], img[src], source[src], source[srcset]').forEach((el) => {
+    for (const attr of ['href', 'src', 'srcset']) {
+      const value = el.getAttribute(attr);
+      if (!value || /^(?:[a-z][a-z0-9+.-]*:|#)/i.test(value)) continue;
+      try {
+        el.setAttribute(attr, new URL(value, pageUrl).href);
+      } catch {
+        // Keep the original attribute on malformed input.
+      }
+    }
+  });
 }
 
 /**
@@ -287,10 +360,14 @@ function frameworkProfiles(doc: Document): SiteProfile[] {
   return [];
 }
 
-function siteProfile(url: string): SiteProfile {
+/** Exported for focused fixture tests. */
+export function siteProfile(url: string): SiteProfile {
   let host = '';
+  let pathname = '';
   try {
-    host = new URL(url).hostname;
+    const parsed = new URL(url);
+    host = parsed.hostname;
+    pathname = parsed.pathname;
   } catch {
     return {};
   }
@@ -301,7 +378,106 @@ function siteProfile(url: string): SiteProfile {
       prepare: removeWeChatReaderPromo,
     };
   }
+  // BOSS直聘职位列表是卡片列表而非文章：Defuddle 会把筛选侧栏当成正文，
+  // 并清理掉卡片里的短文本（经验/学历/公司）。直接取职位列表容器。
+  if (host === 'www.zhipin.com' && pathname === '/web/geek/jobs') {
+    return {
+      directSelector: '.job-list-container',
+      prepare: prepareZhipinJobList,
+    };
+  }
+  // 职位详情页的正文被反爬水印污染（隐藏诱饵文本注入），走 live innerText。
+  if (host === 'www.zhipin.com' && pathname.startsWith('/job_detail/')) {
+    return {
+      liveText: {
+        selectors: ['.job-banner .info-primary', '.job-detail'],
+        remove: [
+          '.tag-all', // hidden "show all tags" dropdown duplicating the visible tags
+          '.zp-hide-salary', // salary rendered as SVG paths (anti-scraping)
+          '.job-op', // resume/application CTAs
+          '.detail-section-operate', // wechat share / report links
+          '.zp-more-info-layer-wrapper', // "login to view full content" overlay
+          '.job-detail-guide-immediate-login',
+          '.security-box', // "BOSS 安全提示" boilerplate
+          '.prop-item', // personalized competitiveness analysis
+          '.more-job-section', // "更多职位" recommendations
+          '.job-search-scan',
+        ].join(','),
+      },
+    };
+  }
   return {};
+}
+
+/** Site adapter: drop the login CTA and decorative company logos, keep the
+ * structured job cards. */
+function prepareZhipinJobList(doc: Document): void {
+  doc.querySelectorAll('.zp-job-list-login-card, .boss-logo').forEach((el) => el.remove());
+}
+
+/**
+ * Read a live container's visible text. innerText is computed-style aware, so
+ * anti-scraping decoys hidden via CSS never enter the output. `remove`
+ * chrome and the remaining hiding vectors innerText misses outside Chrome
+ * (visibility:hidden / font-size:0) are detached first and restored after, so
+ * the page is never left mutated. Exported for focused fixture tests.
+ */
+export function extractLiveTextCandidate(
+  spec: { selectors: string[]; remove: string },
+  doc: Document = document,
+): ExtractedArticle | null {
+  const parts: string[] = [];
+  for (const selector of spec.selectors) {
+    const root = doc.querySelector(selector);
+    if (!root) return null; // stale selector → generic extraction
+    const text = readVisibleText(root as HTMLElement, spec.remove, doc.defaultView);
+    if (text) parts.push(text);
+  }
+  const text = parts.join('\n\n');
+  if (text.length < MIN_ARTICLE_CHARS) return null;
+  const html = text
+    .split('\n')
+    .filter((line) => line.trim())
+    .map(
+      (line) =>
+        `<p>${line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</p>`,
+    )
+    .join('');
+  return {
+    source: 'live',
+    title: cleanTitle(doc.title || 'Clipped page'),
+    html,
+    textLength: text.length,
+    wordCount: 0,
+    hasMermaidSource: false,
+    author: '',
+    published: '',
+  };
+}
+
+function readVisibleText(
+  root: HTMLElement,
+  junkSelector: string,
+  view: (Window & typeof globalThis) | null,
+): string {
+  const detached: { el: Element; parent: Node; next: Node | null }[] = [];
+  const detach = (el: Element) => {
+    if (!el.parentNode) return;
+    detached.push({ el, parent: el.parentNode, next: el.nextSibling });
+    el.remove();
+  };
+  root.querySelectorAll(junkSelector).forEach(detach);
+  if (view?.getComputedStyle) {
+    root.querySelectorAll('*').forEach((el) => {
+      const style = view.getComputedStyle(el);
+      if (style.visibility === 'hidden' || style.fontSize === '0px') detach(el);
+    });
+  }
+  try {
+    return root.innerText.trim();
+  } finally {
+    for (const { el, parent, next } of detached.reverse()) parent.insertBefore(el, next);
+  }
 }
 
 /** Site adapter: remove the bounded reader CTA from the article DOM, not Markdown. */
