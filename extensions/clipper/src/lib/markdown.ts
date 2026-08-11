@@ -200,7 +200,11 @@ function detectCodeLanguage(pre: HTMLElement, code: Element | null): string {
 }
 
 export function looksLikeMermaid(text: string): boolean {
-  return /^(?:flowchart|graph|sequenceDiagram|classDiagram|stateDiagram|erDiagram|journey|gantt|pie|gitGraph|mindmap|timeline|quadrantChart|sankey|xychart)\b/m.test(
+  // Anchor at the start of the whole text only — never /m. A multiline anchor
+  // matches a diagram keyword on ANY line, so a large pre whose body merely
+  // contains a mermaid example (e.g. a raw Markdown page wrapped in one pre)
+  // would be misclassified as a diagram and fenced as ```mermaid.
+  return /^(?:flowchart|graph|sequenceDiagram|classDiagram|stateDiagram|erDiagram|journey|gantt|pie|gitGraph|mindmap|timeline|quadrantChart|sankey|xychart)\b/.test(
     text.trimStart(),
   );
 }

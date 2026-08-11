@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { describe, expect, it } from 'vitest';
-import { htmlToMarkdown, isLatexMathElement } from './markdown';
+import { htmlToMarkdown, isLatexMathElement, looksLikeMermaid } from './markdown';
 
 describe('htmlToMarkdown', () => {
   it('serializes GFM tables and removes executable content', () => {
@@ -93,5 +93,35 @@ describe('htmlToMarkdown', () => {
     expect(markdown).toContain('## Section');
     expect(markdown).not.toContain('headerlink');
     expect(markdown).not.toContain('¶');
+  });
+});
+
+describe('looksLikeMermaid', () => {
+  it('matches text that starts with a diagram keyword', () => {
+    expect(looksLikeMermaid('flowchart TD\n  A --> B')).toBe(true);
+    expect(looksLikeMermaid('  \n stateDiagram-v2\n  [*] --> Idle')).toBe(true);
+  });
+
+  it('rejects prose that mentions a keyword mid-line', () => {
+    expect(looksLikeMermaid('# Notes\n\nUse flowchart TD for the diagram.')).toBe(false);
+  });
+
+  // Regression: a raw text page arrives as ONE giant <pre>. Its body may
+  // contain mermaid examples on inner lines; a multiline ^ anchor used to
+  // classify the whole document as a single mermaid block.
+  it('rejects a large document that merely contains a mermaid example', () => {
+    const document = [
+      '# Durable AgentHarness design',
+      '',
+      'Some prose about the design.',
+      '',
+      '```mermaid',
+      'flowchart TD',
+      '  A --> B',
+      '```',
+      '',
+      'More prose. '.repeat(200),
+    ].join('\n');
+    expect(looksLikeMermaid(document)).toBe(false);
   });
 });
