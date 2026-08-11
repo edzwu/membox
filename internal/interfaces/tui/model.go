@@ -299,7 +299,7 @@ func inputPlaceholder(mode string) string {
 	case inputModeAgent:
 		return "ask the agent about your documents…"
 	default:
-		return "filter documents (tab toggles name/content search)"
+		return "filter documents (enter opens · tab pins · ctrl+f name/content)"
 	}
 }
 

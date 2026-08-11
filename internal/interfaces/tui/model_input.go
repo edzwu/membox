@@ -45,17 +45,7 @@ func (m Model) updateFilterInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.hideInput()
 		return m, m.filterChanged(nil)
 	case "tab":
-		if m.searchMode == searchModeName {
-			m.searchMode = searchModeFull
-		} else {
-			m.searchMode = searchModeName
-		}
-		return m, m.filterChanged(nil)
-	case "ctrl+g":
-		m.detailsVisible = !m.detailsVisible
-		m.keepSelectionVisible()
-		return m, nil
-	case "enter":
+		// Pin the current draft as a filter tag (date token or text).
 		handled, err := m.commitFilterToken()
 		if handled {
 			m.filterErr = err
@@ -67,6 +57,24 @@ func (m Model) updateFilterInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.commitTextFilter() {
 			return m, m.filterChanged(nil)
 		}
+		return m, nil
+	case "ctrl+f":
+		// Scope toggle (name ⇄ full content) moved here when tab took over
+		// pinning; ctrl+f is only pagedown in the fullscreen/help contexts.
+		if m.searchMode == searchModeName {
+			m.searchMode = searchModeFull
+		} else {
+			m.searchMode = searchModeName
+		}
+		return m, m.filterChanged(nil)
+	case "ctrl+g":
+		m.detailsVisible = !m.detailsVisible
+		m.keepSelectionVisible()
+		return m, nil
+	case "enter":
+		// Enter always opens the selected document (fzf-style): the draft
+		// already filtered the list live, so typing + enter is the fastest
+		// path to a result. Pinning the draft as a tag lives on tab.
 		m.hideInput()
 		if document, ok := m.selectedDocument(); ok {
 			m.loading = true

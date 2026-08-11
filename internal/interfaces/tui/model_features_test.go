@@ -340,7 +340,7 @@ func TestModel_ViewUsesTerminalHeightExactly(t *testing.T) {
 	}
 }
 
-func TestModel_TabTogglesHighlightedMode(t *testing.T) {
+func TestModel_CtrlFTogglesHighlightedMode(t *testing.T) {
 	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
 	model.inputVisible = true
 	model.inputActive = true
@@ -349,16 +349,16 @@ func TestModel_TabTogglesHighlightedMode(t *testing.T) {
 	if !strings.Contains(badge, " NAME ") {
 		t.Fatalf("default mode badge=%q", badge)
 	}
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlF})
 	model = updated.(Model)
 	badge = model.modeBadge()
 	if !strings.Contains(badge, " CONTENT ") {
 		t.Fatalf("full mode badge=%q", badge)
 	}
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlF})
 	model = updated.(Model)
 	if model.searchMode != searchModeName {
-		t.Fatalf("tab did not toggle back: %s", model.searchMode)
+		t.Fatalf("ctrl+f did not toggle back: %s", model.searchMode)
 	}
 }
 
@@ -734,7 +734,7 @@ func TestModel_FilterOptionsPanelCtrlOAndStatusBar(t *testing.T) {
 	})
 	model.filterExact, model.filterCase = true, false
 	model.input.SetValue("rust")
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
 	model = updated.(Model)
 	if len(model.textFilters) != 1 || !model.textFilters[0].Exact || model.textFilters[0].Case {
 		t.Fatalf("committed filter did not freeze semantics: %+v", model.textFilters)
@@ -750,7 +750,7 @@ func TestModel_FilterOptionsPanelCtrlOAndStatusBar(t *testing.T) {
 	model.textFilters = nil
 	model.filterExact = false
 	model.input.SetValue("rust")
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
 	model = updated.(Model)
 	if len(model.filtered) != 2 {
 		t.Fatalf("contains mode should select both docs: %+v", model.filtered)
@@ -760,7 +760,7 @@ func TestModel_FilterOptionsPanelCtrlOAndStatusBar(t *testing.T) {
 	model.textFilters = nil
 	model.filterExact, model.filterCase = true, true
 	model.input.SetValue("RUST")
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
 	model = updated.(Model)
 	if len(model.filtered) != 0 {
 		t.Fatalf("word+case RUST should match nothing: %+v", model.filtered)

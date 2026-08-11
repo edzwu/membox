@@ -476,7 +476,7 @@ func TestModel_SlashClearStillClearsFiltersInSearchMode(t *testing.T) {
 	model.inputVisible, model.inputActive = true, true
 	model.input.Focus()
 	model.input.SetValue("/clear")
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyTab})
 	model = updated.(Model)
 	if len(model.dateFilters) != 0 || len(model.textFilters) != 0 {
 		t.Fatalf("/clear did not clear filters: dates=%+v text=%+v", model.dateFilters, model.textFilters)
@@ -722,7 +722,7 @@ func TestModel_TextPatternsCommitAsTagsWithANDSemantics(t *testing.T) {
 	model.inputVisible, model.inputActive = true, true
 	model.input.Focus()
 	model.input.SetValue("report")
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyTab})
 	model = updated.(Model)
 	if len(model.textFilters) != 1 || model.textFilters[0].Mode != searchModeName || model.input.Value() != "" || len(model.filtered) != 2 {
 		t.Fatalf("name pattern was not committed: tags=%+v input=%q filtered=%+v", model.textFilters, model.input.Value(), model.filtered)
@@ -732,17 +732,41 @@ func TestModel_TextPatternsCommitAsTagsWithANDSemantics(t *testing.T) {
 	}
 
 	model.input.SetValue("alpha")
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
 	model = updated.(Model)
 	if len(model.textFilters) != 2 || len(model.filtered) != 1 || model.filtered[0].document.ID != "alpha-report" {
 		t.Fatalf("name tags do not use AND semantics: tags=%+v filtered=%+v", model.textFilters, model.filtered)
 	}
 
-	// Enter on an empty input retains the old open-document behavior.
+	// Enter opens the selected document.
 	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(Model)
 	if model.inputVisible || !model.loading || command == nil {
-		t.Fatalf("empty Enter did not open selected document: visible=%v loading=%v command=%v", model.inputVisible, model.loading, command)
+		t.Fatalf("Enter did not open selected document: visible=%v loading=%v command=%v", model.inputVisible, model.loading, command)
+	}
+}
+
+func TestModel_EnterWithDraftOpensDocumentWithoutPinning(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.width, model.height = 120, 24
+	model.items = documentItems([]membox.DocumentView{
+		{ID: "alpha-report", Title: "Alpha report", Path: "/tmp/alpha-report.md"},
+		{ID: "beta-report", Title: "Beta report", Path: "/tmp/beta-report.md"},
+	})
+	model.inputVisible, model.inputActive = true, true
+	model.input.Focus()
+	// The draft narrows the list live; Enter opens the selection directly and
+	// leaves no pinned tag behind (pinning lives on tab).
+	model.input.SetValue("alpha")
+	model.refreshFilter()
+	_ = model.filterChanged(nil)
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if model.inputVisible || !model.loading || command == nil {
+		t.Fatalf("Enter with draft did not open selected document: visible=%v loading=%v command=%v", model.inputVisible, model.loading, command)
+	}
+	if len(model.textFilters) != 0 {
+		t.Fatalf("Enter must not pin the draft as a filter tag: %+v", model.textFilters)
 	}
 }
 
@@ -756,12 +780,12 @@ func TestModel_NameAndFullTextTagsKeepTheirModesAndIntersect(t *testing.T) {
 	model.inputVisible, model.inputActive = true, true
 	model.input.Focus()
 	model.input.SetValue("alpha")
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyTab})
 	model = updated.(Model)
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlF})
 	model = updated.(Model)
 	model.input.SetValue("flash attention")
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
 	model = updated.(Model)
 	if len(model.textFilters) != 2 || model.textFilters[0].Mode != searchModeName || model.textFilters[1].Mode != searchModeFull {
 		t.Fatalf("text tag modes were not retained: %+v", model.textFilters)
@@ -797,7 +821,7 @@ func TestModel_DateTagsRenderAndFilterWithANDSemantics(t *testing.T) {
 	}
 
 	model.input.SetValue("+c:2025")
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
 	model = updated.(Model)
 	if !model.inputVisible || len(model.dateFilters) != 2 || len(model.filtered) != 1 || model.filtered[0].document.ID != "july-2025" {
 		t.Fatalf("date tags do not use AND semantics: tags=%+v filtered=%+v", model.dateFilters, model.filtered)
@@ -831,13 +855,13 @@ func TestModel_ClearAndBackspaceRemoveAllFilterTags(t *testing.T) {
 	model.inputVisible, model.inputActive = true, true
 	model.input.Focus()
 	model.input.SetValue("+2026")
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyTab})
 	model = updated.(Model)
 	if len(model.dateFilters) != 1 {
 		t.Fatal("date tag was not added")
 	}
 	model.input.SetValue("one")
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
 	model = updated.(Model)
 	if len(model.textFilters) != 1 {
 		t.Fatal("text tag was not added")
@@ -854,13 +878,13 @@ func TestModel_ClearAndBackspaceRemoveAllFilterTags(t *testing.T) {
 	}
 
 	model.input.SetValue("+2026")
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
 	model = updated.(Model)
 	model.input.SetValue("one")
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
 	model = updated.(Model)
 	model.input.SetValue("/clear")
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
 	model = updated.(Model)
 	if len(model.dateFilters) != 0 || len(model.textFilters) != 0 || model.input.Value() != "" {
 		t.Fatalf("/clear did not clear all tags: dates=%+v text=%+v input=%q", model.dateFilters, model.textFilters, model.input.Value())
@@ -873,14 +897,14 @@ func TestModel_InvalidDateTagShowsErrorAndEscPreservesValidTags(t *testing.T) {
 	model.inputVisible, model.inputActive = true, true
 	model.input.Focus()
 	model.input.SetValue("+2026-02-30")
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyTab})
 	model = updated.(Model)
 	if model.filterErr == nil || len(model.dateFilters) != 0 || !model.inputVisible {
 		t.Fatalf("invalid tag was accepted: err=%v tags=%+v", model.filterErr, model.dateFilters)
 	}
 
 	model.input.SetValue("+2026-07")
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
 	model = updated.(Model)
 	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	model = updated.(Model)
