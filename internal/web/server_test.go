@@ -83,17 +83,30 @@ func TestServerServesReaderAndMarkdown(t *testing.T) {
 	}
 	adapterBody, _ := io.ReadAll(adapterResp.Body)
 	adapterResp.Body.Close()
-	if adapterResp.StatusCode != http.StatusOK || !strings.Contains(string(adapterBody), "membox-connection") {
-		t.Fatalf("membox adapter unavailable: status=%d", adapterResp.StatusCode)
+	if adapterResp.StatusCode != http.StatusOK || !strings.Contains(string(adapterBody), "./reading-state.js") {
+		t.Fatalf("membox adapter composition root unavailable: status=%d", adapterResp.StatusCode)
 	}
-	if !strings.Contains(string(adapterBody), "membox-document-switcher") || !strings.Contains(string(adapterBody), "Switch document · Ctrl+O") {
-		t.Fatal("membox adapter does not inject the document switcher")
+	// The adapter is split into cohesive feature modules; each must be served.
+	featureModules := map[string][]string{
+		"connection.js": {"membox-connection"},
+		"document.js":   {"membox-document-switcher", "Switch document · Ctrl+O", "membox-document-navigation"},
+		"notes.js":      {"membox-browse-notes", "Notes in this document", "Open full note"},
 	}
-	if !strings.Contains(string(adapterBody), "membox-document-navigation") ||
-		!strings.Contains(string(adapterBody), "membox-browse-notes") ||
-		!strings.Contains(string(adapterBody), "Notes in this document") ||
-		!strings.Contains(string(adapterBody), "Open full note") {
-		t.Fatal("membox adapter does not inject the topbar note picker and saved-note links")
+	for module, markers := range featureModules {
+		moduleResp, err := http.Get(baseURL + "/membox/" + module)
+		if err != nil {
+			t.Fatal(err)
+		}
+		moduleBody, _ := io.ReadAll(moduleResp.Body)
+		moduleResp.Body.Close()
+		if moduleResp.StatusCode != http.StatusOK {
+			t.Fatalf("membox adapter module %s unavailable: status=%d", module, moduleResp.StatusCode)
+		}
+		for _, marker := range markers {
+			if !strings.Contains(string(moduleBody), marker) {
+				t.Fatalf("membox adapter module %s missing %q", module, marker)
+			}
+		}
 	}
 
 	docResp, err := http.Get(baseURL + "/api/doc/" + docID)
