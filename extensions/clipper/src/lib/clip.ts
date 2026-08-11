@@ -99,12 +99,66 @@ export function readSelection(): {
   return { excerptText, excerptHTML: holder.innerHTML, rect };
 }
 
+/**
+ * Raw Markdown pages (e.g. raw.githubusercontent.com) are served as
+ * text/plain, so the browser wraps the entire document in one page-sized
+ * <pre>. Return that source text, or null for ordinary HTML pages.
+ */
+export function rawMarkdownText(doc: Document = document): string | null {
+  if (doc.contentType !== 'text/plain') return null;
+  const body = doc.body;
+  if (!body || body.children.length !== 1) return null;
+  const pre = body.firstElementChild;
+  if (!pre || pre.tagName !== 'PRE') return null;
+  const text = pre.textContent || '';
+  return text.trim() ? text : null;
+}
+
+/** True when the URL path names a Markdown file. */
+export function isMarkdownURL(url: string): boolean {
+  try {
+    return /\.(md|markdown)$/i.test(new URL(url).pathname);
+  } catch {
+    return false;
+  }
+}
+
+/** Title for a raw Markdown clip: the first ATX heading, else the filename. */
+export function rawMarkdownTitle(text: string, sourceUrl: string): string {
+  const heading = text.match(/^#\s+(.+?)\s*#*\s*$/m)?.[1]?.trim();
+  if (heading) return heading;
+  try {
+    const file = decodeURIComponent(new URL(sourceUrl).pathname.split('/').pop() || '');
+    const stem = file.replace(/\.(md|markdown)$/i, '').trim();
+    if (stem) return stem;
+  } catch {
+    /* fall through */
+  }
+  return 'Clipped page';
+}
+
 /** Runs inside the extension content script (isolated world + full DOM). */
 export async function clipCurrentDocument(): Promise<ClipPayload> {
   // Read this at clip time, not when the content script was initialized. SPA
   // navigations can keep the same content script alive while changing the
   // document URL; a captured URL would attach the new article to the old one.
   const sourceUrl = currentSourceURL();
+
+  // A raw Markdown page IS already Markdown: persist the source verbatim.
+  // Running it through HTML article extraction would fence the whole page as
+  // one code block (or misclassify it as a diagram when it contains one).
+  const rawText = rawMarkdownText();
+  if (rawText && isMarkdownURL(sourceUrl)) {
+    const title = rawMarkdownTitle(rawText, sourceUrl);
+    return {
+      title,
+      sourceUrl,
+      clipMode: 'page',
+      body: buildMarkdown(title, sourceUrl, rawText, { clip_mode: 'page' }),
+      bodyLength: rawText.trim().length,
+    };
+  }
+
   const article = await extractCurrentArticle();
   const title = article.title || (document.title || 'Clipped page').trim();
   const converted = htmlToMarkdown(article.html);

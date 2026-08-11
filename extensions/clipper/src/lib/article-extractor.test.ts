@@ -156,4 +156,33 @@ describe('Defuddle article extraction', () => {
     expect(markdown.indexOf('```mermaid')).toBeLessThan(markdown.indexOf('After diagram.'));
     expect(markdown).toContain('A --> B');
   });
+
+  // Regression: raw.githubusercontent.com serves Markdown as text/plain, so
+  // the whole document lands in one <pre>. A mermaid example inside it must
+  // not turn the entire page into one mermaid fence.
+  it('does not fence a whole raw Markdown page as one mermaid diagram', () => {
+    const raw = [
+      '# Durable AgentHarness design',
+      '',
+      'Prose about durable runs. '.repeat(40),
+      '',
+      '```mermaid',
+      'flowchart TD',
+      '    App --> Harness',
+      '```',
+      '',
+      'More prose. '.repeat(40),
+    ].join('\n');
+    const doc = page(`<!doctype html><html><head><title>raw</title></head><body><pre>${raw}</pre></body></html>`);
+
+    const result = extractCandidate(doc, 'https://raw.githubusercontent.com/a/b/main/doc.md', 'raw');
+    const markdown = htmlToMarkdown(result.html);
+    expect(result.hasMermaidSource).toBe(false);
+    // At this extractor layer a whole-page pre still becomes a plain code
+    // fence (containing the literal inner ```mermaid example as text); the
+    // bug wrapped it in a 4-backtick mermaid-language fence. clip.ts bypasses
+    // this layer entirely for raw Markdown pages and saves the source verbatim.
+    expect(markdown).not.toMatch(/^`{4,}mermaid/m);
+    expect(markdown).toContain('Durable AgentHarness design');
+  });
 });
