@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"membox"
+	"membox/internal/daemon"
+	"membox/internal/infrastructure/sqlite"
 )
 
 type fakeLauncher struct{}
@@ -70,6 +72,71 @@ func TestCLI_CLI002_UnknownNestedCommandPrintsParentUsage(t *testing.T) {
 	}
 	if strings.Contains(stderr, "Find and operate on documents") {
 		t.Fatalf("printed root help: %s", stderr)
+	}
+}
+
+func TestCLI_ScanUsesRunningDaemon(t *testing.T) {
+	home, err := os.MkdirTemp("/tmp", "mm-scan-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "daemon.md"), []byte("# Daemon scan\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config, err := daemon.DefaultConfig(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := sqlite.Open(config.DatabasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.AddOrReactivatePath(context.Background(), workspace, time.Now()); err != nil {
+		store.Close()
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runErr := make(chan error, 1)
+	go func() { runErr <- daemon.New(config).Run(ctx) }()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if _, err := daemon.Healthcheck(config); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("daemon did not become ready")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	code, stdout, stderr := runTestCLI(t, "--home", home, "scan", "--json")
+	if code != 0 {
+		t.Fatalf("scan failed: code=%d stderr=%s", code, stderr)
+	}
+	var report membox.ScanReport
+	if err := json.Unmarshal([]byte(stdout), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.Added != 1 || report.Files != 1 {
+		t.Fatalf("scan report = %+v", report)
+	}
+	if err := daemon.Stop(context.Background(), config); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-runErr:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("daemon did not stop")
 	}
 }
 
@@ -382,6 +449,60 @@ func TestCLI_CLI002_RuntimeErrorDoesNotPrintUsage(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "not found") {
 		t.Fatalf("wrong runtime error: %s", stderr)
+	}
+}
+
+func TestCLI_DocSummarizeSetsExplicitSummary(t *testing.T) {
+	home, notes := filepath.Join(t.TempDir(), "home"), t.TempDir()
+	if err := os.WriteFile(filepath.Join(notes, "source.md"), []byte("# Source\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, stderr := runTestCLI(t, "--home", home, "path", "add", notes); code != 0 {
+		t.Fatalf("add failed: %d %s", code, stderr)
+	}
+	code, stdout, stderr := runTestCLI(t, "--home", home, "doc", "list", "--json")
+	if code != 0 {
+		t.Fatalf("list failed: %d %s", code, stderr)
+	}
+	var documents []membox.DocumentView
+	if err := json.Unmarshal([]byte(stdout), &documents); err != nil {
+		t.Fatal(err)
+	}
+	if len(documents) != 1 {
+		t.Fatalf("documents=%d", len(documents))
+	}
+
+	code, stdout, stderr = runTestCLI(t, "--home", home, "doc", "summarize", documents[0].ID, "核心要点：测试总结", "--json")
+	if code != 0 {
+		t.Fatalf("summarize failed: %d %s", code, stderr)
+	}
+	var view membox.DocumentView
+	if err := json.Unmarshal([]byte(stdout), &view); err != nil {
+		t.Fatal(err)
+	}
+	if view.Summary != "核心要点：测试总结" {
+		t.Fatalf("summary=%q", view.Summary)
+	}
+
+	// The summary must survive a rescan (index metadata is preserved).
+	if code, _, stderr := runTestCLI(t, "--home", home, "path", "scan"); code != 0 {
+		t.Fatalf("scan failed: %d %s", code, stderr)
+	}
+	code, stdout, stderr = runTestCLI(t, "--home", home, "doc", "show", documents[0].ID, "--json")
+	if code != 0 {
+		t.Fatalf("show failed: %d %s", code, stderr)
+	}
+	var after membox.DocumentView
+	if err := json.Unmarshal([]byte(stdout), &after); err != nil {
+		t.Fatal(err)
+	}
+	if after.Summary != "核心要点：测试总结" {
+		t.Fatalf("summary after rescan=%q", after.Summary)
+	}
+
+	// Empty explicit text is rejected.
+	if code, _, _ := runTestCLI(t, "--home", home, "doc", "summarize", documents[0].ID, "  "); code == 0 {
+		t.Fatal("empty summary text must fail")
 	}
 }
 

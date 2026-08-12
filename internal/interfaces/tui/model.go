@@ -30,16 +30,12 @@ const (
 	viewBoard = "board"
 )
 
-const (
-	sortModeName = "name"
-	sortModeTime = "time"
-)
-
 type App interface {
 	AddPath(context.Context, membox.AddPathCommand) (membox.AddPathResult, error)
 	SearchDocuments(context.Context, membox.SearchDocumentsQuery) ([]membox.SearchResult, error)
 	ListDocuments(context.Context, membox.ListDocumentsQuery) ([]membox.DocumentView, error)
-	SetDocumentReadStatus(context.Context, membox.SetReadStatusCommand) error
+	SetDocumentSummary(context.Context, membox.SetSummaryCommand) (membox.DocumentView, error)
+	SummarizeDocument(context.Context, string) (membox.DocumentView, error)
 	ReadDocument(context.Context, membox.ReadDocumentQuery) ([]byte, error)
 	ResolveDocumentLocation(context.Context, membox.ResolveLocationQuery) (membox.LocationView, error)
 	ReindexDocument(context.Context, membox.ReindexDocumentCommand) error
@@ -138,6 +134,7 @@ type Model struct {
 	inputVisible   bool
 	inputActive    bool
 	detailsVisible bool
+	previewFocused bool
 	fullscreen     bool
 	fullDocument   *membox.DocumentView
 
@@ -145,6 +142,7 @@ type Model struct {
 	err            error
 	filterErr      error
 	statusMessage  string
+	summarizing    map[string]bool
 	width, height  int
 	listSequence   uint64
 	spaceSequence  uint64
@@ -160,7 +158,6 @@ type Model struct {
 	cmdSelected    int
 	cmdMenuVisible bool
 	viewMode       string
-	sortMode       string
 	viewerMode     string
 	hideNotes      bool
 	configVisible  bool
@@ -258,11 +255,6 @@ type pinMsg struct {
 	err        error
 }
 
-type readStatusMsg struct {
-	documentID string
-	status     string
-	err        error
-}
 type openMsg struct{ err error }
 type openWebMsg struct {
 	url string
@@ -273,6 +265,11 @@ type noteCreatedMsg struct {
 	document membox.DocumentView
 	command  *exec.Cmd
 	err      error
+}
+type summarizeDoneMsg struct {
+	documentID string
+	document   membox.DocumentView
+	err        error
 }
 type topicCreatedMsg struct{ topic membox.TopicView }
 type deleteResultMsg struct {
@@ -310,7 +307,7 @@ func New(ctx context.Context, app App, launcher host.Launcher) Model {
 	spin := spinner.New()
 	spin.Spinner = spinner.Dot
 	vp := viewport.New(40, 10)
-	model := Model{ctx: ctx, app: app, launcher: launcher, input: input, spinner: spin, preview: vp, searchMode: searchModeName, inputMode: inputModeSearch, viewMode: viewTree, sortMode: sortModeTime, viewerMode: "leaf", web: webState{controllerID: newWebControllerID()}, agent: newAgentUIState()}
+	model := Model{ctx: ctx, app: app, launcher: launcher, input: input, spinner: spin, preview: vp, searchMode: searchModeName, inputMode: inputModeSearch, viewMode: viewTree, viewerMode: "leaf", summarizing: map[string]bool{}, web: webState{controllerID: newWebControllerID()}, agent: newAgentUIState()}
 	model.web.starting = true
 	model.preview.SetContent(previewPlaceholder("Loading documents…"))
 	return model
@@ -319,7 +316,11 @@ func New(ctx context.Context, app App, launcher host.Launcher) Model {
 func Run(ctx context.Context, app App, launcher host.Launcher, programOptions ...tea.ProgramOption) error {
 	options := []tea.ProgramOption{tea.WithAltScreen()}
 	options = append(options, programOptions...)
-	_, err := tea.NewProgram(New(ctx, app, launcher), options...).Run()
+	model := New(ctx, app, launcher)
+	leaseCtx, stopLease := context.WithCancel(ctx)
+	defer stopLease()
+	go maintainWebLease(leaseCtx, app, model.web.controllerID, webRefreshInterval)
+	_, err := tea.NewProgram(model, options...).Run()
 	return err
 }
 
@@ -497,6 +498,11 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			} else if document, ok := m.selectedDocument(); ok {
 				m.rawDocumentID = document.ID
 			}
+			// Documents with a summary show the summary instead of the
+			// Markdown body: the preview is the at-a-glance pane.
+			if summary := m.summaryFor(m.rawDocumentID); summary != "" {
+				m.rawContent = summary
+			}
 			m.applyPreviewContent()
 		}
 	case scanMsg:
@@ -543,17 +549,25 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err == nil {
 			m.applyPinnedState(msg.documentID, msg.pinned)
 		}
-	case readStatusMsg:
-		m.loading, m.err = false, msg.err
-		if msg.err == nil {
-			m.applyReadStatus(msg.documentID, msg.status)
-		}
 	case openMsg:
 		m.err = msg.err
 	case openWebMsg:
 		m.loading, m.err = false, msg.err
 		if msg.err == nil {
 			m.statusMessage = "Opened in browser: " + msg.url
+		}
+	case summarizeDoneMsg:
+		delete(m.summarizing, msg.documentID)
+		if msg.err != nil {
+			m.err = msg.err
+			m.statusMessage = "summarize failed: " + shortID(msg.documentID)
+		} else {
+			m.applySummary(msg.documentID, msg.document.Summary)
+			m.statusMessage = "summary saved: " + shortID(msg.documentID)
+			if m.rawDocumentID == msg.documentID {
+				m.rawContent = msg.document.Summary
+				m.applyPreviewContent()
+			}
 		}
 	case noteCreatedMsg:
 		m.loading, m.err = false, msg.err
@@ -603,6 +617,7 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.graphLayout = msg.layout
 			m.graphTopics = msg.topics
 			m.graphSelected = 0
+			m.previewFocused = false
 			m.viewMode = viewBoard
 			m.boardScrollY = 0
 			m.statusMessage = "graph focus " + shortID(msg.documentID)
@@ -618,7 +633,12 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				commands = append(commands, m.threadSearchCmd(query, exact))
 			}
 		}
+		// A dedicated result surface replaces the command palette rather than
+		// stacking underneath it. This makes the next esc belong to the result.
 		m.clearExecutedCommand()
+		if msg.err == nil {
+			m.hideInput()
+		}
 	case threadSearchMsg:
 		if msg.sequence == m.graphSearchSequence && msg.err == nil {
 			m.graphSearchQuery = msg.query
@@ -694,6 +714,20 @@ func (m Model) selectedDocument() (membox.DocumentView, bool) {
 		return membox.DocumentView{}, false
 	}
 	return m.filtered[m.selected].document, true
+}
+
+// summaryFor returns the document's stored summary, or "" when there is
+// none. The preview pane shows the summary in place of the Markdown body.
+func (m *Model) summaryFor(documentID string) string {
+	if documentID == "" {
+		return ""
+	}
+	for _, candidate := range m.items {
+		if candidate.document.ID == documentID {
+			return strings.TrimSpace(candidate.document.Summary)
+		}
+	}
+	return ""
 }
 
 func (m Model) loadPreview() tea.Cmd {
@@ -779,6 +813,9 @@ func (m *Model) resize() {
 }
 
 func (m Model) layoutWidths() (int, int) {
+	if m.previewFocused {
+		return 0, max(20, m.width)
+	}
 	if m.width >= 100 {
 		list := max(32, m.width*2/5)
 		return list, max(40, m.width-list-2)

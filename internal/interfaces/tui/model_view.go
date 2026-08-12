@@ -225,6 +225,11 @@ func (m Model) treeVisibleIndices() []int {
 
 func (m Model) treePreviewView() string {
 	listWidth, previewWidth := m.layoutWidths()
+	if m.previewFocused {
+		// Preview focus is an immersive pane: hide the tree and give the
+		// document the entire terminal width until tab toggles back.
+		return lipgloss.NewStyle().Width(previewWidth).MaxWidth(previewWidth).Render(m.preview.View())
+	}
 	indices := m.treeVisibleIndices()
 	uuidWidth := 4
 	// readStatusMark (○/◐/● + space) takes two columns; keep it from
@@ -727,7 +732,10 @@ func (m Model) statusBar() string {
 	} else if m.statusMessage != "" {
 		right += accentStyle.Render(m.statusMessage)
 	} else {
-		if m.inputVisible {
+		if m.previewFocused {
+			first, last, total := m.previewLineRange()
+			right += accentStyle.Render(fmt.Sprintf("preview %d-%d/%d", first, last, total))
+		} else if m.inputVisible {
 			mode := "name"
 			switch m.inputMode {
 			case inputModeCmd:
@@ -773,6 +781,16 @@ func (m Model) statusBar() string {
 	}
 	padding := max(1, width-lipgloss.Width(left)-lipgloss.Width(right))
 	return left + strings.Repeat(" ", padding) + right
+}
+
+func (m Model) previewLineRange() (first, last, total int) {
+	total = m.preview.TotalLineCount()
+	if total == 0 {
+		return 0, 0, 0
+	}
+	first = min(total, m.preview.YOffset+1)
+	last = min(total, m.preview.YOffset+m.preview.VisibleLineCount())
+	return first, last, total
 }
 
 func (m Model) modeBadge() string {

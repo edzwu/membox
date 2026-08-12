@@ -13,7 +13,8 @@ import { promisify } from "node:util";
  *   resolved file is injected into the message context, so "把 membox 的
  *   11e8 列入今天的任务" knows exactly which file is meant.
  * - Registers doc CRUD tools (list / search / resolve / cat / create /
- *   rename / delete) backed by the `mm` CLI.
+ *   rename / delete) and path/index admin tools (path add/remove/list/scan,
+ *   index status), all backed by the `mm` CLI.
  */
 
 const execFileAsync = promisify(execFile);
@@ -36,15 +37,15 @@ type DocRecord = {
   size?: number;
 };
 
-async function runMm(args: string[]): Promise<string> {
+async function runMm(args: string[], timeout = 10_000): Promise<string> {
   const { stdout } = await execFileAsync(findMm(), args, {
-    timeout: 10_000,
+    timeout,
   });
   return stdout;
 }
 
-async function runMmJson<T>(args: string[]): Promise<T> {
-  const out = await runMm(args);
+async function runMmJson<T>(args: string[], timeout = 10_000): Promise<T> {
+  const out = await runMm(args, timeout);
   return JSON.parse(out) as T;
 }
 
@@ -265,6 +266,124 @@ export default function (pi: ExtensionAPI) {
       if (!ok) return { content: [{ type: "text", text: "Deletion cancelled." }], details: {} };
       await runMm(["doc", "delete", params.selector]);
       return { content: [{ type: "text", text: `Trashed ${doc.title || doc.path}` }], details: { document_id: doc.id } };
+    },
+  });
+
+  // ── path & index management ────────────────────────────────────────────
+  // Wrap `mm path add/remove/list/scan` and `mm index status`. The doc CRUD
+  // tools above intentionally leave catalog admin out; these cover it.
+
+  function formatScan(s: {
+    paths?: number; files?: number; added?: number; updated?: number;
+    renamed?: number; unchanged?: number; missing?: number;
+    possible_renames?: number; errors?: number; timestamp_source?: string;
+  }): string {
+    return [
+      `Scanned ${s.paths ?? 0} path(s), ${s.files ?? 0} file(s):`,
+      `+${s.added ?? 0} added, ${s.updated ?? 0} updated, ${s.renamed ?? 0} renamed, ${s.unchanged ?? 0} unchanged, ${s.missing ?? 0} missing, ${s.errors ?? 0} errors`,
+      s.timestamp_source ? `timestamp source: ${s.timestamp_source}` : "",
+    ].filter(Boolean).join("\n");
+  }
+
+  pi.registerTool({
+    name: "membox_path_list",
+    label: "List membox scan paths",
+    description: "List configured membox scan paths (directories membox indexes). No parameters.",
+    parameters: Type.Object({}),
+    async execute(_toolCallId, _params) {
+      const paths = await runMmJson<Array<{ id: number; path: string; documents: number; status: string; last_scan_at?: string }>>(["path", "list", "--json"]);
+      const rows = (paths || []).map((p) => {
+        const last = p.last_scan_at ? p.last_scan_at.replace("T", " ").slice(0, 16) : "?";
+        return `${p.id}  ${p.path}  [${p.documents} docs, ${p.status}, scanned ${last}]`;
+      });
+      return {
+        content: [{ type: "text", text: rows.length ? rows.join("\n") : "No scan paths configured. Use membox_path_add to add one." }],
+        details: { count: rows.length, paths: paths || [] },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "membox_path_add",
+    label: "Add a membox scan path",
+    description: "Add a directory to membox's scan paths and scan it immediately. Use when the user wants membox to index a new folder of Markdown files. Relative paths resolve against the current working directory.",
+    parameters: Type.Object({
+      directory: Type.String({ description: "Directory to add (absolute or relative path)" }),
+    }),
+    async execute(_toolCallId, params) {
+      const result = await runMmJson<{ path: { id: number; path: string; documents: number; status: string }; already_exists?: boolean; scan: any }>(["path", "add", params.directory, "--json"]);
+      const line = result?.already_exists
+        ? `Path already configured: ${result.path.path} (id ${result.path.id})`
+        : `Added path ${result.path.id}: ${result.path.path} (${result.path.status})`;
+      const scanLine = result?.scan ? "\n" + formatScan(result.scan) : "";
+      return {
+        content: [{ type: "text", text: `${line}${scanLine}` }],
+        details: { path: result.path, scan: result.scan, already_exists: result.already_exists ?? false },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "membox_path_scan",
+    label: "Scan membox paths",
+    description: "Re-scan membox paths to pick up filesystem changes (new/edited/renamed/deleted files). Optionally set timestamp='git' to derive document dates from Git history (paths must be inside a Git worktree).",
+    parameters: Type.Object({
+      selector: Type.Optional(Type.String({ description: "Optional path ID or directory to scan (default: all configured paths)" })),
+      timestamp: Type.Optional(Type.String({ description: "Document timestamp source: 'filesystem' (default) or 'git'" })),
+    }),
+    async execute(_toolCallId, params) {
+      const args = ["path", "scan", "--json"];
+      if (params.selector) args.push(params.selector);
+      if (params.timestamp === "git") args.push("--timestamp=git");
+      const result = await runMmJson<{
+        paths: number; files: number; added: number; updated: number; renamed: number;
+        unchanged: number; missing: number; possible_renames: number; errors: number;
+        timestamp_source?: string;
+      }>(args, 120_000);
+      return {
+        content: [{ type: "text", text: formatScan(result) }],
+        details: result,
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "membox_path_remove",
+    label: "Remove a membox scan path",
+    description: "Remove a directory from membox's scan paths. Does not delete files on disk; documents under this path become untracked and disappear from listings/search until re-added. Requires confirmation.",
+    parameters: Type.Object({
+      selector: Type.String({ description: "Path ID or directory to remove" }),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const paths = await runMmJson<Array<{ id: number; path: string; documents: number; status: string }>>(["path", "list", "--json"]).catch(() => []);
+      const match = (paths || []).find((p) => String(p.id) === params.selector || p.path === params.selector);
+      const preview = match
+        ? `Remove path ${match.id}: ${match.path}\n${match.documents} document(s) will become untracked.`
+        : `Remove path ${params.selector}`;
+      const ok = await ctx.ui.confirm("Remove membox path?", preview);
+      if (!ok) return { content: [{ type: "text", text: "Removal cancelled." }], details: { cancelled: true } };
+      await runMm(["path", "remove", params.selector]);
+      return {
+        content: [{ type: "text", text: match ? `Removed path ${match.id}: ${match.path}` : `Removed ${params.selector}` }],
+        details: { removed: true, path: match?.path },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "membox_index_status",
+    label: "Show membox index status",
+    description: "Show membox index status: number of paths, active/missing/untracked documents, database location, and last scan time.",
+    parameters: Type.Object({}),
+    async execute(_toolCallId, _params) {
+      const result = await runMmJson<{ paths: number; active: number; missing: number; untracked: number; last_scan_at: string; database_path: string }>(["index", "status", "--json"]);
+      const last = result.last_scan_at ? result.last_scan_at.replace("T", " ").replace(/\.\d+Z$/, "Z") : "?";
+      const text = [
+        `Paths: ${result.paths}   Active: ${result.active}   Missing: ${result.missing}   Untracked: ${result.untracked}`,
+        `Database:  ${result.database_path}`,
+        `Last scan: ${last}`,
+      ].join("\n");
+      return { content: [{ type: "text", text }], details: result };
     },
   });
 }

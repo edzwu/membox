@@ -146,6 +146,29 @@ CREATE TABLE IF NOT EXISTS document_read_state (
     progress_y INTEGER NOT NULL DEFAULT 0,
     progress_at TEXT NOT NULL DEFAULT ''
 );
+-- Logical content identity is independent of its physical representation.
+-- V1 publishes whole-file direct objects; the schema can later add manifests
+-- and chunks without changing document_versions.content_sha256.
+CREATE TABLE IF NOT EXISTS contents (
+    sha256 TEXT PRIMARY KEY,
+    size INTEGER NOT NULL CHECK(size >= 0),
+    representation TEXT NOT NULL CHECK(representation IN ('direct','chunked')),
+    object_hash TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS document_versions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    parent_version_id INTEGER REFERENCES document_versions(id),
+    content_sha256 TEXT NOT NULL REFERENCES contents(sha256),
+    reason TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS document_versions_document ON document_versions(document_id,id);
+CREATE TABLE IF NOT EXISTS document_heads (
+    document_id TEXT PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
+    version_id INTEGER NOT NULL REFERENCES document_versions(id) ON DELETE CASCADE
+);
 `
 	if _, err := s.db.Exec(schema); err != nil {
 		return fmt.Errorf("migrating SQLite: %w", err)

@@ -16,7 +16,15 @@ func Open(databasePath string) (*application.Service, error) {
 		return nil, err
 	}
 	scanner := filesystem.NewScanner()
-	service := application.NewService(store, scanner, filesystem.Reader{}, filesystem.Writer{}, system.IDGenerator{}, system.Clock{}, git.History{})
+	service := application.NewService(
+		store,
+		scanner,
+		filesystem.Reader{},
+		filesystem.Writer{},
+		system.IDGenerator{},
+		system.Clock{},
+		git.History{},
+	)
 	// Every process that opens this home (TUI, CLI, Web Companion) serializes
 	// document mutations on one cross-process lock: the DB and the Markdown
 	// tree are shared, and WAL alone cannot keep a multi-step resolve → file

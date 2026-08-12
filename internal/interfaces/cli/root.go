@@ -130,6 +130,7 @@ func newRoot(ctx context.Context, runtime *runtime, in io.Reader, out, stderr io
 		newLinkCommand(runtime),
 		newTrashCommand(runtime),
 		newIndexCommand(runtime),
+		newScanCommand(runtime),
 		newServeCommand(runtime),
 		newWebCommand(runtime),
 		newAgentCommand(runtime),

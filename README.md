@@ -108,7 +108,7 @@ The TUI reuses the bottom input field for distinct modes, identified by the colo
 In `CMD` mode, press Tab to progressively disclose commands and arguments. Choose a suggestion with ↑/↓ and Enter; Tab inserts it without executing. Supported commands mirror the CLI:
 
 ```text
-note new <title>
+doc new <title>
 topic create <name>
 topic list
 topic add <topic-id> <document-id>
@@ -132,14 +132,14 @@ In `CMD` mode, `link list <document-id>` opens a graph-focused board. The focuse
 
 Relationships are stored only in SQLite; membox does not modify Markdown content to create links.
 
-Create a note while reading another document:
+Create a document while reading another one (`mm note` still works as a deprecated alias for these):
 
 ```bash
-./mm note new "Online Softmax Intuition" --from <document-id>
-./mm note new "Online Softmax Intuition" --from <document-id> --no-open
+./mm doc new "Online Softmax Intuition" --from <document-id>
+./mm doc new "Online Softmax Intuition" --from <document-id> --no-open
 ```
 
-The command creates the Markdown file, registers its document UUID, links it from the source document, and returns both the new document UUID and absolute path. It opens the note in the configured editor by default; use `--no-open` for automation.
+The command creates the Markdown file, registers its document UUID, links it from the source document, and returns both the new document UUID and absolute path. It opens the document in the configured editor by default; use `--no-open` for automation.
 
 Topics are ordinary root-level `topic-*.md` documents, so they can be searched, edited, pinned, Git-tracked, and used as human-readable index pages.
 
@@ -167,13 +167,13 @@ A document can belong to multiple topics, and a topic can contain multiple docum
 Render any indexed Markdown in the browser with the embedded [Miru](https://github.com/fivetiaowuu/miru) reader, served by the **Web Companion** — a single background process per membox home that owns the HTTP reader, the browser bridge, and web-originated saves. The default viewer is configurable and persists across sessions — set it with `ctrl+o` in the TUI (settings panel):
 
 ```bash
-# open a note with the configured viewer
-./mm note view <document-id>
+# open a document with the configured viewer
+./mm doc view <document-id>
 
 # one-off overrides (do not change the configured viewer)
-./mm note view <document-id> --web
-./mm note view <document-id> --leaf
-./mm note view <document-id> --web --no-open
+./mm doc view <document-id> --web
+./mm doc view <document-id> --leaf
+./mm doc view <document-id> --web --no-open
 ```
 
 The same applies in the TUI: pressing `enter` on a document opens it with the configured viewer. The current viewer is shown in the status bar.

@@ -73,6 +73,9 @@ func (s *Store) SaveScan(ctx context.Context, indexedPath *catalog.IndexedPath, 
 		if err := saveDocument(ctx, tx, save); err != nil {
 			return err
 		}
+		if err := saveContentVersion(ctx, tx, save); err != nil {
+			return err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing scan: %w", err)
@@ -87,6 +90,9 @@ func (s *Store) SaveDocument(ctx context.Context, save port.ScanSave) error {
 	}
 	defer tx.Rollback()
 	if err := saveDocument(ctx, tx, save); err != nil {
+		return err
+	}
+	if err := saveContentVersion(ctx, tx, save); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -129,6 +135,24 @@ func (s *Store) SavePinned(ctx context.Context, documentID catalog.DocumentID, p
 	}
 	if rows != 1 {
 		return fmt.Errorf("document %s not found while saving pin", documentID)
+	}
+	return nil
+}
+
+// SetDocumentSummary stores a user- or agent-authored summary in the index
+// metadata. Scans preserve the value (the scan upsert keeps the existing
+// summary), so the write is stable across reindexes.
+func (s *Store) SetDocumentSummary(ctx context.Context, documentID catalog.DocumentID, summary string) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE document_index SET summary=? WHERE document_id=?`, summary, documentID)
+	if err != nil {
+		return fmt.Errorf("saving summary for document %s: %w", documentID, err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows != 1 {
+		return fmt.Errorf("document %s has no index metadata", documentID)
 	}
 	return nil
 }
@@ -426,6 +450,71 @@ ON CONFLICT(document_id) DO UPDATE SET
 `, d.ID, norm, norm, clipMode, millis(d.UpdatedAt)); err != nil {
 			return fmt.Errorf("saving document source: %w", err)
 		}
+	}
+	return nil
+}
+
+func saveContentVersion(ctx context.Context, tx *sql.Tx, save port.ScanSave) error {
+	if save.Content == nil {
+		return nil
+	}
+	if save.Document == nil {
+		return errors.New("cannot version nil document")
+	}
+	content := save.Content
+	if content.SHA256 == "" || content.ObjectHash == "" || content.Size < 0 {
+		return fmt.Errorf("invalid content object for document %s", save.Document.ID)
+	}
+	if content.SHA256 != save.Document.Index.SHA256 || content.Size != save.Document.Index.Size {
+		return fmt.Errorf("content object does not match document %s index", save.Document.ID)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO contents(sha256,size,representation,object_hash,created_at)
+VALUES(?,?,'direct',?,?) ON CONFLICT(sha256) DO NOTHING`,
+		content.SHA256, content.Size, content.ObjectHash, millis(save.Document.UpdatedAt)); err != nil {
+		return fmt.Errorf("saving content %s: %w", content.SHA256, err)
+	}
+	var storedSize int64
+	var representation, objectHash string
+	if err := tx.QueryRowContext(ctx, `SELECT size,representation,object_hash FROM contents WHERE sha256=?`, content.SHA256).
+		Scan(&storedSize, &representation, &objectHash); err != nil {
+		return fmt.Errorf("checking content %s: %w", content.SHA256, err)
+	}
+	if storedSize != content.Size || representation != "direct" || objectHash != content.ObjectHash {
+		return fmt.Errorf("content %s conflicts with its stored representation", content.SHA256)
+	}
+
+	var parentID int64
+	var currentHash string
+	err := tx.QueryRowContext(ctx, `SELECT h.version_id,v.content_sha256
+FROM document_heads h JOIN document_versions v ON v.id=h.version_id
+WHERE h.document_id=?`, save.Document.ID).Scan(&parentID, &currentHash)
+	if err == nil && currentHash == content.SHA256 {
+		return nil
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("loading document %s head: %w", save.Document.ID, err)
+	}
+
+	reason := "external_edit"
+	var parent any
+	if errors.Is(err, sql.ErrNoRows) {
+		reason = "initial_import"
+		parent = nil
+	} else {
+		parent = parentID
+	}
+	result, err := tx.ExecContext(ctx, `INSERT INTO document_versions(document_id,parent_version_id,content_sha256,reason,created_at)
+VALUES(?,?,?,?,?)`, save.Document.ID, parent, content.SHA256, reason, millis(save.Document.UpdatedAt))
+	if err != nil {
+		return fmt.Errorf("creating version for document %s: %w", save.Document.ID, err)
+	}
+	versionID, err := result.LastInsertId()
+	if err != nil {
+		return fmt.Errorf("reading new version id: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO document_heads(document_id,version_id) VALUES(?,?)
+ON CONFLICT(document_id) DO UPDATE SET version_id=excluded.version_id`, save.Document.ID, versionID); err != nil {
+		return fmt.Errorf("advancing document %s head: %w", save.Document.ID, err)
 	}
 	return nil
 }

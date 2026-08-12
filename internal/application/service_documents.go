@@ -95,6 +95,24 @@ type ToggleDocumentPinResult struct {
 	Pinned     bool
 }
 
+// SetDocumentSummary stores a summary for the document identified by
+// selector. The summary lives in index metadata and survives rescans.
+func (s *Service) SetDocumentSummary(ctx context.Context, selector, summary string) (catalog.DocumentID, error) {
+	release, lockErr := s.beginMutation()
+	if lockErr != nil {
+		return "", lockErr
+	}
+	defer release()
+	document, _, err := s.ResolveDocument(ctx, selector)
+	if err != nil {
+		return "", err
+	}
+	if err := s.store.SetDocumentSummary(ctx, document.ID, summary); err != nil {
+		return "", err
+	}
+	return document.ID, nil
+}
+
 func (s *Service) ToggleDocumentPin(ctx context.Context, selector string) (ToggleDocumentPinResult, error) {
 	release, lockErr := s.beginMutation()
 	if lockErr != nil {
@@ -396,7 +414,7 @@ func (s *Service) SyncDocument(ctx context.Context, selector, body string) (Sync
 	if err := document.Observe(observation, s.clock.Now()); err != nil {
 		return SyncDocumentResult{}, err
 	}
-	if err := s.store.SaveDocument(ctx, port.ScanSave{Document: document, Body: observation.Body, Reindex: true}); err != nil {
+	if err := s.saveDocument(ctx, port.ScanSave{Document: document, Body: observation.Body, Reindex: true}); err != nil {
 		return SyncDocumentResult{}, err
 	}
 	return SyncDocumentResult{DocumentID: document.ID, Path: absolute}, nil
@@ -422,7 +440,7 @@ func (s *Service) ReindexDocument(ctx context.Context, selector string) error {
 	if err := document.Observe(observation, s.clock.Now()); err != nil {
 		return err
 	}
-	return s.store.SaveDocument(ctx, port.ScanSave{Document: document, Body: observation.Body, Reindex: true})
+	return s.saveDocument(ctx, port.ScanSave{Document: document, Body: observation.Body, Reindex: true})
 }
 
 func (s *Service) DeleteDocumentFile(ctx context.Context, selector string) (catalog.Document, string, error) {
@@ -710,7 +728,7 @@ func (s *Service) RenameDocument(ctx context.Context, selector, newFilename, dis
 			return RenameDocumentResult{}, err
 		}
 	}
-	if err := s.store.SaveDocument(ctx, port.ScanSave{Document: document, Body: observation.Body, Reindex: true}); err != nil {
+	if err := s.saveDocument(ctx, port.ScanSave{Document: document, Body: observation.Body, Reindex: true}); err != nil {
 		return RenameDocumentResult{}, err
 	}
 	return RenameDocumentResult{DocumentID: document.ID, Path: target, Title: displayTitle}, nil

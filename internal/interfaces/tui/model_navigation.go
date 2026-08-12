@@ -39,23 +39,23 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.openGraphSelection()
 		}
 	}
+	// Tab gives the right preview pane keyboard focus. While focused, only
+	// scrolling and lifecycle keys are handled here; the tree selection stays
+	// fixed underneath it.
+	if m.previewFocused {
+		return m.updatePreviewNavigation(msg)
+	}
 	switch msg.String() {
-	case "q":
-		// Contextual "back" within the TUI; Ctrl+D quits the program.
-		if m.graphFocusID != "" {
-			m.graphFocusID = ""
-			m.graphCards = nil
-			m.graphIncoming = 0
-			m.graphSelected = 0
-			m.graphSearchQuery, m.graphSearchHits = "", nil
-			m.graphLayout, m.graphTopics = "", nil
-			m.viewMode = viewTree
-			m.keepSelectionVisible()
-		} else if m.viewMode == viewBoard {
-			m.viewMode = viewTree
-			m.keepSelectionVisible()
-		} else if m.detailsVisible {
-			m.detailsVisible = false
+	case "q", "esc":
+		// Contextual back peels one surface at a time. Command-owned result
+		// views get first chance to close; Ctrl+D remains the only quit key.
+		if !m.closeCommandResultView() {
+			if m.viewMode == viewBoard {
+				m.viewMode = viewTree
+				m.keepSelectionVisible()
+			} else if m.detailsVisible {
+				m.detailsVisible = false
+			}
 		}
 		m.statusMessage = ""
 		return m, nil
@@ -92,13 +92,12 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.spaceSequence, m.lastKeyAt = 0, time.Time{}
 		return m, m.openInput(inputModeAgent)
 	case "tab":
-		// With a document focused, tab cycles its read status
-		// (unread → reading → finished → unread). The tree/board toggle
-		// moved to b; tab stays free for the status cycle.
-		if document, ok := m.selectedDocument(); ok {
-			next := nextReadStatus(document.ReadStatus)
-			m.statusMessage = fmt.Sprintf("%s → %s", shortID(document.ID), next)
-			return m, setReadStatusCmd(m.ctx, m.app, document.ID, next)
+		// Preview is a pane focus, not a separate document view. Tab moves
+		// right; tab/esc from there returns to the tree.
+		if m.viewMode == viewTree {
+			m.previewFocused = true
+			m.statusMessage = ""
+			m.resize()
 		}
 		return m, nil
 	case "ctrl+t":
@@ -109,6 +108,7 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.graphIncoming = 0
 		m.graphSearchQuery, m.graphSearchHits = "", nil
 		m.graphLayout, m.graphTopics = "", nil
+		m.previewFocused = false
 		if m.viewMode == viewTree {
 			m.viewMode = viewBoard
 			// Snap the highlight to a card that is actually drawn on the board.
@@ -136,8 +136,13 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+p":
 		return m, m.cycleInputMode()
 	case "s":
-		m.toggleSort()
-		return m, m.loadPreview()
+		// Summarize the selected document with the agent (same flow as
+		// `mm doc summarize <id>`); the board keeps rendering while it runs.
+		if document, ok := m.selectedDocument(); ok && !m.summarizing[document.ID] {
+			m.summarizing[document.ID] = true
+			m.statusMessage = "summarizing " + shortID(document.ID) + " …"
+			commands = append(commands, summarizeCmd(m.ctx, m.app, document.ID))
+		}
 	case "p":
 		if document, ok := m.selectedDocument(); ok {
 			m.loading = true
@@ -187,6 +192,47 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.statusMessage = ""
 	}
 	return m, tea.Batch(commands...)
+}
+
+func (m Model) updatePreviewNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "tab", "esc", "q", "left", "h":
+		m.previewFocused = false
+		m.statusMessage = ""
+		m.resize()
+	case "up", "k":
+		m.preview.LineUp(1)
+	case "down", "j":
+		m.preview.LineDown(1)
+	case "pgup", "ctrl+b":
+		m.preview.PageUp()
+	case "pgdown", "ctrl+f", "space", " ":
+		m.preview.PageDown()
+	case "home", "g":
+		m.preview.GotoTop()
+	case "end", "shift+g":
+		m.preview.GotoBottom()
+	}
+	return m, nil
+}
+
+// closeCommandResultView is the single lifecycle exit for full result
+// surfaces opened by palette commands. Future command result views should add
+// their cleanup here so both esc and q always return to the file tree.
+func (m *Model) closeCommandResultView() bool {
+	if m.graphFocusID == "" {
+		return false
+	}
+	m.graphFocusID = ""
+	m.graphCards = nil
+	m.graphIncoming = 0
+	m.graphSelected = 0
+	m.graphSearchQuery, m.graphSearchHits = "", nil
+	m.graphLayout, m.graphTopics = "", nil
+	m.previewFocused = false
+	m.viewMode = viewTree
+	m.keepSelectionVisible()
+	return true
 }
 
 func (m Model) moveSelection(key string) (tea.Model, tea.Cmd) {
@@ -739,22 +785,6 @@ func (m *Model) applyPinnedState(documentID string, pinned bool) {
 	}
 }
 
-func (m *Model) toggleSort() {
-	if m.sortMode == sortModeTime {
-		m.sortMode = sortModeName
-	} else {
-		m.sortMode = sortModeTime
-	}
-	m.sortFiltered()
-	m.selected = 0
-	m.scrollTop = 0
-	m.boardScrollY = 0
-	if m.viewMode == viewBoard {
-		m.snapToBoardSelection()
-		m.scrollBoardToSelection()
-	}
-}
-
 func (m *Model) sortFiltered() {
 	byName := func(left, right item) bool {
 		leftName, rightName := strings.ToLower(left.filename), strings.ToLower(right.filename)
@@ -772,7 +802,9 @@ func (m *Model) sortFiltered() {
 		if left.document.Pinned != right.document.Pinned {
 			return left.document.Pinned
 		}
-		if m.sortMode == sortModeTime && !left.document.UpdatedAt.Equal(right.document.UpdatedAt) {
+		// The tree is always newest-first; alphabetical sorting was removed
+		// along with the old `s` toggle.
+		if !left.document.UpdatedAt.Equal(right.document.UpdatedAt) {
 			return left.document.UpdatedAt.After(right.document.UpdatedAt)
 		}
 		return byName(left, right)
@@ -938,39 +970,30 @@ func togglePinCmd(ctx context.Context, app App, selector string) tea.Cmd {
 	}
 }
 
-// nextReadStatus cycles unread → reading → finished → unread.
-func (m *Model) applyReadStatus(documentID, status string) {
+func summarizeCmd(ctx context.Context, app App, selector string) tea.Cmd {
+	return func() tea.Msg {
+		view, err := app.SummarizeDocument(ctx, selector)
+		return summarizeDoneMsg{documentID: selector, document: view, err: err}
+	}
+}
+
+// applySummary writes a freshly generated summary into the item copies held
+// by the tree and the filtered view.
+func (m *Model) applySummary(documentID, summary string) {
 	for index := range m.items {
 		if m.items[index].document.ID == documentID {
-			m.items[index].document.ReadStatus = status
+			m.items[index].document.Summary = summary
 			break
 		}
 	}
 	for index := range m.filtered {
 		if m.filtered[index].document.ID == documentID {
-			m.filtered[index].document.ReadStatus = status
+			m.filtered[index].document.Summary = summary
 			break
 		}
 	}
 }
 
-func nextReadStatus(current string) string {
-	switch current {
-	case "reading":
-		return "finished"
-	case "finished":
-		return "unread"
-	default: // "" or unread
-		return "reading"
-	}
-}
-
-func setReadStatusCmd(ctx context.Context, app App, selector, status string) tea.Cmd {
-	return func() tea.Msg {
-		err := app.SetDocumentReadStatus(ctx, membox.SetReadStatusCommand{Selector: selector, Status: status})
-		return readStatusMsg{documentID: selector, status: status, err: err}
-	}
-}
 func deleteDocumentCmd(ctx context.Context, app App, selector string) tea.Cmd {
 	return func() tea.Msg {
 		result, err := app.DeleteDocument(ctx, membox.DeleteDocumentCommand{Selector: selector})

@@ -293,7 +293,7 @@ func (m Model) commandSuggestions() []commandSuggestion {
 	tokens, index, partial := m.commandInputStructure()
 	if index == 0 {
 		return filterCommandSuggestions([]commandSuggestion{
-			{Value: "note", Display: "note", Description: "Create and manage notes"},
+			{Value: "doc", Display: "doc", Description: "Create and manage documents"},
 			{Value: "topic", Display: "topic", Description: "Manage topic documents"},
 			{Value: "link", Display: "link", Description: "Manage document links"},
 			{Value: "rename", Display: "rename", Description: "Rename selected file (keeps UUID)"},
@@ -302,10 +302,10 @@ func (m Model) commandSuggestions() []commandSuggestion {
 	}
 	if index == 1 {
 		switch tokens[0] {
-		case "note":
+		case "doc", "note":
 			return filterCommandSuggestions([]commandSuggestion{
-				{Value: "new", Display: "new", Description: "Create a note from the selected document"},
-				{Value: "view", Display: "view", Description: "Open a note with the configured viewer"},
+				{Value: "new", Display: "new", Description: "Create a document from the selected document"},
+				{Value: "view", Display: "view", Description: "Open a document with the configured viewer"},
 			}, partial)
 		case "topic":
 			return filterCommandSuggestions([]commandSuggestion{
@@ -385,7 +385,7 @@ func (m Model) commandArgumentSuggestions(tokens []string, index int, partial st
 		return filterCommandSuggestions(out, partial)
 	}
 	switch resource {
-	case "note":
+	case "doc", "note":
 		if verb == "view" && index == 2 {
 			return documentSuggestions()
 		}
@@ -429,7 +429,7 @@ func (m Model) commandAction(tokens []string) (func() tea.Msg, string, error) {
 		return nil, strings.Join(tokens, " "), fmt.Errorf("command verb is required")
 	}
 	switch tokens[0] {
-	case "note":
+	case "doc", "note":
 		if tokens[1] == "new" && len(tokens) >= 3 {
 			title := strings.Join(tokens[2:], " ")
 			return func() tea.Msg {
@@ -442,13 +442,13 @@ func (m Model) commandAction(tokens []string) (func() tea.Msg, string, error) {
 					return noteCreatedMsg{document: result.Document, err: editorErr}
 				}
 				return noteCreatedMsg{document: result.Document, command: editor}
-			}, "note new <title>", nil
+			}, "doc new <title>", nil
 		}
 		if tokens[1] == "view" && len(tokens) >= 3 {
 			target := selector(tokens[2])
 			webFlag := len(tokens) == 4 && tokens[3] == "--web"
 			if len(tokens) > 3 && !webFlag {
-				return nil, "note view <document-id> [--web]", fmt.Errorf("invalid note view arguments")
+				return nil, "doc view <document-id> [--web]", fmt.Errorf("invalid doc view arguments")
 			}
 			if webFlag {
 				return func() tea.Msg {
@@ -461,7 +461,7 @@ func (m Model) commandAction(tokens []string) (func() tea.Msg, string, error) {
 						openErr = command.Run()
 					}
 					return openWebMsg{url: url, err: openErr}
-				}, "note view <document-id> --web", nil
+				}, "doc view <document-id> --web", nil
 			}
 			return func() tea.Msg {
 				mode, err := m.app.GetViewer(m.ctx)
@@ -483,9 +483,9 @@ func (m Model) commandAction(tokens []string) (func() tea.Msg, string, error) {
 				// viewer through tea.ExecProcess (TUI suspends, leaf gets the real
 				// terminal, TUI resumes after exit).
 				return resolveViewerCmd(m.ctx, m.app, target)()
-			}, "note view <document-id> [--web]", nil
+			}, "doc view <document-id> [--web]", nil
 		}
-		return nil, "note new <title> | note view <document-id> [--web]", fmt.Errorf("invalid note command")
+		return nil, "doc new <title> | doc view <document-id> [--web]", fmt.Errorf("invalid doc command")
 	case "topic":
 		switch tokens[1] {
 		case "create":

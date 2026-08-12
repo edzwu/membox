@@ -590,8 +590,7 @@ func TestModel_BoardArrowKeysThroughUpdate(t *testing.T) {
 		return nm.(Model)
 	}
 
-	// Enter board mode with ctrl+t (input is inactive by default); tab now
-	// cycles read status.
+	// Enter board mode with ctrl+t (input is inactive by default).
 	model = send(model, tea.KeyMsg{Type: tea.KeyCtrlT})
 	if model.viewMode != viewBoard {
 		t.Fatalf("ctrl+t should enter board mode, got viewMode=%v", model.viewMode)
@@ -767,46 +766,63 @@ func TestModel_FilterOptionsPanelCtrlOAndStatusBar(t *testing.T) {
 	}
 }
 
-func TestModel_TabCyclesReadStatus(t *testing.T) {
+func TestModel_TabFocusesAndScrollsPreview(t *testing.T) {
 	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
-	model.width, model.height = 120, 24
+	model.width, model.height = 120, 10
 	model.items = documentItems([]membox.DocumentView{
 		{ID: "019fbe56-64c3-7e3c-861d-4da66742dabf", Title: "Alpha", Path: "/tmp/alpha.md", RelativePath: "alpha.md"},
 	})
 	model.refreshFilter()
+	model.resize()
+	model.preview.SetContent(strings.Join([]string{
+		"line 01", "line 02", "line 03", "line 04", "line 05", "line 06",
+		"line 07", "line 08", "line 09", "line 10", "line 11", "line 12",
+	}, "\n"))
 
-	// unread → reading
 	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyTab})
 	model = updated.(Model)
-	if cmd == nil {
-		t.Fatal("tab did not schedule a status change")
+	if !model.previewFocused || cmd != nil {
+		t.Fatalf("tab should focus preview without a command: focused=%v cmd=%v", model.previewFocused, cmd)
 	}
-	_ = cmd // fakeApp records nothing; the msg handler applies the new status
-	// the command produces readStatusMsg; deliver it like the runtime would
-	if got := model.filtered[0].document.ReadStatus; got != "" && got != "unread" {
-		t.Fatalf("unexpected initial status: %q", got)
+	focusedView := model.treePreviewView()
+	if strings.Contains(focusedView, "Alpha") || !strings.Contains(focusedView, "line 01") {
+		t.Fatalf("focused preview should hide the tree and keep the document: %q", focusedView)
 	}
-	// apply next statuses through the message path
-	apply := func(m Model, status string) Model {
-		nm, _ := m.Update(readStatusMsg{documentID: model.filtered[0].document.ID, status: status})
-		return nm.(Model)
+	if model.preview.Width != model.width {
+		t.Fatalf("focused preview did not expand: width=%d want=%d", model.preview.Width, model.width)
 	}
-	model = apply(model, "reading")
-	if model.filtered[0].document.ReadStatus != "reading" {
-		t.Fatalf("applyReadStatus did not set reading: %+v", model.filtered[0].document)
+	if bar := model.statusBar(); !strings.Contains(bar, "preview 1-9/12") {
+		t.Fatalf("preview status lacks initial line range: %q", bar)
 	}
-	view := model.treePreviewView()
-	if !strings.Contains(view, "◐") {
-		t.Fatalf("reading badge not rendered: %q", view)
+
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = updated.(Model)
+	if model.preview.YOffset != 1 || model.selected != 0 {
+		t.Fatalf("down should scroll preview only: offset=%d selected=%d", model.preview.YOffset, model.selected)
 	}
-	model = apply(model, "finished")
-	if model.filtered[0].document.ReadStatus != "finished" {
-		t.Fatal("applyReadStatus did not set finished")
+	if bar := model.statusBar(); !strings.Contains(bar, "preview 2-10/12") {
+		t.Fatalf("preview status did not follow scrolling: %q", bar)
 	}
-	if !strings.Contains(model.treePreviewView(), "●") {
-		t.Fatalf("finished badge not rendered: %q", model.treePreviewView())
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	model = updated.(Model)
+	if model.preview.YOffset <= 1 {
+		t.Fatalf("pgdown did not page preview: offset=%d", model.preview.YOffset)
 	}
-	if got := nextReadStatus("finished"); got != "unread" {
-		t.Fatalf("nextReadStatus(finished) = %q, want unread", got)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	model = updated.(Model)
+	if model.preview.YOffset >= 2 {
+		t.Fatalf("pgup did not page preview back: offset=%d", model.preview.YOffset)
+	}
+
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	model = updated.(Model)
+	if model.previewFocused {
+		t.Fatal("second tab did not return focus to the tree")
+	}
+	if !strings.Contains(model.treePreviewView(), "alpha.md") {
+		t.Fatal("second tab did not restore the file tree")
+	}
+	if model.preview.Width >= model.width {
+		t.Fatalf("restored split view kept fullscreen preview width: %d", model.preview.Width)
 	}
 }

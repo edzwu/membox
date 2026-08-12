@@ -7,6 +7,9 @@
 /coverage.out
 /coverage.html
 
+# Local isolated mmd database and runtime files
+/tempbox/
+
 # Go workspace files
 go.work
 go.work.sum

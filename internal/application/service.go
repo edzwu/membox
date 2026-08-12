@@ -12,13 +12,14 @@ import (
 )
 
 type Service struct {
-	store   port.CatalogStore
-	scanner port.MarkdownScanner
-	reader  port.ContentReader
-	writer  port.ContentWriter
-	ids     port.IDGenerator
-	clock   port.Clock
-	history port.GitHistory
+	store    port.CatalogStore
+	scanner  port.MarkdownScanner
+	reader   port.ContentReader
+	writer   port.ContentWriter
+	ids      port.IDGenerator
+	clock    port.Clock
+	history  port.GitHistory
+	contents port.ImmutableContentStore
 	// mutations serializes every mutating operation across all processes
 	// sharing this membox home. Nil in unit tests without a home directory.
 	mutations port.MutationLocker
@@ -33,9 +34,47 @@ func NewService(store port.CatalogStore, scanner port.MarkdownScanner, reader po
 // tests) can skip it.
 func (s *Service) SetMutationLocker(locker port.MutationLocker) { s.mutations = locker }
 
+// SetContentStore enables immutable content/version capture. It is wired by
+// mmd; legacy in-process clients can continue operating during migration.
+func (s *Service) SetContentStore(store port.ImmutableContentStore) { s.contents = store }
+
 // Store returns the outbound catalog port. Used by composition roots (Companion)
 // to access optional store capabilities such as the Agent session catalog.
 func (s *Service) Store() port.CatalogStore { return s.store }
+
+func (s *Service) prepareSaveContent(ctx context.Context, save *port.ScanSave) error {
+	if s.contents == nil || save == nil || !save.Reindex {
+		return nil
+	}
+	if save.Document == nil {
+		return errors.New("cannot publish content for nil document")
+	}
+	object, err := s.contents.Put(ctx, save.Body)
+	if err != nil {
+		return fmt.Errorf("publish content for document %s: %w", save.Document.ID, err)
+	}
+	if object.SHA256 != save.Document.Index.SHA256 || object.Size != save.Document.Index.Size {
+		return fmt.Errorf("published content does not match document %s index", save.Document.ID)
+	}
+	save.Content = &object
+	return nil
+}
+
+func (s *Service) prepareScanContent(ctx context.Context, saves []port.ScanSave) error {
+	for i := range saves {
+		if err := s.prepareSaveContent(ctx, &saves[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) saveDocument(ctx context.Context, save port.ScanSave) error {
+	if err := s.prepareSaveContent(ctx, &save); err != nil {
+		return err
+	}
+	return s.store.SaveDocument(ctx, save)
+}
 
 func (s *Service) Close() error {
 	var err error
@@ -326,6 +365,12 @@ func (s *Service) scanOne(ctx context.Context, indexedPath *catalog.IndexedPath)
 		issueErr = errors.Join(parts...)
 	}
 	indexedPath.RecordScan(now, issueErr)
+	// Publish immutable objects before the SQLite transaction. A crash can
+	// leave an unreferenced object for later GC, but can never commit a Version
+	// whose bytes are missing.
+	if err := s.prepareScanContent(ctx, saves); err != nil {
+		return report, err
+	}
 	if err := s.store.SaveScan(ctx, indexedPath, saves); err != nil {
 		return report, err
 	}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -60,6 +61,54 @@ func TestModel_WebBadgeReflectsCompanionState(t *testing.T) {
 	model = updated.(Model)
 	if badge := model.webBadge(); !strings.Contains(badge, "unavailable") {
 		t.Fatalf("failed badge should read unavailable: %q", badge)
+	}
+}
+
+func TestModel_WebRefreshRetriesAfterTransientFailureOrMissedProbe(t *testing.T) {
+	app := &fakeApp{}
+	model := runningWebModel(app, "stop")
+	sequence := model.web.sequence
+
+	if next := model.applyWebStatus(webStatusMsg{
+		err: errors.New("temporary probe failure"), sequence: sequence, refresh: true,
+	}); next == nil {
+		t.Fatal("transient WebStatus failure terminated the refresh loop")
+	}
+	if model.web.err == nil {
+		t.Fatal("transient failure was not reflected in web state")
+	}
+
+	if next := model.applyWebStatus(webStatusMsg{
+		view: membox.WebStatusView{Running: false}, sequence: sequence, refresh: true,
+	}); next == nil {
+		t.Fatal("one missed probe terminated the refresh loop")
+	}
+	if model.web.err != nil || model.web.running() {
+		t.Fatalf("missed probe state = running %v error %v", model.web.running(), model.web.err)
+	}
+
+	if next := model.applyWebStatus(webStatusMsg{sequence: sequence - 1, refresh: true}); next != nil {
+		t.Fatal("stale refresh generation created a duplicate loop")
+	}
+}
+
+func TestMaintainWebLeaseRunsIndependentlyUntilContextEnds(t *testing.T) {
+	app := &fakeApp{}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		maintainWebLease(ctx, app, "tui-controller", 5*time.Millisecond)
+		close(done)
+	}()
+	time.Sleep(18 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("lease loop did not stop with its context")
+	}
+	if app.webLeaseCalls < 2 {
+		t.Fatalf("lease renewals = %d, want at least 2", app.webLeaseCalls)
 	}
 }
 

@@ -394,6 +394,18 @@ func (b *Box) SetDocumentReadStatus(ctx context.Context, command SetReadStatusCo
 	return b.service.SetDocumentReadStatus(ctx, command.Selector, command.Status)
 }
 
+type SetSummaryCommand struct {
+	Selector string
+	Summary  string
+}
+
+func (b *Box) SetDocumentSummary(ctx context.Context, command SetSummaryCommand) (DocumentView, error) {
+	if _, err := b.service.SetDocumentSummary(ctx, command.Selector, command.Summary); err != nil {
+		return DocumentView{}, err
+	}
+	return b.GetDocument(ctx, GetDocumentQuery{Selector: command.Selector})
+}
+
 func (b *Box) GetDocument(ctx context.Context, query GetDocumentQuery) (DocumentView, error) {
 	document, path, err := b.service.ResolveDocument(ctx, query.Selector)
 	if err != nil {

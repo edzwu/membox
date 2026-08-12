@@ -21,7 +21,11 @@ type ScanResult struct {
 type MarkdownScanner interface {
 	Canonicalize(directory string) (string, error)
 	Scan(ctx context.Context, indexedPath catalog.IndexedPath) (ScanResult, error)
-	ObserveFile(ctx context.Context, location catalog.Location, absolutePath string) (catalog.Observation, error)
+	ObserveFile(
+		ctx context.Context,
+		location catalog.Location,
+		absolutePath string,
+	) (catalog.Observation, error)
 }
 
 type ContentWriter interface {
@@ -75,15 +79,45 @@ type GraphStore interface {
 	ResolveTopic(ctx context.Context, selector string) (*catalog.Document, string, error)
 	ListTopics(ctx context.Context) ([]DocumentRecord, error)
 	AddEdge(ctx context.Context, edge catalog.GraphEdge) (created bool, err error)
-	RemoveEdge(ctx context.Context, fromDocumentID, toDocumentID catalog.DocumentID, kind catalog.EdgeKind) (removed bool, err error)
-	GetDocumentGraph(ctx context.Context, documentID catalog.DocumentID) (outgoing []DocumentRecord, incoming []DocumentRecord, topics []DocumentRecord, err error)
-	ListTopicDocuments(ctx context.Context, topicDocumentID catalog.DocumentID) ([]DocumentRecord, error)
+	RemoveEdge(
+		ctx context.Context,
+		fromDocumentID, toDocumentID catalog.DocumentID,
+		kind catalog.EdgeKind,
+	) (removed bool, err error)
+	GetDocumentGraph(
+		ctx context.Context,
+		documentID catalog.DocumentID,
+	) (outgoing []DocumentRecord, incoming []DocumentRecord, topics []DocumentRecord, err error)
+	ListTopicDocuments(
+		ctx context.Context,
+		topicDocumentID catalog.DocumentID,
+	) ([]DocumentRecord, error)
+}
+
+// ContentObject identifies immutable bytes published before catalog metadata
+// is committed. SHA256 is the logical whole-content hash and ObjectHash is the
+// physical object name; they are equal for the initial direct representation.
+type ContentObject struct {
+	SHA256     string
+	ObjectHash string
+	Size       int64
+}
+
+// ImmutableContentStore publishes content-addressed bytes. Implementations
+// must make a successful Put durable and visible before returning so SQLite
+// can safely commit references afterward. Existing objects are deduplicated.
+type ImmutableContentStore interface {
+	Put(ctx context.Context, body []byte) (ContentObject, error)
 }
 
 type ScanSave struct {
 	Document *catalog.Document
 	Body     []byte
 	Reindex  bool
+	// Content is set only after Body has been published to immutable storage.
+	// SaveScan/SaveDocument atomically create a Version and advance the head
+	// when this content differs from the current head.
+	Content *ContentObject
 }
 
 // AnnotationNoteRecord links one Markdown note document to the document
@@ -147,47 +181,98 @@ type TrashRecord struct {
 }
 
 type TrashStore interface {
-	TrashDocument(ctx context.Context, documentID catalog.DocumentID, originRelativePath string, trashedAt time.Time) error
-	GetTrashedDocument(ctx context.Context, documentID catalog.DocumentID) (TrashRecord, bool, error)
+	TrashDocument(
+		ctx context.Context,
+		documentID catalog.DocumentID,
+		originRelativePath string,
+		trashedAt time.Time,
+	) error
+	GetTrashedDocument(
+		ctx context.Context,
+		documentID catalog.DocumentID,
+	) (TrashRecord, bool, error)
 	DeleteTrashRecord(ctx context.Context, documentID catalog.DocumentID) error
 	ListTrashedDocuments(ctx context.Context) ([]DocumentRecord, []TrashRecord, error)
-	SetDocumentRelativePath(ctx context.Context, documentID catalog.DocumentID, relativePath string) error
+	SetDocumentRelativePath(
+		ctx context.Context,
+		documentID catalog.DocumentID,
+		relativePath string,
+	) error
 	PurgeDocument(ctx context.Context, documentID catalog.DocumentID) error
 }
 
 // CatalogStore is an outbound persistence/read-model port. SaveScan must save
+// 负责保存文档的结构化元数据
 // all aggregate and FTS changes atomically.
 type CatalogStore interface {
 	Close() error
-	AddOrReactivatePath(ctx context.Context, canonicalRoot string, now time.Time) (*catalog.IndexedPath, bool, error)
+	AddOrReactivatePath(
+		ctx context.Context,
+		canonicalRoot string,
+		now time.Time,
+	) (*catalog.IndexedPath, bool, error)
 	ListPaths(ctx context.Context, includeRemoved bool) ([]PathSummary, error)
-	ResolvePath(ctx context.Context, selector string, includeRemoved bool) (*catalog.IndexedPath, error)
+	ResolvePath(
+		ctx context.Context,
+		selector string,
+		includeRemoved bool,
+	) (*catalog.IndexedPath, error)
 	RemovePath(ctx context.Context, id catalog.IndexedPathID, now time.Time) (int, error)
 	DocumentsForPath(ctx context.Context, id catalog.IndexedPathID) ([]*catalog.Document, error)
 	SaveScan(ctx context.Context, indexedPath *catalog.IndexedPath, saves []ScanSave) error
 	SaveDocument(ctx context.Context, save ScanSave) error
 	SaveSourceTimes(ctx context.Context, documents []*catalog.Document) error
 	SavePinned(ctx context.Context, documentID catalog.DocumentID, pinned bool) error
+	// SetDocumentSummary stores the document's summary; scans preserve it.
+	SetDocumentSummary(ctx context.Context, documentID catalog.DocumentID, summary string) error
 	// SaveAnnotations/GetAnnotations retain legacy Miru sidecars only for
 	// migration. New annotation content is stored as Markdown note documents.
 	SaveAnnotations(ctx context.Context, documentID catalog.DocumentID, sidecar string) error
 	GetAnnotations(ctx context.Context, documentID catalog.DocumentID) (string, error)
 	UpsertAnnotationNote(ctx context.Context, record AnnotationNoteRecord) error
-	ListAnnotationNotes(ctx context.Context, targetDocumentID catalog.DocumentID) ([]AnnotationNoteRecord, error)
-	GetAnnotationNote(ctx context.Context, noteDocumentID catalog.DocumentID) (AnnotationNoteRecord, bool, error)
+	ListAnnotationNotes(
+		ctx context.Context,
+		targetDocumentID catalog.DocumentID,
+	) ([]AnnotationNoteRecord, error)
+	GetAnnotationNote(
+		ctx context.Context,
+		noteDocumentID catalog.DocumentID,
+	) (AnnotationNoteRecord, bool, error)
 	DeleteAnnotationNote(ctx context.Context, noteDocumentID catalog.DocumentID) error
 	SaveDocumentReadState(ctx context.Context, state DocumentReadState) error
-	GetDocumentReadState(ctx context.Context, documentID catalog.DocumentID) (DocumentReadState, bool, error)
+	GetDocumentReadState(
+		ctx context.Context,
+		documentID catalog.DocumentID,
+	) (DocumentReadState, bool, error)
 	ListRecentDocuments(ctx context.Context, limit int) ([]RecentDocument, error)
 	ListRecentlyModifiedDocuments(ctx context.Context, limit int) ([]ModifiedDocument, error)
 	Search(ctx context.Context, query string, limit int, exact bool) ([]SearchHit, error)
 	SuggestDocuments(ctx context.Context, query string, limit int) ([]SearchHit, error)
-	SetDocumentReadStatus(ctx context.Context, documentID catalog.DocumentID, status string, finishedAt time.Time) error
-	ListDocuments(ctx context.Context, limit int, includeUnavailable bool, statusFilter string) ([]DocumentRecord, error)
+	SetDocumentReadStatus(
+		ctx context.Context,
+		documentID catalog.DocumentID,
+		status string,
+		finishedAt time.Time,
+	) error
+	ListDocuments(
+		ctx context.Context,
+		limit int,
+		includeUnavailable bool,
+		statusFilter string,
+	) ([]DocumentRecord, error)
 	ResolveDocument(ctx context.Context, selector string) (*catalog.Document, string, error)
 	// Document source URLs (browser clip provenance), stored at ingest time.
-	UpsertDocumentSource(ctx context.Context, documentID catalog.DocumentID, sourceURLNorm, clipMode string, now time.Time) error
-	ListDocumentsBySourceURL(ctx context.Context, sourceURLNorm string, selectionNotesOnly bool) ([]DocumentSourceRecord, error)
+	UpsertDocumentSource(
+		ctx context.Context,
+		documentID catalog.DocumentID,
+		sourceURLNorm, clipMode string,
+		now time.Time,
+	) error
+	ListDocumentsBySourceURL(
+		ctx context.Context,
+		sourceURLNorm string,
+		selectionNotesOnly bool,
+	) ([]DocumentSourceRecord, error)
 	// ListDocumentSources enumerates documents with clip provenance, optionally
 	// filtered by clip mode ("page" | "selection" | "" for all).
 	ListDocumentSources(ctx context.Context, clipMode string) ([]DocumentSourceRecord, error)

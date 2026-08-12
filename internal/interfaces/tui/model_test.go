@@ -178,7 +178,7 @@ func TestModel_DoubleSpaceOpensInputAndSpacesRemainAvailableForText(t *testing.T
 	}
 }
 
-func TestModel_DefaultSortIsNewestFirstAndSTogglesToNameOrder(t *testing.T) {
+func TestModel_DefaultSortIsNewestFirstAndSTriggersSummarize(t *testing.T) {
 	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
 	model.items = documentItems([]membox.DocumentView{
 		{ID: "alpha", Path: "/tmp/alpha.md", UpdatedAt: time.Date(2024, 1, 1, 0, 0, 0, 0, time.Local)},
@@ -190,21 +190,24 @@ func TestModel_DefaultSortIsNewestFirstAndSTogglesToNameOrder(t *testing.T) {
 		t.Fatalf("default order is not newest first: %v", got)
 	}
 	model.selected = 0
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
 	model = updated.(Model)
-	if got := []string{model.filtered[0].document.ID, model.filtered[1].document.ID, model.filtered[2].document.ID}; !reflect.DeepEqual(got, []string{"alpha", "bravo", "charlie"}) {
-		t.Fatalf("sort toggle did not switch to name order: %v", got)
+	if command == nil {
+		t.Fatal("s did not schedule a summarize command")
 	}
-	if model.selected != 0 || model.scrollTop != 0 || model.filtered[model.selected].document.ID != "alpha" {
-		t.Fatalf("sort toggle did not focus first row: selected=%d top=%d document=%s", model.selected, model.scrollTop, model.filtered[model.selected].document.ID)
+	if !model.summarizing["bravo"] {
+		t.Fatalf("summarize in-flight flag missing: %v", model.summarizing)
 	}
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	updated, _ = model.Update(command())
 	model = updated.(Model)
+	if model.summarizing["bravo"] {
+		t.Fatal("summarize in-flight flag not cleared")
+	}
+	if model.filtered[0].document.Summary != "fake summary" {
+		t.Fatalf("summary not applied: %+v", model.filtered[0].document)
+	}
 	if got := []string{model.filtered[0].document.ID, model.filtered[1].document.ID, model.filtered[2].document.ID}; !reflect.DeepEqual(got, []string{"bravo", "alpha", "charlie"}) {
-		t.Fatalf("second toggle did not restore newest-first order: %v", got)
-	}
-	if model.selected != 0 || model.filtered[model.selected].document.ID != "bravo" {
-		t.Fatalf("second toggle did not focus restored first row: selected=%d document=%s", model.selected, model.filtered[model.selected].document.ID)
+		t.Fatalf("summarize disturbed newest-first order: %v", got)
 	}
 }
 
@@ -281,9 +284,29 @@ func TestModel_PinnedRowStaysVisibleWhenDetailsReduceTreeHeight(t *testing.T) {
 	}
 }
 
+func TestModel_PreviewShowsSummaryInsteadOfBody(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.items = documentItems([]membox.DocumentView{
+		{ID: "with-summary", Path: "/tmp/a.md", Summary: "要点总结"},
+		{ID: "without", Path: "/tmp/b.md"},
+	})
+	model.refreshFilter()
+
+	updated, _ := model.Update(previewMsg{documentID: "with-summary", content: "# 原文 body"})
+	model = updated.(Model)
+	if model.rawContent != "要点总结" {
+		t.Fatalf("preview must show the summary, got %q", model.rawContent)
+	}
+
+	updated, _ = model.Update(previewMsg{documentID: "without", content: "# body only"})
+	model = updated.(Model)
+	if model.rawContent != "# body only" {
+		t.Fatalf("preview without summary must show the body, got %q", model.rawContent)
+	}
+}
+
 func TestModel_PinnedDocumentsStayFirstInNewestSort(t *testing.T) {
 	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
-	model.sortMode = sortModeTime
 	model.items = documentItems([]membox.DocumentView{
 		{ID: "old-pinned", Path: "/tmp/old.md", Pinned: true, UpdatedAt: time.Date(2020, 1, 1, 0, 0, 0, 0, time.Local)},
 		{ID: "new", Path: "/tmp/new.md", UpdatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.Local)},
@@ -443,7 +466,7 @@ func TestModel_CommandPaletteProgressiveDisclosure(t *testing.T) {
 	}
 	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
 	model = updated.(Model)
-	if !model.cmdMenuVisible || len(model.cmdSuggestions) == 0 || model.cmdSuggestions[0].Value != "note" {
+	if !model.cmdMenuVisible || len(model.cmdSuggestions) == 0 || model.cmdSuggestions[0].Value != "doc" {
 		t.Fatalf("first tab did not disclose top-level commands: %+v", model.cmdSuggestions)
 	}
 	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
@@ -610,6 +633,38 @@ func TestModel_LinkListShowsGraphFocusCardsByDirection(t *testing.T) {
 	model = updated.(Model)
 	if model.graphFocusID != "" || model.viewMode != viewTree {
 		t.Fatalf("q did not leave graph focus: focus=%s mode=%s", model.graphFocusID, model.viewMode)
+	}
+}
+
+func TestModel_LinkListResultEscReturnsToFileTree(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.width, model.height = 120, 30
+	model.inputVisible, model.inputActive, model.inputMode = true, true, inputModeCmd
+	model.input.Focus()
+	model.input.SetValue("link list focus")
+
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if command == nil {
+		t.Fatal("link list did not schedule a result")
+	}
+	message := command()
+	if batch, ok := message.(tea.BatchMsg); ok {
+		message = batch[len(batch)-1]()
+	}
+	updated, _ = model.Update(message)
+	model = updated.(Model)
+	if model.graphFocusID != "focus" || model.viewMode != viewBoard {
+		t.Fatalf("link list did not open its result view: focus=%q mode=%q", model.graphFocusID, model.viewMode)
+	}
+	if model.inputVisible || model.inputActive {
+		t.Fatalf("result view was stacked under command input: visible=%v active=%v", model.inputVisible, model.inputActive)
+	}
+
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model = updated.(Model)
+	if model.graphFocusID != "" || model.graphCards != nil || model.graphLayout != "" || model.viewMode != viewTree {
+		t.Fatalf("esc did not return to the file tree: focus=%q cards=%d layout=%q mode=%q", model.graphFocusID, len(model.graphCards), model.graphLayout, model.viewMode)
 	}
 }
 

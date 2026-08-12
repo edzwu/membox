@@ -35,14 +35,15 @@ func helpSections() []helpSection {
 	return []helpSection{
 		{title: "Browse", entries: []helpEntry{
 			{"enter / ctrl+t", "open document / tree ⇄ board"},
-			{"tab", "cycle read status: unread → reading → finished"},
+			{"tab", "focus tree ⇄ preview"},
+			{"↑ ↓ / pgup pgdn", "scroll focused preview"},
 			{"space", "details · ×2 opens filter input"},
 			{"e / o / d", "edit / open app / move to trash"},
-			{"r / p / s / ctrl+h", "rename file / pin / sort / toggle *-note.md"},
-			{"q", "back"},
+			{"r / p / s / ctrl+h", "rename file / pin / summarize / toggle *-note.md"},
+			{"q / esc", "back / close result view"},
 		}},
 		{title: "Filter & commands", entries: []helpEntry{
-			{":", "palette: note new, rename, link list/graph …"},
+			{":", "palette: doc new, rename, link list/graph …"},
 			{"enter / tab", "in input: open document / pin filter tag"},
 			{"ctrl+f", "in input: name ⇄ content search"},
 			{"ctrl+o", "in input: match options (exact · case)"},
@@ -51,7 +52,7 @@ func helpSections() []helpSection {
 		{title: "General", entries: []helpEntry{
 			{"ctrl+r", "refresh / rescan documents"},
 			{"ctrl+o / ctrl+d", "settings · web / quit (asks about web)"},
-			{"esc", "close panels / this help"},
+			{"esc", "close the current surface / this help"},
 		}},
 		{title: "Web Companion", entries: []helpEntry{
 			{"WEB badge", "status bar: port · tabs · unsaved"},

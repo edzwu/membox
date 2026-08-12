@@ -64,6 +64,12 @@ func (f *fakeApp) ListDocuments(context.Context, membox.ListDocumentsQuery) ([]m
 func (f *fakeApp) SetDocumentReadStatus(_ context.Context, _ membox.SetReadStatusCommand) error {
 	return nil
 }
+func (f *fakeApp) SetDocumentSummary(_ context.Context, command membox.SetSummaryCommand) (membox.DocumentView, error) {
+	return membox.DocumentView{ID: command.Selector, Summary: command.Summary}, nil
+}
+func (f *fakeApp) SummarizeDocument(_ context.Context, selector string) (membox.DocumentView, error) {
+	return membox.DocumentView{ID: selector, Summary: "fake summary"}, nil
+}
 func (f *fakeApp) ReadDocument(context.Context, membox.ReadDocumentQuery) ([]byte, error) {
 	return []byte("body"), nil
 }

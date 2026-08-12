@@ -73,14 +73,37 @@ func webEnsureCmd(ctx context.Context, app App, controller string) tea.Cmd {
 	}
 }
 
-func webRefreshCmd(ctx context.Context, app App, controller string, sequence uint64) tea.Cmd {
+// maintainWebLease is independent of Bubble Tea's Update loop. UI refreshes
+// may be delayed by ExecProcess, rendering, or one transient probe failure;
+// none of those should let a live TUI's session lease expire.
+func maintainWebLease(ctx context.Context, app App, controller string, interval time.Duration) {
+	renew := func() {
+		_ = app.RenewWebLease(ctx, controller)
+	}
+	renew()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			renew()
+		}
+	}
+}
+
+func webRefreshCmd(ctx context.Context, app App, sequence uint64) tea.Cmd {
 	return func() tea.Msg {
 		view, err := app.WebStatus(ctx)
-		if err == nil && view.Running {
-			err = app.RenewWebLease(ctx, controller)
-		}
 		return webStatusMsg{view: view, err: err, sequence: sequence, refresh: true}
 	}
+}
+
+func scheduleWebRefresh(ctx context.Context, app App, sequence uint64) tea.Cmd {
+	return tea.Tick(webRefreshInterval, func(time.Time) tea.Msg {
+		return webRefreshCmd(ctx, app, sequence)()
+	})
 }
 
 type webQuitResultMsg struct {
@@ -193,36 +216,27 @@ func (m Model) webCommandAction(tokens []string) (func() tea.Msg, string, error)
 // loop alive exactly once while the companion runs.
 func (m *Model) applyWebStatus(msg webStatusMsg) tea.Cmd {
 	if msg.refresh && msg.sequence != m.web.sequence {
-		return nil // stale loop superseded by a newer ensure/stop
-	}
-	if msg.err != nil {
-		m.web.err = msg.err
-		m.web.starting = false
-		return nil
-	}
-	m.web.err = nil
-	m.web.starting = false
-	m.web.status = msg.view
-	if msg.view.Started {
-		m.web.spawnedPID = msg.view.PID
-	}
-	if !msg.view.Running {
-		return nil
+		return nil // stale loop superseded by a newer explicit status/ensure
 	}
 	if !msg.refresh {
+		// Every explicit ensure/status answer starts one new refresh generation;
+		// older scheduled ticks become stale and cannot create duplicate loops.
 		m.web.sequence++
 	}
-	// Schedule exactly one follow-up probe; the sequence check above prunes
-	// superseded loops.
-	sequence := m.web.sequence
-	ctx, app, controller := m.ctx, m.app, m.web.controllerID
-	return tea.Tick(webRefreshInterval, func(time.Time) tea.Msg {
-		view, err := app.WebStatus(ctx)
-		if err == nil && view.Running {
-			err = app.RenewWebLease(ctx, controller)
+	m.web.starting = false
+	if msg.err != nil {
+		m.web.err = msg.err
+	} else {
+		m.web.err = nil
+		m.web.status = msg.view
+		if msg.view.Started {
+			m.web.spawnedPID = msg.view.PID
 		}
-		return webStatusMsg{view: view, err: err, sequence: sequence, refresh: true}
-	})
+	}
+	// A transient error or one failed probe must not terminate monitoring.
+	// Lease renewal runs independently, while this loop keeps the badge able to
+	// recover when the same server becomes reachable again.
+	return scheduleWebRefresh(m.ctx, m.app, m.web.sequence)
 }
 
 // beginQuit implements the ctrl+d lifecycle policy.
