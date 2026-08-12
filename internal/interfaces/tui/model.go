@@ -600,11 +600,15 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading, m.err = false, msg.err
 		if msg.err == nil {
 			m.deleteConfirm, m.deleteSelector, m.deletePath = false, "", ""
+			// Remove locally before the async reload. Keeping the deleted row's
+			// numeric slot selects its next neighbor (or the previous row when it
+			// was last), instead of restoreSelection falling back to pinned row 0.
+			m.removeDeletedDocument(msg.documentID)
 			m.statusMessage = "Moved " + filepath.Base(msg.path) + " to trash • restore: mm trash restore " + shortID(msg.documentID)
 			if msg.trashBytes >= 256<<20 || msg.trashCount >= 200 {
 				m.statusMessage += fmt.Sprintf(" • trash holds %d items (%s) — mm trash purge", msg.trashCount, formatBytesTUI(msg.trashBytes))
 			}
-			commands = append(commands, listDocumentsCmd(m.ctx, m.app, m.listSequence))
+			commands = append(commands, m.loadPreview(), listDocumentsCmd(m.ctx, m.app, m.listSequence))
 		}
 		m.clearExecutedCommand()
 	case graphFocusMsg:

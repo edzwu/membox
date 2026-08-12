@@ -378,6 +378,48 @@ func TestModel_DeleteConfirmationDeletesFocusedFile(t *testing.T) {
 	}
 }
 
+func TestModel_DeleteKeepsFocusOnAdjacentFile(t *testing.T) {
+	docs := []membox.DocumentView{
+		{ID: "pinned", Title: "Pinned", Path: "/tmp/pinned.md", Pinned: true, UpdatedAt: time.Date(2026, 1, 4, 0, 0, 0, 0, time.Local)},
+		{ID: "before", Title: "Before", Path: "/tmp/before.md", UpdatedAt: time.Date(2026, 1, 3, 0, 0, 0, 0, time.Local)},
+		{ID: "deleted", Title: "Deleted", Path: "/tmp/deleted.md", UpdatedAt: time.Date(2026, 1, 2, 0, 0, 0, 0, time.Local)},
+		{ID: "after", Title: "After", Path: "/tmp/after.md", UpdatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.Local)},
+	}
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.width, model.height = 100, 20
+	model.items = documentItems(docs)
+	model.refreshFilter()
+	model.selected = 2 // deleted; its next row is after
+
+	updated, _ := model.Update(deleteResultMsg{documentID: "deleted", path: "/tmp/deleted.md"})
+	model = updated.(Model)
+	selected, ok := model.selectedDocument()
+	if !ok || selected.ID != "after" {
+		t.Fatalf("delete jumped away from next neighbor: selected=%+v index=%d", selected, model.selected)
+	}
+
+	// The following async list reload must preserve that adjacent selection,
+	// rather than falling back to the first pinned row.
+	remaining := []membox.DocumentView{docs[0], docs[1], docs[3]}
+	updated, _ = model.Update(documentsMsg{sequence: model.listSequence, documents: remaining})
+	model = updated.(Model)
+	selected, ok = model.selectedDocument()
+	if !ok || selected.ID != "after" {
+		t.Fatalf("reload lost adjacent selection: selected=%+v index=%d", selected, model.selected)
+	}
+
+	// If the deleted row is last, the closest valid neighbor is the row above.
+	model.items = documentItems(remaining)
+	model.refreshFilter()
+	model.selected = len(model.filtered) - 1
+	updated, _ = model.Update(deleteResultMsg{documentID: "after", path: "/tmp/after.md"})
+	model = updated.(Model)
+	selected, ok = model.selectedDocument()
+	if !ok || selected.ID != "before" {
+		t.Fatalf("deleting last row did not select previous neighbor: selected=%+v index=%d", selected, model.selected)
+	}
+}
+
 func TestModel_DeleteConfirmationCanBeCanceled(t *testing.T) {
 	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
 	model.items = documentItems([]membox.DocumentView{{ID: "doc-alpha", Title: "Alpha", Path: "/tmp/alpha.md"}})

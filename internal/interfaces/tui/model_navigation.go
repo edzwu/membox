@@ -732,6 +732,23 @@ func (m *Model) startScan() tea.Cmd {
 	return tea.Batch(m.spinner.Tick, scanCmd(m.ctx, m.app))
 }
 
+// removeDeletedDocument updates the local tree immediately after a successful
+// delete. refreshFilter clamps the old numeric selection: normally that lands
+// on the next row, while deleting the last row lands on its previous neighbor.
+func (m *Model) removeDeletedDocument(documentID string) {
+	if documentID == "" {
+		return
+	}
+	items := m.items[:0]
+	for _, candidate := range m.items {
+		if candidate.document.ID != documentID {
+			items = append(items, candidate)
+		}
+	}
+	m.items = items
+	m.refreshFilter()
+}
+
 func (m *Model) restoreSelection(documentID string) {
 	if len(m.filtered) == 0 {
 		m.selected = 0
