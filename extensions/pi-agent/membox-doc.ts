@@ -37,9 +37,10 @@ type DocRecord = {
   size?: number;
 };
 
-async function runMm(args: string[], timeout = 10_000): Promise<string> {
+async function runMm(args: string[], timeout = 10_000, signal?: AbortSignal): Promise<string> {
   const { stdout } = await execFileAsync(findMm(), args, {
     timeout,
+    signal,
   });
   return stdout;
 }
@@ -47,6 +48,70 @@ async function runMm(args: string[], timeout = 10_000): Promise<string> {
 async function runMmJson<T>(args: string[], timeout = 10_000): Promise<T> {
   const out = await runMm(args, timeout);
   return JSON.parse(out) as T;
+}
+
+type VideoSummaryOutput = {
+  document_id: string;
+  path: string;
+  filename: string;
+  created: boolean;
+  course_code: string;
+  course_id?: string;
+  course_title?: string;
+  lecture_no: number;
+  lecture_no_source?: string;
+  playlist_index?: number;
+  video_id: string;
+  lecture_title: string;
+  source_url: string;
+};
+
+function parseSummarizeCommandArgs(raw: string): { url: string; course?: string } {
+  const tokens = raw.trim().split(/\s+/).filter(Boolean);
+  let url = "";
+  let course: string | undefined;
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (token === "--course" || token === "-c") {
+      course = tokens[++i];
+    } else if (!url) {
+      url = token;
+    } else if (!course) {
+      course = token;
+    }
+  }
+  return { url, course };
+}
+
+function inferCourseCodeFromTitle(title: string): string | undefined {
+  const compact = title.match(/\bCS\s*[- ]?\s*(\d+[A-Z]?)\b/i);
+  if (!compact) return undefined;
+  const base = `cs${compact[1].toLowerCase()}`;
+  const term = title.match(/\b(Fall|Winter|Spring|Summer)\s+(20\d{2})\b/i);
+  return term ? `${base}-${term[1].toLowerCase()}${term[2]}` : base;
+}
+
+async function inspectYouTubeTitle(url: string): Promise<string | undefined> {
+  const candidates = [
+    process.env.MMD_YTDLP_BIN,
+    join(process.env.HOME || "", "repo", "echo-bp", ".venv", "bin", "yt-dlp"),
+    "yt-dlp",
+  ].filter((value): value is string => Boolean(value));
+  for (const binary of candidates) {
+    try {
+      const { stdout } = await execFileAsync(binary, ["--no-playlist", "--skip-download", "--print", "%(title)s", url], { timeout: 60_000 });
+      const title = stdout.trim().split("\n").at(-1)?.trim();
+      if (title) return title;
+    } catch {
+      // Try the next installation candidate.
+    }
+  }
+  return undefined;
+}
+
+async function summarizeVideo(url: string, course: string, signal?: AbortSignal): Promise<VideoSummaryOutput> {
+  const out = await runMm(["video", "summarize", url, "--course", course, "--json"], 15 * 60_000, signal);
+  return JSON.parse(out) as VideoSummaryOutput;
 }
 
 /** Resolve a selector (full ID, short ID tail, path) to one document. */
@@ -87,6 +152,50 @@ export default function (pi: ExtensionAPI) {
     description: "Toggle membox doc reference resolution",
     handler: async (ctx) => toggle(ctx),
   });
+
+  const summarizeCommand = {
+    description: "Download YouTube subtitles, summarize through echo-bp, and save to membox. Usage: /summarize <url> [course] or --course <code>",
+    handler: async (rawArgs: string, ctx: ExtensionContext) => {
+      const parsed = parseSummarizeCommandArgs(rawArgs);
+      if (!parsed.url || !/^https?:\/\/(?:www\.)?(?:youtube\.com|youtu\.be)\//i.test(parsed.url)) {
+        ctx.ui.notify("Usage: /summarize <youtube-url> [course]", "error");
+        return;
+      }
+      let course = parsed.course;
+      let title: string | undefined;
+      if (!course) {
+        ctx.ui.setStatus("membox-summary", ctx.ui.theme.fg("dim", "Inspecting video…"));
+        title = await inspectYouTubeTitle(parsed.url);
+        course = title ? inferCourseCodeFromTitle(title) : undefined;
+      }
+      if (!course && ctx.hasUI) {
+        course = await ctx.ui.input("Course code", "e.g. cs106l-fall2019");
+      }
+      course = course?.trim().toLowerCase();
+      if (!course || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(course)) {
+        ctx.ui.setStatus("membox-summary", undefined);
+        ctx.ui.notify("A stable course code is required, e.g. /summarize <url> cs106l-fall2019", "error");
+        return;
+      }
+      ctx.ui.setStatus("membox-summary", ctx.ui.theme.fg("accent", `Summarizing ${course}…`));
+      try {
+        const result = await summarizeVideo(parsed.url, course);
+        const source = result.lecture_no_source || "unknown";
+        ctx.ui.notify(
+          `${result.created ? "Created" : "Updated"} ${result.filename}\n${result.lecture_title}\n${result.document_id}\nlecture=${result.lecture_no} (${source}), playlist_index=${result.playlist_index ?? "?"}`,
+          "info",
+        );
+      } catch (error: any) {
+        const detail = error?.stderr?.trim() || error?.message || String(error);
+        ctx.ui.notify(`Video summary failed: ${detail}`, "error");
+      } finally {
+        ctx.ui.setStatus("membox-summary", undefined);
+      }
+    },
+  };
+  pi.registerCommand("summarize", summarizeCommand);
+  // Keep the user's original spelling as an alias.
+  pi.registerCommand("sumamrise", summarizeCommand);
 
   pi.on("session_start", async (_event, ctx) => {
     updateStatus(ctx);
@@ -367,6 +476,47 @@ export default function (pi: ExtensionAPI) {
         content: [{ type: "text", text: match ? `Removed path ${match.id}: ${match.path}` : `Removed ${params.selector}` }],
         details: { removed: true, path: match?.path },
       };
+    },
+  });
+
+  pi.registerTool({
+    name: "membox_video_summarize",
+    label: "Summarize a YouTube lecture into membox",
+    description:
+      "Ask the running mmd service to process one YouTube video through echo-bp, then save/update its summary in membox's default path as <course>-lec<N>.md. The URL must identify one video. By default N is inferred from a readable title such as 'Lecture 7', with playlist position only as fallback; lecture explicitly overrides inference.",
+    parameters: Type.Object({
+      url: Type.String({ description: "YouTube watch/video URL (may include a playlist)" }),
+      course: Type.String({ description: "Stable readable course code, e.g. cs336 or stanford-cs336-2025" }),
+      lecture: Type.Optional(Type.Integer({ description: "Explicit semantic lecture number. Set only when the user explicitly provides it; never copy the URL's playlist index. Omit to infer from the readable video title.", minimum: 1 })),
+      force: Type.Optional(Type.Boolean({ description: "Regenerate existing echo-bp transcript/summary artifacts" })),
+    }),
+    async execute(_toolCallId, params, signal, onUpdate, ctx) {
+      const label = params.lecture === undefined
+        ? `${params.course} (lecture inferred from title)`
+        : `${params.course}-lec${params.lecture}`;
+      const ok = await ctx.ui.confirm(
+        "Generate video summary?",
+        `echo-bp will download subtitles, call pi for a summary, and publish ${label} into membox.\n\n${params.url}`,
+      );
+      if (!ok) {
+        return { content: [{ type: "text", text: "Video summary cancelled." }], details: { cancelled: true } };
+      }
+      onUpdate?.({ content: [{ type: "text", text: `Processing ${params.url} through mmd…` }], details: { state: "running" } });
+      const args = ["video", "summarize", params.url, "--course", params.course, "--json"];
+      if (params.lecture !== undefined) args.push("--lecture", String(params.lecture));
+      if (params.force) args.push("--force");
+      try {
+        const out = await runMm(args, 15 * 60_000, signal);
+        const result = JSON.parse(out) as VideoSummaryOutput;
+        const action = result.created ? "Created" : "Updated";
+        return {
+          content: [{ type: "text", text: `${action} ${result.filename} → ${result.document_id}\n${result.lecture_title}\n${result.path}` }],
+          details: result,
+        };
+      } catch (error: any) {
+        const detail = error?.stderr?.trim() || error?.message || String(error);
+        return { content: [{ type: "text", text: `Video summary failed: ${detail}` }], details: { error: detail }, isError: true };
+      }
     },
   });
 

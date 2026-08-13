@@ -29,6 +29,27 @@ While ON, a message such as "把 membox 的 11e8 列入今天的任务" is augme
 with the resolved file context (`11e8 → membox-code-refactor.md`), so the
 model knows exactly which file is meant.
 
+## Deterministic video command
+
+Use `/summarize` to bypass LLM tool selection and always run the complete video
+pipeline directly:
+
+```text
+/summarize https://www.youtube.com/watch?v=...&list=...&index=13
+```
+
+It inspects the readable YouTube title and infers a course code when possible
+(`CS 106L Fall 2019` → `cs106l-fall2019`). Otherwise it prompts for one. You can
+also provide it explicitly:
+
+```text
+/summarize <youtube-url> cs106l-fall2019
+/summarize <youtube-url> --course cs106l-fall2019
+```
+
+`/sumamrise` is an alias for the common misspelling. The command calls
+`mm → mmd → echo-bp` directly, without relying on a model function-call decision.
+
 ## Tools
 
 | Tool | Backing CLI | Notes |
@@ -40,6 +61,25 @@ model knows exactly which file is meant.
 | `membox_doc_create` | write file + `mm path scan` | any extension (not just .md) |
 | `membox_doc_rename` | `mm doc rename` | keeps the UUID |
 | `membox_doc_delete` | `mm doc delete` | soft delete (trash) + confirm |
+| `membox_video_summarize` | `mm video summarize` → `mmd` → `echo-bp` | download one lecture, summarize it, and upsert `<course>-lec<N>.md` |
 
 All tools talk JSON to the `mm` CLI, so any new `mm doc` subcommand can be
 exposed by adding a `pi.registerTool` wrapper here.
+
+`membox_video_summarize` additionally requires `mmd` to be running for the same
+home (`MEMBOX_HOME` or `--home`). It resolves echo-bp from `$MMD_EBP_BIN`, then
+`~/repo/echo-bp/.venv/bin/ebp`, then `PATH`. Build both local binaries before use:
+
+```bash
+cd ~/repo/membox
+go build -o bin/mm ./cmd/mm
+go build -o bin/mmd ./cmd/mmd
+bin/mmd run
+```
+
+The generated projection is flat and readable (`cs336-lec2.md`). Its lecture
+number is inferred first from the human-facing video title (`Lecture 7`), not
+from a possibly unrelated playlist slot (`index=13`); an explicit `lecture`
+overrides inference, and playlist order is only a fallback. Both the selected
+number/source and `playlist_index` are recorded in YAML front matter. Stable
+YouTube course/video IDs ensure regeneration updates the same membox UUID.
