@@ -126,19 +126,20 @@ func apiScanReport(report application.ScanReport) ScanReport {
 }
 
 type Daemon struct {
-	config   Config
-	service  *application.Service
-	listener net.Listener
-	server   *http.Server
-	instance *system.OSMutex
-	log      *log.Logger
-	health   Health
+	config      Config
+	service     *application.Service
+	echoSummary echoSummaryRunner
+	listener    net.Listener
+	server      *http.Server
+	instance    *system.OSMutex
+	log         *log.Logger
+	health      Health
 
 	shutdownOnce sync.Once
 }
 
 func New(config Config) *Daemon {
-	return &Daemon{config: config}
+	return &Daemon{config: config, echoSummary: echoBPCommand{}}
 }
 
 func (d *Daemon) Run(ctx context.Context) error {
@@ -262,6 +263,31 @@ func (d *Daemon) handler() http.Handler {
 		// active handlers during Shutdown.
 		go d.shutdown()
 	})
+	mux.HandleFunc("POST /v1/video/summary", func(writer http.ResponseWriter, request *http.Request) {
+		request.Body = http.MaxBytesReader(writer, request.Body, 64<<10)
+		var input VideoSummaryRequest
+		decoder := json.NewDecoder(request.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&input); err != nil {
+			writeJSON(writer, http.StatusBadRequest, videoSummaryResponse{Error: "invalid video summary request: " + err.Error()})
+			return
+		}
+		if strings.TrimSpace(input.URL) == "" || strings.TrimSpace(input.CourseCode) == "" || input.LectureNo < 0 {
+			writeJSON(writer, http.StatusBadRequest, videoSummaryResponse{Error: "url and course_code are required; lecture_no must be positive when provided"})
+			return
+		}
+		artifact, err := d.echoSummary.Summarize(request.Context(), input)
+		if err != nil {
+			writeJSON(writer, http.StatusUnprocessableEntity, videoSummaryResponse{Error: err.Error()})
+			return
+		}
+		result, err := publishVideoSummary(request.Context(), d.service, artifact)
+		if err != nil {
+			writeJSON(writer, http.StatusConflict, videoSummaryResponse{Error: err.Error()})
+			return
+		}
+		writeJSON(writer, http.StatusOK, videoSummaryResponse{Result: result})
+	})
 	mux.HandleFunc("POST /v1/scan", func(writer http.ResponseWriter, request *http.Request) {
 		request.Body = http.MaxBytesReader(writer, request.Body, 64<<10)
 		var input ScanRequest
@@ -373,6 +399,39 @@ func Healthcheck(config Config) (Health, error) {
 		return Health{}, fmt.Errorf("decode health response: %w", err)
 	}
 	return health, nil
+}
+
+func VideoSummary(ctx context.Context, config Config, request VideoSummaryRequest) (VideoSummaryResult, error) {
+	body, err := json.Marshal(request)
+	if err != nil {
+		return VideoSummaryResult{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://mmd/v1/video/summary", strings.NewReader(string(body)))
+	if err != nil {
+		return VideoSummaryResult{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	httpClient := client(config)
+	httpClient.Timeout = 0 // download + nested pi summary can take several minutes
+	response, err := httpClient.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return VideoSummaryResult{}, ctx.Err()
+		}
+		return VideoSummaryResult{}, ErrNotRunning
+	}
+	defer response.Body.Close()
+	var result videoSummaryResponse
+	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+		return VideoSummaryResult{}, fmt.Errorf("decode video summary response: %w", err)
+	}
+	if response.StatusCode != http.StatusOK {
+		if result.Error != "" {
+			return result.Result, errors.New(result.Error)
+		}
+		return result.Result, fmt.Errorf("video summary returned HTTP %d", response.StatusCode)
+	}
+	return result.Result, nil
 }
 
 func Scan(ctx context.Context, config Config, request ScanRequest) (ScanReport, error) {

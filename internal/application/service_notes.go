@@ -45,6 +45,95 @@ type CreateNoteResult struct {
 	Link     *catalog.GraphEdge
 }
 
+type UpsertMarkdownOptions struct {
+	Filename string
+	Body     string
+}
+
+type UpsertMarkdownResult struct {
+	Document *catalog.Document
+	Path     string
+	Created  bool
+}
+
+func validFlatMarkdownFilename(filename string) bool {
+	return filename != "" && filename != "." && filename != ".." &&
+		filepath.Base(filename) == filename && strings.ToLower(filepath.Ext(filename)) == ".md" &&
+		!strings.Contains(filename, "/") && !strings.Contains(filename, "\\")
+}
+
+// ResolveDocumentByRelativePath resolves an active document in the configured
+// main path by its exact flat filename. It is intentionally narrower than the
+// public UUID selector used by ResolveDocument.
+func (s *Service) ResolveDocumentByRelativePath(ctx context.Context, filename string) (*catalog.Document, string, error) {
+	filename = strings.TrimSpace(filename)
+	if !validFlatMarkdownFilename(filename) {
+		return nil, "", fmt.Errorf("invalid relative filename %q", filename)
+	}
+	indexedPath, err := s.defaultCreatePath(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	documents, err := s.store.DocumentsForPath(ctx, indexedPath.ID)
+	if err != nil {
+		return nil, "", err
+	}
+	for _, document := range documents {
+		if filepath.ToSlash(document.Location.RelativePath) == filepath.ToSlash(filename) && document.Status == catalog.DocumentActive {
+			return document, filepath.Join(indexedPath.Root, filename), nil
+		}
+	}
+	return nil, "", fmt.Errorf("document path %q not found", filename)
+}
+
+// UpsertMarkdown writes one generated Markdown projection into the configured
+// main path under an exact, stable filename. Existing active documents are
+// updated in place so their UUID, links and annotations survive regeneration.
+func (s *Service) UpsertMarkdown(ctx context.Context, opts UpsertMarkdownOptions) (UpsertMarkdownResult, error) {
+	release, lockErr := s.beginMutation()
+	if lockErr != nil {
+		return UpsertMarkdownResult{}, lockErr
+	}
+	defer release()
+	filename := strings.TrimSpace(opts.Filename)
+	if !validFlatMarkdownFilename(filename) {
+		return UpsertMarkdownResult{}, fmt.Errorf("invalid generated Markdown filename %q", filename)
+	}
+	if strings.TrimSpace(opts.Body) == "" {
+		return UpsertMarkdownResult{}, errors.New("generated Markdown body is required")
+	}
+	indexedPath, err := s.defaultCreatePath(ctx)
+	if err != nil {
+		return UpsertMarkdownResult{}, err
+	}
+	documents, err := s.store.DocumentsForPath(ctx, indexedPath.ID)
+	if err != nil {
+		return UpsertMarkdownResult{}, err
+	}
+	for _, document := range documents {
+		if filepath.ToSlash(document.Location.RelativePath) != filepath.ToSlash(filename) {
+			continue
+		}
+		if document.Status != catalog.DocumentActive {
+			return UpsertMarkdownResult{}, fmt.Errorf("generated document %s is %s; restore it before publishing", document.ID, document.Status)
+		}
+		updated, err := s.SyncDocument(ctx, string(document.ID), opts.Body)
+		if err != nil {
+			return UpsertMarkdownResult{}, err
+		}
+		return UpsertMarkdownResult{Document: document, Path: updated.Path}, nil
+	}
+	stem := strings.TrimSuffix(filename, filepath.Ext(filename))
+	created, err := s.CreateNote(ctx, CreateNoteOptions{Title: stem, Body: opts.Body})
+	if err != nil {
+		return UpsertMarkdownResult{}, err
+	}
+	if filepath.Base(created.Path) != filename {
+		return UpsertMarkdownResult{}, fmt.Errorf("generated filename collision: wanted %s, created %s", filename, filepath.Base(created.Path))
+	}
+	return UpsertMarkdownResult{Document: created.Document, Path: created.Path, Created: true}, nil
+}
+
 func (s *Service) CreateNote(ctx context.Context, opts CreateNoteOptions) (CreateNoteResult, error) {
 	release, lockErr := s.beginMutation()
 	if lockErr != nil {
