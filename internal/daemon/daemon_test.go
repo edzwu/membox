@@ -15,13 +15,15 @@ import (
 	"membox/internal/infrastructure/sqlite"
 )
 
-func TestDefaultConfigUsesIsolatedTempbox(t *testing.T) {
+func TestDefaultConfigMatchesMMHomeResolution(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("MEMBOX_HOME", home)
 	config, err := DefaultConfig("")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if filepath.Base(config.Home) != "tempbox" {
-		t.Fatalf("default home = %q, want tempbox", config.Home)
+	if config.Home != home {
+		t.Fatalf("default home = %q, want %q", config.Home, home)
 	}
 	if filepath.Base(config.DatabasePath) != "membox.db" {
 		t.Fatalf("database path = %q", config.DatabasePath)

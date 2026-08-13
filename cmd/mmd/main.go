@@ -34,7 +34,7 @@ func newRoot() *cobra.Command {
 		SilenceErrors: true,
 		SilenceUsage:  true,
 	}
-	root.PersistentFlags().StringVar(&home, "home", "", "isolated mmd home (default: ./tempbox)")
+	root.PersistentFlags().StringVar(&home, "home", "", "membox home directory (default: MEMBOX_HOME or ~/.membox)")
 	root.AddCommand(newRunCommand(&home), newStatusCommand(&home), newStopCommand(&home))
 	return root
 }

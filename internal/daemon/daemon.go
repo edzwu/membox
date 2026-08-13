@@ -24,11 +24,10 @@ import (
 )
 
 const (
-	defaultHomeName = "tempbox"
-	socketName      = "mmd.sock"
-	pidName         = "mmd.pid"
-	lockName        = "mmd.lock"
-	logName         = "mmd.log"
+	socketName = "mmd.sock"
+	pidName    = "mmd.pid"
+	lockName   = "mmd.lock"
+	logName    = "mmd.log"
 )
 
 var (
@@ -47,11 +46,18 @@ type Config struct {
 	LogPath      string
 }
 
-// DefaultConfig deliberately uses ./tempbox rather than ~/.membox. The first
-// daemon prototype must not accidentally open the user's real database.
+// DefaultConfig uses the same home resolution as mm so Pi tools and mmd
+// always address one catalog unless the caller explicitly passes --home.
 func DefaultConfig(home string) (Config, error) {
 	if strings.TrimSpace(home) == "" {
-		home = defaultHomeName
+		home = strings.TrimSpace(os.Getenv("MEMBOX_HOME"))
+		if home == "" {
+			userHome, err := os.UserHomeDir()
+			if err != nil {
+				return Config{}, fmt.Errorf("resolve user home: %w", err)
+			}
+			home = filepath.Join(userHome, ".membox")
+		}
 	}
 	absolute, err := filepath.Abs(home)
 	if err != nil {
