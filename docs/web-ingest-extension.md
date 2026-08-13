@@ -348,7 +348,10 @@ mm serve          # 前台或用户服务：启动 web + bridge 配置
 | --- | --- | --- |
 | GET | `/api/bridge/status` | connected、version、需要 token 与否 |
 | POST | `/api/ingest` | clip 专用创建；返回 id + view_url |
+| GET/POST | `/api/resources*` | URL resource 入库、去重、分类、列表与 review 游标 |
 | 现有 | `/api/sync`、`/api/doc/…`、`/` | 不变 |
+
+`/api/resources/ingest` 接收来源行，或读取 `source_document_id` / 已索引的 `source_file`，并在 Membox 内执行 URL 提取与 canonical 去重；它不会读取任意未索引路径。`/api/resources/assess` 写知识价值分类；`/api/resources` 返回排名。Pi/Timension extension 只做命令适配和 agent 交互，不直接写 SQLite。
 
 Application 层：优先复用 `CreateNote`；可选把 `source_url` 记入 metadata 表（若尚无字段，MVP 只进 front matter）。
 

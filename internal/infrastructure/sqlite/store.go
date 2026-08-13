@@ -146,6 +146,42 @@ CREATE TABLE IF NOT EXISTS document_read_state (
     progress_y INTEGER NOT NULL DEFAULT 0,
     progress_at TEXT NOT NULL DEFAULT ''
 );
+-- Canonical external URLs captured from inbox/knowledge documents. Resources
+-- belong to membox; planning systems reference their stable IDs instead of
+-- copying URL rows into task databases.
+CREATE TABLE IF NOT EXISTS resources (
+    id TEXT PRIMARY KEY,
+    url TEXT NOT NULL,
+    canonical_url TEXT NOT NULL UNIQUE,
+    title TEXT NOT NULL DEFAULT '',
+    priority TEXT NOT NULL DEFAULT 'M' CHECK(priority IN ('H','M','L')),
+    score REAL CHECK(score IS NULL OR (score >= 0 AND score <= 1)),
+    reason TEXT NOT NULL DEFAULT '',
+    source_document_id TEXT REFERENCES documents(id) ON DELETE SET NULL,
+    source_file TEXT NOT NULL DEFAULT '',
+    source_line TEXT NOT NULL DEFAULT '',
+    source_commit TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS resources_rank ON resources(priority, score DESC);
+CREATE INDEX IF NOT EXISTS resources_created ON resources(created_at DESC);
+CREATE TABLE IF NOT EXISTS resource_sources (
+    resource_id TEXT NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
+    source_document_id TEXT REFERENCES documents(id) ON DELETE SET NULL,
+    source_file TEXT NOT NULL DEFAULT '',
+    source_line TEXT NOT NULL DEFAULT '',
+    source_commit TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    UNIQUE(resource_id, source_file, source_line)
+);
+CREATE INDEX IF NOT EXISTS resource_sources_document ON resource_sources(source_document_id);
+CREATE INDEX IF NOT EXISTS resource_sources_file ON resource_sources(source_file);
+CREATE TABLE IF NOT EXISTS resource_scan (
+    source TEXT PRIMARY KEY,
+    wave INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL
+);
 -- Logical content identity is independent of its physical representation.
 -- V1 publishes whole-file direct objects; the schema can later add manifests
 -- and chunks without changing document_versions.content_sha256.

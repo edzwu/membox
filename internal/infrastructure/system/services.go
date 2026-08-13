@@ -21,3 +21,11 @@ func (IDGenerator) NewDocumentID() (catalog.DocumentID, error) {
 	}
 	return catalog.DocumentID(id.String()), nil
 }
+
+func (IDGenerator) NewResourceID() (string, error) {
+	id, err := uuid.NewV7()
+	if err != nil {
+		return "", err
+	}
+	return "res-" + id.String(), nil
+}

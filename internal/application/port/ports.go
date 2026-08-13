@@ -41,6 +41,7 @@ type ContentReader interface {
 
 type IDGenerator interface {
 	NewDocumentID() (catalog.DocumentID, error)
+	NewResourceID() (string, error)
 }
 
 type Clock interface{ Now() time.Time }
@@ -276,6 +277,13 @@ type CatalogStore interface {
 	// ListDocumentSources enumerates documents with clip provenance, optionally
 	// filtered by clip mode ("page" | "selection" | "" for all).
 	ListDocumentSources(ctx context.Context, clipMode string) ([]DocumentSourceRecord, error)
+	// URL resources are owned by membox, not by planning/task databases.
+	IngestResources(ctx context.Context, resources []ResourceInsert) ([]ResourceIngestRecord, error)
+	AssessResources(ctx context.Context, assessments []ResourceAssessment) ([]ResourceRecord, error)
+	ListResources(ctx context.Context, limit int) ([]ResourceRecord, error)
+	ListResourcesBySource(ctx context.Context, sourceDocumentID, sourceFile string, limit int) ([]ResourceRecord, error)
+	ResourceScanState(ctx context.Context, source string) (int, error)
+	SetResourceScanState(ctx context.Context, source string, wave int, reset bool, now time.Time) error
 	GraphStore
 	TrashStore
 	Status(ctx context.Context) (StatusSnapshot, error)
@@ -291,6 +299,49 @@ type DocumentSourceRecord struct {
 	RelativePath string
 	ClipMode     string // "selection" | "page" | ""
 	SourceURL    string
+}
+
+// ResourceRecord is a canonical external URL captured from a membox document.
+// The source document/file fields are provenance; URL identity is canonical_url.
+type ResourceRecord struct {
+	ID               string    `json:"id"`
+	URL              string    `json:"url"`
+	CanonicalURL     string    `json:"canonical_url"`
+	Title            string    `json:"title,omitempty"`
+	Priority         string    `json:"priority"`
+	Score            *float64  `json:"score,omitempty"`
+	Reason           string    `json:"reason,omitempty"`
+	SourceDocumentID string    `json:"source_document_id,omitempty"`
+	SourceFile       string    `json:"source_file,omitempty"`
+	SourceLine       string    `json:"source_line,omitempty"`
+	SourceCommit     string    `json:"source_commit,omitempty"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+}
+
+type ResourceInsert struct {
+	ID               string
+	URL              string
+	CanonicalURL     string
+	Title            string
+	SourceDocumentID string
+	SourceFile       string
+	SourceLine       string
+	SourceCommit     string
+	CreatedAt        time.Time
+}
+
+type ResourceIngestRecord struct {
+	Resource ResourceRecord
+	Inserted bool
+}
+
+type ResourceAssessment struct {
+	ID        string  `json:"id"`
+	Priority  string  `json:"priority"`
+	Score     float64 `json:"score"`
+	Reason    string  `json:"reason"`
+	UpdatedAt time.Time
 }
 
 type StatusSnapshot struct {

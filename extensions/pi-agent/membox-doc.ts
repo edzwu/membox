@@ -1,7 +1,10 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { StringEnum } from "@earendil-works/pi-ai";
 import { Key } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { execFile } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
@@ -48,6 +51,46 @@ async function runMm(args: string[], timeout = 10_000, signal?: AbortSignal): Pr
 async function runMmJson<T>(args: string[], timeout = 10_000): Promise<T> {
   const out = await runMm(args, timeout);
   return JSON.parse(out) as T;
+}
+
+type BridgeFile = { base_url: string; token: string };
+
+function bridgePath(): string {
+  return join(process.env.MEMBOX_HOME || join(homedir(), ".membox"), "bridge.json");
+}
+
+function readBridge(): BridgeFile {
+  return JSON.parse(readFileSync(bridgePath(), "utf8")) as BridgeFile;
+}
+
+async function ensureBridge(): Promise<BridgeFile> {
+  try {
+    const bridge = readBridge();
+    const response = await fetch(`${bridge.base_url.replace(/\/$/, "")}/api/bridge/status`, {
+      signal: AbortSignal.timeout(1500),
+    });
+    if (response.ok) return bridge;
+  } catch { /* start/reconnect below */ }
+  await runMm(["web", "start"], 15_000);
+  return readBridge();
+}
+
+async function memboxAPI(path: string, init?: RequestInit): Promise<any> {
+  const bridge = await ensureBridge();
+  const response = await fetch(`${bridge.base_url.replace(/\/$/, "")}${path}`, {
+    ...init,
+    headers: {
+      Accept: "application/json",
+      "X-Membox-Token": bridge.token,
+      ...(init?.body ? { "Content-Type": "application/json" } : {}),
+      ...(init?.headers as Record<string, string> | undefined),
+    },
+  });
+  const text = await response.text();
+  let body: any;
+  try { body = text ? JSON.parse(text) : {}; } catch { body = { message: text }; }
+  if (!response.ok) throw new Error(body?.error?.message || body?.message || text || `HTTP ${response.status}`);
+  return body;
 }
 
 type VideoSummaryOutput = {
@@ -125,6 +168,182 @@ async function resolveDoc(selector: string): Promise<DocRecord | null> {
 
 export default function (pi: ExtensionAPI) {
   let enabled = false;
+
+  // URL resources are a membox concern. This extension only adapts Pi to the
+  // companion API; extraction, canonicalization, dedupe, ranking persistence,
+  // and scan cursors all stay in the Go backend.
+  const inboxFile = process.env.MEMBOX_INBOX_FILE || join(homedir(), "repo", "append-review", "journal", "inbox.md");
+  const resourceChunkSize = 40;
+  const resourceChain: { active: boolean; wave: number; total: number; rows: any[] } = {
+    active: false, wave: 0, total: 0, rows: [],
+  };
+
+  async function injectResourceWave(): Promise<void> {
+    const start = (resourceChain.wave - 1) * resourceChunkSize;
+    const batch = resourceChain.rows.slice(start, start + resourceChunkSize);
+    const content = batch.map((resource: any) =>
+      `${resource.id}\n  title: ${resource.title || "（无标题）"}\n  url: ${resource.url}\n` +
+      `  context: ${String(resource.source_line || "（无上下文）").slice(0, 500)}`,
+    ).join("\n\n");
+    await pi.sendUserMessage(
+      `[membox resource review · wave ${resourceChain.wave}/${resourceChain.total}]\n\n` +
+      `请评估这些 URL 资源的长期知识价值。只允许调用 membox_resource_assess；不要创建或修改 task、proposal、project 或文档。\n` +
+      `规则：\n` +
+      `1. 每条给 priority(H/M/L)、score(0-1)、一句话 reason。\n` +
+      `2. 一手资料、稀缺资料、可长期复用的技术内容优先；通用首页、临时会话和弱信息收藏降权。\n` +
+      `3. 分类描述资源本身的知识价值，不混入任务 deadline 或项目紧迫度。\n` +
+      `4. 必须一次调用 membox_resource_assess，source=${JSON.stringify(inboxFile)}，wave=${resourceChain.wave}，expected_count=${batch.length}，覆盖本批全部资源。\n` +
+      `5. 完成后一句话汇报本批 H/M/L 数量。\n\n${content}`,
+      { deliverAs: "followUp" },
+    );
+  }
+
+  pi.registerTool({
+    name: "membox_resource_ingest",
+    label: "Ingest URL resources",
+    description: "Extract HTTP(S) URLs from source lines and persist canonical, deduplicated resources in membox.",
+    parameters: Type.Object({
+      lines: Type.Array(Type.String()),
+      source_document_id: Type.Optional(Type.String()),
+      source_file: Type.Optional(Type.String()),
+      source_commit: Type.Optional(Type.String()),
+    }),
+    async execute(_toolCallId, params) {
+      const out = await memboxAPI("/api/resources/ingest", {
+        method: "POST", body: JSON.stringify(params),
+      });
+      const text = `Found ${out.found ?? 0} URL(s): ${out.inserted ?? 0} inserted, ${out.existing ?? 0} existing.`;
+      return { content: [{ type: "text", text }], details: out };
+    },
+  });
+
+  pi.registerTool({
+    name: "membox_resource_list",
+    label: "List URL resources",
+    description: "List canonical URL resources from membox, ranked by knowledge-value priority and score.",
+    parameters: Type.Object({
+      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
+    }),
+    async execute(_toolCallId, params) {
+      const out = await memboxAPI(`/api/resources?limit=${params.limit ?? 50}`);
+      const rows = (out.resources || []).map((resource: any) =>
+        `${resource.id} ${resource.priority} ${resource.score == null ? "-" : Number(resource.score).toFixed(2)} ` +
+        `${resource.title || "（无标题）"} — ${resource.url}${resource.reason ? ` — ${resource.reason}` : ""}`,
+      );
+      return { content: [{ type: "text", text: rows.join("\n") || "No resources." }], details: out };
+    },
+  });
+
+  pi.registerTool({
+    name: "membox_resource_assess",
+    label: "Assess URL resources",
+    description: "Batch-assign knowledge-value priority, score, and reason to URL resources stored in membox.",
+    parameters: Type.Object({
+      assessments: Type.Array(Type.Object({
+        id: Type.String(),
+        priority: StringEnum(["H", "M", "L"] as const),
+        score: Type.Number({ minimum: 0, maximum: 1 }),
+        reason: Type.String(),
+      })),
+      wave: Type.Optional(Type.Integer({ minimum: 0 })),
+      source: Type.Optional(Type.String()),
+      expected_count: Type.Optional(Type.Integer({ minimum: 0 })),
+    }),
+    async execute(_toolCallId, params) {
+      const out = await memboxAPI("/api/resources/assess", {
+        method: "POST", body: JSON.stringify(params),
+      });
+      return {
+        content: [{ type: "text", text: `Assessed ${out.assessed ?? 0} membox resource(s).` }],
+        details: out,
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "membox_resource_scan",
+    label: "Resource review cursor",
+    description: "Read or reset membox's importance-review cursor for a resource source.",
+    parameters: Type.Object({
+      source: Type.String(),
+      reset: Type.Optional(Type.Boolean()),
+    }),
+    async execute(_toolCallId, params) {
+      const out = params.reset
+        ? await memboxAPI("/api/resources/scan", { method: "POST", body: JSON.stringify(params) })
+        : await memboxAPI(`/api/resources/scan?source=${encodeURIComponent(params.source)}`);
+      return { content: [{ type: "text", text: JSON.stringify(out, null, 2) }], details: out };
+    },
+  });
+
+  pi.registerCommand("resources", {
+    description: "membox URL resources: list | scan",
+    handler: async (args, ctx) => {
+      const action = args.trim() || "list";
+      try {
+        if (action === "list") {
+          const out = await memboxAPI("/api/resources?limit=50");
+          const rows = out?.resources || [];
+          const markdown = rows.length
+            ? `**Membox URL Resources**\n\n` + rows.map((resource: any, index: number) =>
+                `${index + 1}. \`${resource.priority}\` **${resource.score == null ? "-" : Number(resource.score).toFixed(2)}** ` +
+                `${resource.title ? `**${resource.title}** — ` : ""}${resource.url} \`#${String(resource.id).slice(0, 8)}\`` +
+                `${resource.reason ? ` — ${resource.reason}` : ""}`,
+              ).join("\n")
+            : "没有 URL resources";
+          pi.sendMessage({ customType: "membox-resources", content: markdown, display: true });
+          return;
+        }
+        if (action === "scan") {
+          const out = await memboxAPI("/api/resources/ingest", {
+            method: "POST",
+            body: JSON.stringify({ source_file: inboxFile }),
+          });
+          const listed = await memboxAPI(`/api/resources?limit=5000&source_file=${encodeURIComponent(inboxFile)}`);
+          const rows = listed?.resources || [];
+          if (!rows.length) {
+            ctx.ui.notify("URL 扫描完成：没有发现资源", "info");
+            return;
+          }
+          await memboxAPI("/api/resources/scan", {
+            method: "POST", body: JSON.stringify({ source: inboxFile, reset: true }),
+          });
+          Object.assign(resourceChain, {
+            active: true, wave: 1,
+            total: Math.ceil(rows.length / resourceChunkSize), rows,
+          });
+          await injectResourceWave();
+          ctx.ui.notify(`Membox URL 入库完成（${out.inserted} 新增 / ${out.existing} 已有）`, "info");
+          return;
+        }
+        ctx.ui.notify("Usage: /resources list | scan", "warning");
+      } catch (error: any) {
+        resourceChain.active = false;
+        ctx.ui.notify(`/resources 失败: ${error?.message ?? error}`, "error");
+      }
+    },
+  });
+
+  pi.on("turn_end", async (_event, ctx) => {
+    if (!resourceChain.active) return;
+    try {
+      const state = await memboxAPI(`/api/resources/scan?source=${encodeURIComponent(inboxFile)}`);
+      if ((state?.wave ?? 0) < resourceChain.wave) {
+        resourceChain.active = false;
+        ctx.ui.notify("resource review 中断（游标未推进）— /resources scan 可重启", "warning");
+        return;
+      }
+      if (resourceChain.wave >= resourceChain.total) {
+        resourceChain.active = false;
+        ctx.ui.notify("resource importance review 完成 🎉 — /resources list 查看排名", "info");
+        return;
+      }
+      resourceChain.wave += 1;
+      await injectResourceWave();
+    } catch {
+      resourceChain.active = false;
+    }
+  });
 
   function toggle(ctx: ExtensionContext) {
     enabled = !enabled;

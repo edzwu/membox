@@ -24,6 +24,12 @@ Then `/reload` in pi (or restart). The `mm` binary is resolved from
 |---|---|
 | Toggle reference resolution | `ctrl+shift+m` or `/membox-doc` |
 | Status indicator | `◈ membox` in the status bar when ON |
+| List URL resources | `/resources list` |
+| Scan indexed inbox URL resources | `/resources scan` |
+
+`/resources` is a thin Companion API client. URL extraction, canonicalization,
+deduplication, provenance, knowledge-value classification, and review cursors
+live in Membox's database; Timension does not duplicate those rows.
 
 While ON, a message such as "把 membox 的 11e8 列入今天的任务" is augmented
 with the resolved file context (`11e8 → membox-code-refactor.md`), so the
@@ -61,6 +67,10 @@ also provide it explicitly:
 | `membox_doc_create` | write file + `mm path scan` | any extension (not just .md) |
 | `membox_doc_rename` | `mm doc rename` | keeps the UUID |
 | `membox_doc_delete` | `mm doc delete` | soft delete (trash) + confirm |
+| `membox_resource_ingest` | Companion `/api/resources/ingest` | deterministic URL capture into Membox |
+| `membox_resource_list` | Companion `/api/resources` | knowledge-value ranking |
+| `membox_resource_assess` | Companion `/api/resources/assess` | H/M/L + score + reason |
+| `membox_resource_scan` | Companion `/api/resources/scan` | review cursor |
 | `membox_video_summarize` | `mm video summarize` → `mmd` → `echo-bp` | download one lecture, summarize it, and upsert `<course>-lec<N>.md` |
 
 All tools talk JSON to the `mm` CLI, so any new `mm doc` subcommand can be

@@ -916,7 +916,35 @@ CREATE TABLE document_read_state (
     progress_y INTEGER NOT NULL DEFAULT 0,
     progress_at TEXT NOT NULL DEFAULT ''
 );
+
+CREATE TABLE resources (
+    id TEXT PRIMARY KEY,
+    url TEXT NOT NULL,
+    canonical_url TEXT NOT NULL UNIQUE,
+    title TEXT NOT NULL DEFAULT '',
+    priority TEXT NOT NULL DEFAULT 'M',
+    score REAL,
+    reason TEXT NOT NULL DEFAULT '',
+    source_document_id TEXT REFERENCES documents(id) ON DELETE SET NULL,
+    source_file TEXT NOT NULL DEFAULT '',
+    source_line TEXT NOT NULL DEFAULT '',
+    source_commit TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE resource_sources (
+    resource_id TEXT NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
+    source_document_id TEXT REFERENCES documents(id) ON DELETE SET NULL,
+    source_file TEXT NOT NULL DEFAULT '',
+    source_line TEXT NOT NULL DEFAULT '',
+    source_commit TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    UNIQUE(resource_id, source_file, source_line)
+);
 ```
+
+`resources` 是 Membox 拥有的外部知识资源目录：服务端负责 URL 提取、canonicalize、去重、来源追踪和知识价值分类。同一 canonical URL 只有一个资源身份，但 `resource_sources` 保留它在多个文档/行中的出现。Timension 等规划客户端只能通过 Membox API 使用稳定 resource ID，不得复制 URL 行到自己的任务数据库。资源的知识价值与任务 deadline/紧迫度分开建模。
 
 Annotation note 的摘录和笔记正文保存在 `*-note.md`，`annotation_notes` 只保存 note UUID → target UUID、锚点提示和显示属性。Miru sidecar 是读取时临时生成的 DTO，不是持久化内容副本。阅读进度是 `document_read_state` 中的 UI state，不与笔记内容混存。
 
