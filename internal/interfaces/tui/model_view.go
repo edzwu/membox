@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -232,8 +233,8 @@ func (m Model) treePreviewView() string {
 	}
 	indices := m.treeVisibleIndices()
 	uuidWidth := 4
-	// readStatusMark (○/◐/● + space) takes two columns; keep it from
-	// squeezing the filename.
+	// readStatusMark (○/◐/● + space) reserves two columns. The converted-PDF
+	// marker only consumes width on rows where it is present.
 	badgeWidth := 2
 	filenameWidth := max(12, listWidth-uuidWidth-badgeWidth-8)
 	if listWidth >= 72 {
@@ -249,7 +250,11 @@ func (m Model) treePreviewView() string {
 			pin = lipgloss.NewStyle().Foreground(colors.Warning).Bold(true).Render("▌") + " "
 		}
 		uuid := dimStyle.Render(fitWidth(shortID(candidate.document.ID), uuidWidth))
-		filename := fitMiddle(treeItemLabel(candidate), filenameWidth)
+		rowFilenameWidth := filenameWidth
+		if candidate.pdfConverted {
+			rowFilenameWidth = max(10, rowFilenameWidth-2)
+		}
+		filename := fitMiddle(treeItemLabel(candidate), rowFilenameWidth)
 		dates := ""
 		if listWidth >= 72 {
 			created, updated := dateOnly(candidate.document.CreatedAt), dateOnly(candidate.document.UpdatedAt)
@@ -257,7 +262,7 @@ func (m Model) treePreviewView() string {
 		} else if listWidth >= 52 {
 			dates = dimStyle.Render("  " + dateOnly(candidate.document.UpdatedAt))
 		}
-		line := lipgloss.NewStyle().Width(listWidth - 2).MaxWidth(listWidth - 2).Inline(true).Render(pin + readStatusMark(candidate.document.ReadStatus) + uuid + "  " + filename + dates)
+		line := lipgloss.NewStyle().Width(listWidth - 2).MaxWidth(listWidth - 2).Inline(true).Render(pin + pdfConvertedMark(candidate) + readStatusMark(candidate.document.ReadStatus) + uuid + "  " + filename + dates)
 		if i == m.selected {
 			line = lipgloss.NewStyle().Foreground(colors.Accent).Background(colors.SelectedBG).Width(listWidth - 2).Inline(true).Render("> " + line)
 		} else {
@@ -722,6 +727,9 @@ func (m Model) commandMenuView() string {
 func (m Model) statusBar() string {
 	width := max(20, m.width)
 	left := dimStyle.Render(m.hints()) + "  " + m.webBadge() + m.agentStatusBarBadge() + m.mediaScopeBadge()
+	if m.pdfConversionActive {
+		return statusBarLine(width, left, m.pdfConversionProgress())
+	}
 	right := ""
 	if m.loading {
 		right = m.spinner.View() + " " + right
@@ -778,12 +786,52 @@ func (m Model) statusBar() string {
 			}
 		}
 	}
+	return statusBarLine(width, left, right)
+}
+
+func statusBarLine(width int, left, right string) string {
 	maxRight := max(0, width-lipgloss.Width(left)-1)
 	if lipgloss.Width(right) > maxRight {
 		right = fitWidth(right, maxRight)
 	}
 	padding := max(1, width-lipgloss.Width(left)-lipgloss.Width(right))
 	return left + strings.Repeat(" ", padding) + right
+}
+
+func (m Model) pdfConversionProgress() string {
+	const barWidth, segmentWidth = 18, 5
+	travel := barWidth - segmentWidth
+	cycle := max(1, travel*2)
+	position := m.pdfProgressFrame % cycle
+	if position > travel {
+		position = cycle - position
+	}
+	var bar strings.Builder
+	bar.WriteString(dimStyle.Render("["))
+	for index := 0; index < barWidth; index++ {
+		if index >= position && index < position+segmentWidth {
+			bar.WriteString(accentStyle.Render("━"))
+		} else {
+			bar.WriteString(dimStyle.Render("─"))
+		}
+	}
+	bar.WriteString(dimStyle.Render("]"))
+	elapsed := time.Since(m.pdfConversionStarted)
+	if m.pdfConversionStarted.IsZero() || elapsed < 0 {
+		elapsed = 0
+	}
+	return bar.String() + " " + accentStyle.Render("PDF→MD "+shortID(m.pdfConversionID)) + dimStyle.Render(" "+compactElapsed(elapsed))
+}
+
+func compactElapsed(elapsed time.Duration) string {
+	elapsed = elapsed.Round(time.Second)
+	if elapsed < time.Minute {
+		return fmt.Sprintf("%ds", int(elapsed.Seconds()))
+	}
+	if elapsed < time.Hour {
+		return fmt.Sprintf("%dm%02ds", int(elapsed.Minutes()), int(elapsed.Seconds())%60)
+	}
+	return fmt.Sprintf("%dh%02dm", int(elapsed.Hours()), int(elapsed.Minutes())%60)
 }
 
 func (m Model) mediaScopeBadge() string {
@@ -895,13 +943,41 @@ func isClippedNote(filename string) bool {
 }
 
 func documentItems(documents []membox.DocumentView) []item {
+	convertedPDFs := make(map[string]bool)
+	for _, document := range documents {
+		if sourceID, ok := convertedPDFID(documentFilename(document)); ok {
+			convertedPDFs[sourceID] = true
+		}
+	}
 	items := make([]item, 0, len(documents))
 	for _, document := range documents {
 		filename := documentFilename(document)
 		match := document.Title + " " + document.Path + " " + filename + " " + document.Status + " " + document.ID
-		items = append(items, item{document: document, title: displayTitle(document.Title, document.Path), filename: filename, match: match})
+		items = append(items, item{
+			document: document, title: displayTitle(document.Title, document.Path), filename: filename, match: match,
+			pdfConverted: document.MediaType == "application/pdf" && convertedPDFs[strings.ToLower(document.ID)],
+		})
 	}
 	return items
+}
+
+func convertedPDFID(filename string) (string, bool) {
+	filename = strings.ToLower(filepath.Base(strings.TrimSpace(filename)))
+	if len(filename) != len("pdf-")+32+len(".md") || !strings.HasPrefix(filename, "pdf-") || !strings.HasSuffix(filename, ".md") {
+		return "", false
+	}
+	compact := strings.TrimSuffix(strings.TrimPrefix(filename, "pdf-"), ".md")
+	if _, err := hex.DecodeString(compact); err != nil {
+		return "", false
+	}
+	return compact[:8] + "-" + compact[8:12] + "-" + compact[12:16] + "-" + compact[16:20] + "-" + compact[20:], true
+}
+
+func pdfConvertedMark(candidate item) string {
+	if candidate.pdfConverted {
+		return accentStyle.Render("◆") + " "
+	}
+	return ""
 }
 
 func documentFilename(document membox.DocumentView) string {

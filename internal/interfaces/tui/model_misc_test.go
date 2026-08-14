@@ -642,8 +642,8 @@ func TestModel_PDFConvertCommandUsesSelectedPDF(t *testing.T) {
 
 	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(Model)
-	if model.statusMessage != "uploading PDF · waiting for Markdown…" {
-		t.Fatalf("conversion did not expose progress status: %q", model.statusMessage)
+	if !model.pdfConversionActive || !strings.Contains(model.statusBar(), "PDF→MD") || !strings.Contains(model.statusBar(), shortID("pdf-alpha")) {
+		t.Fatalf("conversion did not expose progress bar: active=%v status=%q", model.pdfConversionActive, model.statusBar())
 	}
 	message := command()
 	if batch, ok := message.(tea.BatchMsg); ok {
@@ -660,6 +660,50 @@ func TestModel_PDFConvertCommandUsesSelectedPDF(t *testing.T) {
 	model = updated.(Model)
 	if model.statusMessage != "PDF Markdown created: "+shortID(converted.result.MarkdownDocument.ID) || model.inputVisible {
 		t.Fatalf("unexpected conversion completion state: status=%q input=%v", model.statusMessage, model.inputVisible)
+	}
+}
+
+func TestModel_TabConvertsSelectedPDFWithIndeterminateProgress(t *testing.T) {
+	app := &fakeApp{}
+	model := New(context.Background(), app, fakeLauncher{})
+	model.width, model.height = 100, 30
+	model.items = documentItems([]membox.DocumentView{{
+		ID: "pdf-key-tab", Title: "Paper", Path: "/tmp/paper.pdf", MediaType: "application/pdf",
+	}})
+	model.refreshFilter()
+
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	model = updated.(Model)
+	if command == nil || !model.pdfConversionActive || !model.loading {
+		t.Fatalf("tab did not start PDF conversion: active=%v loading=%v command=%v", model.pdfConversionActive, model.loading, command)
+	}
+	bar := model.statusBar()
+	if !strings.Contains(bar, "PDF→MD") || !strings.Contains(bar, shortID("pdf-key-tab")) {
+		t.Fatalf("status bar has no conversion progress: %q", bar)
+	}
+	message := command()
+	if batch, ok := message.(tea.BatchMsg); ok {
+		message = batch[1]()
+	}
+	converted, ok := message.(pdfConvertedMsg)
+	if !ok || app.pdfConverted != "pdf-key-tab" {
+		t.Fatalf("tab conversion message=%T selector=%q", message, app.pdfConverted)
+	}
+	updated, _ = model.Update(converted)
+	model = updated.(Model)
+	if model.pdfConversionActive {
+		t.Fatal("progress remained active after conversion completed")
+	}
+}
+
+func TestModel_CNoLongerConvertsSelectedPDF(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.items = documentItems([]membox.DocumentView{{ID: "pdf", Path: "/tmp/doc.pdf", MediaType: "application/pdf"}})
+	model.refreshFilter()
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	model = updated.(Model)
+	if command != nil || model.pdfConversionActive {
+		t.Fatalf("c unexpectedly started conversion: active=%v command=%v", model.pdfConversionActive, command)
 	}
 }
 

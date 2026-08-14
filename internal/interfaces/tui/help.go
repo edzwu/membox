@@ -36,7 +36,8 @@ func helpSections() []helpSection {
 		{title: "Browse", entries: []helpEntry{
 			{"enter / ctrl+t", "open document / tree ⇄ board"},
 			{"ctrl+p", "show all → Markdown → PDF → images"},
-			{"tab", "focus tree ⇄ preview"},
+			{"tab", "PDF: convert · Markdown: tree ⇄ preview"},
+			{"◆", "PDF has linked converted Markdown"},
 			{"↑ ↓ / pgup pgdn", "scroll focused preview"},
 			{"space", "details · ×2 opens filter input"},
 			{"e / o / d", "edit / open app / move to trash"},

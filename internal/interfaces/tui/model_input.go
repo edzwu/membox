@@ -273,10 +273,18 @@ func (m Model) executeCommandInput() (tea.Model, tea.Cmd) {
 	}
 	m.loading = true
 	m.cmdMenuVisible = false
+	var progressTick tea.Cmd
 	if len(tokens) >= 2 && tokens[0] == "pdf" && tokens[1] == "convert" {
-		m.statusMessage = "uploading PDF · waiting for Markdown…"
+		target := ""
+		if document, ok := m.selectedDocument(); ok {
+			target = document.ID
+		}
+		if len(tokens) == 3 && tokens[2] != "@selected" {
+			target = tokens[2]
+		}
+		progressTick = m.beginPDFProgress(target)
 	}
-	return m, tea.Batch(m.spinner.Tick, func() tea.Msg { return action() })
+	return m, tea.Batch(m.spinner.Tick, func() tea.Msg { return action() }, progressTick)
 }
 
 func commandTokens(value string) []string {
@@ -613,6 +621,9 @@ func (m Model) commandAction(tokens []string) (func() tea.Msg, string, error) {
 	case "pdf":
 		switch tokens[1] {
 		case "convert":
+			if m.pdfConversionActive {
+				return nil, "pdf convert [document-id]", fmt.Errorf("a PDF conversion is already running")
+			}
 			target := selected
 			if len(tokens) == 3 {
 				target = selector(tokens[2])

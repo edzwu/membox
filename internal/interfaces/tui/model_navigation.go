@@ -94,8 +94,16 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.spaceSequence, m.lastKeyAt = 0, time.Time{}
 		return m, m.openInput(inputModeAgent)
 	case "tab":
-		// Preview is a pane focus, not a separate document view. Tab moves
-		// right; tab/esc from there returns to the tree.
+		// Tab is contextual in the file tree: PDFs convert to linked Markdown;
+		// ordinary documents keep the established tree → preview focus action.
+		if document, ok := m.selectedDocument(); ok && document.MediaType == "application/pdf" {
+			if m.pdfConversionActive {
+				return m, nil
+			}
+			progressTick := m.beginPDFProgress(document.ID)
+			commands = append(commands, m.spinner.Tick, convertPDFCmd(m.ctx, m.app, document.ID), progressTick)
+			return m, tea.Batch(commands...)
+		}
 		if m.viewMode == viewTree {
 			m.previewFocused = true
 			m.statusMessage = ""
@@ -971,6 +979,13 @@ func listDocumentsCmd(ctx context.Context, app App, sequence uint64) tea.Cmd {
 		return documentsMsg{sequence: sequence, documents: documents, err: err}
 	}
 }
+func convertPDFCmd(ctx context.Context, app App, selector string) tea.Cmd {
+	return func() tea.Msg {
+		result, err := app.ConvertPDF(ctx, membox.ConvertPDFCommand{Selector: selector})
+		return pdfConvertedMsg{result: result, err: err}
+	}
+}
+
 func previewCmd(ctx context.Context, app App, selector string) tea.Cmd {
 	return func() tea.Msg {
 		location, err := app.ResolveDocumentLocation(ctx, membox.ResolveLocationQuery{Selector: selector})

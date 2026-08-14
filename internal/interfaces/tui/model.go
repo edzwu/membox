@@ -79,10 +79,11 @@ type App interface {
 }
 
 type item struct {
-	document membox.DocumentView
-	title    string
-	filename string
-	match    string
+	document     membox.DocumentView
+	title        string
+	filename     string
+	match        string
+	pdfConverted bool
 }
 
 type textFilter struct {
@@ -148,32 +149,41 @@ type Model struct {
 	fullscreen     bool
 	fullDocument   *membox.DocumentView
 
-	loading        bool
-	err            error
-	filterErr      error
-	statusMessage  string
-	summarizing    map[string]bool
-	width, height  int
-	listSequence   uint64
-	spaceSequence  uint64
-	lastKeyAt      time.Time
-	searchMode     string
-	inputMode      string
-	mediaScope     string
-	deleteConfirm  bool
-	deleteSelector string
-	deletePath     string
-	commandHistory []string
-	historyIndex   int
-	cmdSuggestions []commandSuggestion
-	cmdSelected    int
-	cmdMenuVisible bool
-	viewMode       string
-	viewerMode     string
-	hideNotes      bool
-	configVisible  bool
-	configSelected int
-	settings       []membox.SettingView
+	loading       bool
+	err           error
+	filterErr     error
+	statusMessage string
+	summarizing   map[string]bool
+
+	// PDF conversion is a synchronous remote call with no server-side percent
+	// endpoint. Keep a dedicated indeterminate progress state so the status bar
+	// remains honest while upload/conversion/download is in flight.
+	pdfConversionActive  bool
+	pdfConversionID      string
+	pdfConversionStarted time.Time
+	pdfProgressFrame     int
+	pdfProgressSequence  uint64
+	width, height        int
+	listSequence         uint64
+	spaceSequence        uint64
+	lastKeyAt            time.Time
+	searchMode           string
+	inputMode            string
+	mediaScope           string
+	deleteConfirm        bool
+	deleteSelector       string
+	deletePath           string
+	commandHistory       []string
+	historyIndex         int
+	cmdSuggestions       []commandSuggestion
+	cmdSelected          int
+	cmdMenuVisible       bool
+	viewMode             string
+	viewerMode           string
+	hideNotes            bool
+	configVisible        bool
+	configSelected       int
+	settings             []membox.SettingView
 	// Filter-options panel (ctrl+o while the input is focused): match
 	// semantics (contains ⇄ exact) and case sensitivity are orthogonal to the
 	// name ⇄ content scope, so they live on their own panel and show up on the
@@ -301,7 +311,26 @@ type pdfConvertedMsg struct {
 	result membox.ConvertPDFResult
 	err    error
 }
+type pdfProgressTickMsg struct{ sequence uint64 }
 type spaceTimeoutMsg struct{ sequence uint64 }
+
+func pdfProgressTickCmd(sequence uint64) tea.Cmd {
+	return tea.Tick(120*time.Millisecond, func(time.Time) tea.Msg {
+		return pdfProgressTickMsg{sequence: sequence}
+	})
+}
+
+func (m *Model) beginPDFProgress(documentID string) tea.Cmd {
+	m.loading = true
+	m.err = nil
+	m.statusMessage = ""
+	m.pdfConversionActive = true
+	m.pdfConversionID = documentID
+	m.pdfConversionStarted = time.Now()
+	m.pdfProgressFrame = 0
+	m.pdfProgressSequence++
+	return pdfProgressTickCmd(m.pdfProgressSequence)
+}
 
 // inputPlaceholder keeps the empty-input hint in sync with the active mode so
 // the field never promises "filter documents" while a command or agent
@@ -695,6 +724,9 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.clearExecutedCommand()
 	case pdfConvertedMsg:
 		m.loading, m.err = false, msg.err
+		m.pdfConversionActive = false
+		m.pdfConversionID = ""
+		m.pdfProgressSequence++
 		if msg.err == nil {
 			verb := "updated"
 			if msg.result.Created {
@@ -708,6 +740,11 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			commands = append(commands, listDocumentsCmd(m.ctx, m.app, m.listSequence))
 		}
 		m.clearExecutedCommand()
+	case pdfProgressTickMsg:
+		if m.pdfConversionActive && msg.sequence == m.pdfProgressSequence {
+			m.pdfProgressFrame++
+			commands = append(commands, pdfProgressTickCmd(msg.sequence))
+		}
 	case spaceTimeoutMsg:
 		if msg.sequence == m.spaceSequence {
 			m.spaceSequence = 0

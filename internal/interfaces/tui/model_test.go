@@ -13,6 +13,42 @@ import (
 	"membox"
 )
 
+func TestDocumentItemsMarksPDFWhenStableConvertedIndexExists(t *testing.T) {
+	const pdfID = "019ffe54-a513-7da8-bfac-0ae403223ccf"
+	documents := []membox.DocumentView{
+		{ID: pdfID, Title: "AI Agents", Path: "/pdfs/book.pdf", RelativePath: "book.pdf", MediaType: "application/pdf"},
+		{ID: "index", Path: "/notes/pdf-019ffe54a5137da8bfac0ae403223ccf.md", RelativePath: "pdf-019ffe54a5137da8bfac0ae403223ccf.md", MediaType: "text/markdown"},
+		{ID: "chapter", Path: "/notes/pdf-019ffe54a5137da8bfac0ae403223ccf-chapter-001.md", RelativePath: "pdf-019ffe54a5137da8bfac0ae403223ccf-chapter-001.md", MediaType: "text/markdown"},
+	}
+	items := documentItems(documents)
+	if !items[0].pdfConverted {
+		t.Fatal("PDF was not marked converted when its stable index exists")
+	}
+	if items[1].pdfConverted || items[2].pdfConverted {
+		t.Fatalf("Markdown documents received PDF conversion markers: %+v", items)
+	}
+
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.width, model.height = 100, 24
+	model.items, model.filtered = items, items
+	model.resize()
+	if view := model.treePreviewView(); !strings.Contains(view, "◆") {
+		t.Fatalf("tree does not show converted PDF marker: %q", view)
+	}
+}
+
+func TestConvertedPDFIDRejectsChapterAndMalformedNames(t *testing.T) {
+	for _, filename := range []string{
+		"pdf-019ffe54a5137da8bfac0ae403223ccf-chapter-001.md",
+		"pdf-not-a-uuid.md",
+		"ordinary.md",
+	} {
+		if id, ok := convertedPDFID(filename); ok {
+			t.Fatalf("convertedPDFID(%q)=%q, want rejected", filename, id)
+		}
+	}
+}
+
 func TestModel_DefaultShowsTreeAndPreview(t *testing.T) {
 	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
 	model.width, model.height = 120, 24
