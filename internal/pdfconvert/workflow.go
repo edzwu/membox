@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"path/filepath"
 	"strings"
 )
@@ -78,9 +79,10 @@ func (w *Workflow) Convert(ctx context.Context, workspace Workspace, selector, s
 		return Result{}, errors.New("converter returned empty Markdown")
 	}
 	filename := convertedFilename(source)
+	remote.Markdown = rewriteAssetReferences(remote.Markdown, source.DocumentID, remote.Assets)
 	processed := PostprocessMarkdown(remote.Markdown, filename)
 	if len(processed.Chapters) == 0 {
-		published, err := workspace.PublishBundle(ctx, filename, processed.IndexMarkdown, remote.Assets)
+		published, err := workspace.PublishBundle(ctx, source.DocumentID, filename, processed.IndexMarkdown, remote.Assets)
 		if err != nil {
 			return Result{}, fmt.Errorf("publishing converted PDF bundle: %w", err)
 		}
@@ -96,7 +98,7 @@ func (w *Workflow) Convert(ctx context.Context, workspace Workspace, selector, s
 		if index == 0 {
 			assets = remote.Assets
 		}
-		published, err := workspace.PublishBundle(ctx, chapter.Filename, chapter.Markdown, assets)
+		published, err := workspace.PublishBundle(ctx, source.DocumentID, chapter.Filename, chapter.Markdown, assets)
 		if err != nil {
 			return Result{}, fmt.Errorf("publishing converted PDF chapter %q: %w", chapter.Title, err)
 		}
@@ -105,7 +107,7 @@ func (w *Workflow) Convert(ctx context.Context, workspace Workspace, selector, s
 			Path: published.Path, Created: published.Created,
 		})
 	}
-	indexDocument, err := workspace.PublishBundle(ctx, filename, processed.IndexMarkdown, nil)
+	indexDocument, err := workspace.PublishBundle(ctx, source.DocumentID, filename, processed.IndexMarkdown, nil)
 	if err != nil {
 		return Result{}, fmt.Errorf("publishing converted PDF index: %w", err)
 	}
@@ -121,6 +123,14 @@ func (w *Workflow) Convert(ctx context.Context, workspace Workspace, selector, s
 		}
 	}
 	return conversionResult(source, filename, remote.MarkdownSHA256, indexDocument, publishedChapters), nil
+}
+
+func rewriteAssetReferences(markdown, sourceDocumentID string, assets []Asset) string {
+	prefix := "/api/pdf-assets/" + url.PathEscape(sourceDocumentID) + "/"
+	for _, asset := range assets {
+		markdown = strings.ReplaceAll(markdown, asset.RelativePath, prefix+asset.RelativePath)
+	}
+	return markdown
 }
 
 func conversionResult(source Source, filename, markdownSHA256 string, published PublishedMarkdown, chapters []PublishedChapter) Result {

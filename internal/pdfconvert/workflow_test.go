@@ -30,6 +30,7 @@ func (f *fakeClient) Convert(_ context.Context, serverURL, filename string, body
 }
 
 type fakePublication struct {
+	owner    string
 	filename string
 	body     string
 	assets   []Asset
@@ -50,14 +51,14 @@ type fakeWorkspace struct {
 }
 
 func (f *fakeWorkspace) OpenPDF(context.Context, string) (Source, error) { return f.source, nil }
-func (f *fakeWorkspace) PublishBundle(_ context.Context, filename, body string, assets []Asset) (PublishedMarkdown, error) {
+func (f *fakeWorkspace) PublishBundle(_ context.Context, owner, filename, body string, assets []Asset) (PublishedMarkdown, error) {
 	f.publishedFilename, f.publishedBody, f.publishedAssets = filename, body, assets
 	published := PublishedMarkdown{
 		DocumentID: "markdown-" + string(rune('1'+len(f.publications))),
 		Path:       "/notes/" + filename,
 		Created:    true,
 	}
-	f.publications = append(f.publications, fakePublication{filename: filename, body: body, assets: assets, result: published})
+	f.publications = append(f.publications, fakePublication{owner: owner, filename: filename, body: body, assets: assets, result: published})
 	return published, nil
 }
 func (f *fakeWorkspace) LinkDocuments(_ context.Context, from, to string) error {
@@ -86,8 +87,11 @@ func TestWorkflowKeepsProtocolAndWorkspaceSeparated(t *testing.T) {
 	if client.serverURL != "http://converter.test:8000" || client.filename != "book.pdf" || client.body != "%PDF-source" {
 		t.Fatalf("unexpected client request: %+v", client)
 	}
-	if workspace.publishedFilename != "pdf-019ffe58b0af7b65baf12b7d9c066b19.md" || workspace.publishedBody != "# Converted\n\n![](images/chart.jpg)\n" {
+	if workspace.publishedFilename != "pdf-019ffe58b0af7b65baf12b7d9c066b19.md" || workspace.publishedBody != "# Converted\n\n![](/api/pdf-assets/019ffe58-b0af-7b65-baf1-2b7d9c066b19/images/chart.jpg)\n" {
 		t.Fatalf("unexpected publication: %q %q", workspace.publishedFilename, workspace.publishedBody)
+	}
+	if workspace.publications[0].owner != workspace.source.DocumentID {
+		t.Fatalf("asset owner=%q want=%q", workspace.publications[0].owner, workspace.source.DocumentID)
 	}
 	if len(workspace.publishedAssets) != 1 || workspace.publishedAssets[0].RelativePath != "images/chart.jpg" {
 		t.Fatalf("converted assets were not published: %+v", workspace.publishedAssets)

@@ -572,13 +572,14 @@ func TestPDFConverterPublishesIndexedMarkdownAndLinksSource(t *testing.T) {
 		t.Fatalf("converted Markdown was not published in main path: %s", converted.MarkdownPath)
 	}
 	markdown, err := os.ReadFile(converted.MarkdownPath)
-	if err != nil || !strings.Contains(string(markdown), "MinerU searchable projection") || !strings.Contains(string(markdown), "images/chart.jpg") {
-		t.Fatalf("converted Markdown missing: %q err=%v", markdown, err)
+	assetURL := "/api/pdf-assets/" + imported.Document.ID + "/images/chart.jpg"
+	if err != nil || !strings.Contains(string(markdown), "MinerU searchable projection") || !strings.Contains(string(markdown), assetURL) {
+		t.Fatalf("converted Markdown missing managed image URL: %q err=%v", markdown, err)
 	}
 	if strings.Contains(string(markdown), "<table>") || !strings.Contains(string(markdown), "| Name | Value |") {
 		t.Fatalf("converted HTML table was not normalized to GFM: %q", markdown)
 	}
-	image, err := os.ReadFile(filepath.Join(canonicalNotes, "images", "chart.jpg"))
+	image, err := os.ReadFile(filepath.Join(pdfRoot, ".membox-assets", imported.Document.ID, "images", "chart.jpg"))
 	if err != nil || string(image) != "jpeg-fixture" {
 		t.Fatalf("converted image missing: %q err=%v", image, err)
 	}

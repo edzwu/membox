@@ -10,9 +10,11 @@ import (
 	"io"
 	"io/fs"
 	"math"
+	"mime"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"path"
 	"path/filepath"
 	"strconv"
@@ -23,6 +25,7 @@ import (
 	"membox/internal/agent"
 	"membox/internal/application"
 	"membox/internal/domain/catalog"
+	"membox/internal/pdfasset"
 )
 
 const integrationScript = `<script type="module" src="/membox/integration.js"></script>`
@@ -102,6 +105,7 @@ func (s *Server) Start(ctx context.Context, port int) (string, error) {
 	mux.HandleFunc("/api/resources/scan", s.handleResourceScan)
 	mux.HandleFunc("/api/documents/candidates", s.handleDocumentCandidates)
 	mux.HandleFunc("/api/doc/", s.handleDocument)
+	mux.HandleFunc("/api/pdf-assets/", s.handlePDFAsset)
 	mux.HandleFunc("/api/save", s.handleSave)
 	mux.HandleFunc("/api/sync", s.handleSync)
 	s.registerAgentRoutes(mux)
@@ -241,6 +245,72 @@ func (s *Server) handleDocument(writer http.ResponseWriter, request *http.Reques
 	writer.Header().Set("X-Membox-Title", url.PathEscape(title))
 	writer.Header().Set("X-Membox-Path", absolute)
 	_, _ = writer.Write(body)
+}
+
+func (s *Server) handlePDFAsset(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet && request.Method != http.MethodHead {
+		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	remainder := strings.TrimPrefix(request.URL.Path, "/api/pdf-assets/")
+	separator := strings.IndexByte(remainder, '/')
+	if separator <= 0 || separator == len(remainder)-1 {
+		http.Error(writer, "invalid PDF asset path", http.StatusBadRequest)
+		return
+	}
+	selector, relativePath := remainder[:separator], remainder[separator+1:]
+	document, pdfPath, err := s.service.ResolveDocument(request.Context(), selector)
+	if err != nil || document.Status != catalog.DocumentActive || document.Index.MediaType != "application/pdf" {
+		http.Error(writer, "PDF not found", http.StatusNotFound)
+		return
+	}
+	assetRoot, err := pdfasset.Root(pdfPath, string(document.ID))
+	if err != nil {
+		http.Error(writer, "invalid PDF asset root", http.StatusBadRequest)
+		return
+	}
+	target, err := pdfasset.ImageTarget(assetRoot, relativePath)
+	if err != nil {
+		http.Error(writer, "invalid PDF asset path", http.StatusBadRequest)
+		return
+	}
+	realRoot, err := filepath.EvalSymlinks(assetRoot)
+	if err != nil {
+		http.Error(writer, "PDF asset not found", http.StatusNotFound)
+		return
+	}
+	realTarget, err := filepath.EvalSymlinks(target)
+	if err != nil || !pathWithin(realRoot, realTarget) {
+		http.Error(writer, "PDF asset not found", http.StatusNotFound)
+		return
+	}
+	file, err := os.Open(realTarget)
+	if err != nil {
+		http.Error(writer, "PDF asset not found", http.StatusNotFound)
+		return
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		http.Error(writer, "PDF asset not found", http.StatusNotFound)
+		return
+	}
+	mediaType := mime.TypeByExtension(strings.ToLower(filepath.Ext(realTarget)))
+	if mediaType == "" {
+		mediaType = "application/octet-stream"
+	}
+	writer.Header().Set("Content-Type", mediaType)
+	writer.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	writer.Header().Set("X-Content-Type-Options", "nosniff")
+	if strings.EqualFold(filepath.Ext(realTarget), ".svg") {
+		writer.Header().Set("Content-Security-Policy", "sandbox; default-src 'none'")
+	}
+	http.ServeContent(writer, request, filepath.Base(realTarget), info.ModTime(), file)
+}
+
+func pathWithin(root, target string) bool {
+	relative, err := filepath.Rel(root, target)
+	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) && !filepath.IsAbs(relative)
 }
 
 func (s *Server) handleDocumentCandidates(writer http.ResponseWriter, request *http.Request) {

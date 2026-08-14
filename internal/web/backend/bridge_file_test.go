@@ -7,6 +7,22 @@ import (
 	"testing"
 )
 
+func TestPathWithinRejectsSiblingAndParentPaths(t *testing.T) {
+	root := filepath.Join(string(filepath.Separator), "library", ".membox-assets", "pdf-id")
+	if !pathWithin(root, filepath.Join(root, "images", "chart.jpg")) {
+		t.Fatal("valid nested asset path was rejected")
+	}
+	for _, target := range []string{
+		filepath.Join(filepath.Dir(root), "other", "images", "chart.jpg"),
+		filepath.Dir(root),
+		filepath.Join(string(filepath.Separator), "etc", "passwd"),
+	} {
+		if pathWithin(root, target) {
+			t.Fatalf("escaped asset path was accepted: %s", target)
+		}
+	}
+}
+
 func TestBridgeTokenSurvivesCorruptRuntimeFile(t *testing.T) {
 	home := t.TempDir()
 	first, err := LoadOrCreateBridgeToken(home)

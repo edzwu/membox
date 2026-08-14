@@ -33,7 +33,7 @@ type Asset struct {
 // membox core. Implementations adapt existing resolve/upsert/link operations.
 type Workspace interface {
 	OpenPDF(ctx context.Context, selector string) (Source, error)
-	PublishBundle(ctx context.Context, filename, markdown string, assets []Asset) (PublishedMarkdown, error)
+	PublishBundle(ctx context.Context, assetOwnerDocumentID, filename, markdown string, assets []Asset) (PublishedMarkdown, error)
 	LinkDocuments(ctx context.Context, fromDocumentID, toDocumentID string) error
 }
 

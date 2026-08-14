@@ -10,6 +10,7 @@ import (
 
 	"membox/internal/application"
 	"membox/internal/domain/catalog"
+	"membox/internal/pdfasset"
 	"membox/internal/pdfconvert"
 )
 
@@ -126,27 +127,39 @@ func (w boxPDFConvertWorkspace) OpenPDF(ctx context.Context, selector string) (p
 	}, nil
 }
 
-func (w boxPDFConvertWorkspace) PublishBundle(ctx context.Context, filename, markdown string, assets []pdfconvert.Asset) (pdfconvert.PublishedMarkdown, error) {
+func (w boxPDFConvertWorkspace) PublishBundle(ctx context.Context, assetOwnerDocumentID, filename, markdown string, assets []pdfconvert.Asset) (pdfconvert.PublishedMarkdown, error) {
+	if len(assets) != 0 {
+		owner, pdfPath, err := w.service.ResolveDocument(ctx, assetOwnerDocumentID)
+		if err != nil {
+			return pdfconvert.PublishedMarkdown{}, fmt.Errorf("resolving PDF asset owner: %w", err)
+		}
+		if owner.Status != catalog.DocumentActive || owner.Index.MediaType != "application/pdf" {
+			return pdfconvert.PublishedMarkdown{}, fmt.Errorf("asset owner %s is not an active PDF", assetOwnerDocumentID)
+		}
+		assetRoot, err := pdfasset.Root(pdfPath, string(owner.ID))
+		if err != nil {
+			return pdfconvert.PublishedMarkdown{}, err
+		}
+		if err := publishConvertedAssets(ctx, assetRoot, assets); err != nil {
+			return pdfconvert.PublishedMarkdown{}, err
+		}
+	}
 	result, err := w.service.UpsertMarkdown(ctx, application.UpsertMarkdownOptions{Filename: filename, Body: markdown})
 	if err != nil {
-		return pdfconvert.PublishedMarkdown{}, err
-	}
-	if err := publishConvertedAssets(ctx, filepath.Dir(result.Path), assets); err != nil {
 		return pdfconvert.PublishedMarkdown{}, err
 	}
 	return pdfconvert.PublishedMarkdown{DocumentID: string(result.Document.ID), Path: result.Path, Created: result.Created}, nil
 }
 
-func publishConvertedAssets(ctx context.Context, markdownRoot string, assets []pdfconvert.Asset) error {
+func publishConvertedAssets(ctx context.Context, assetRoot string, assets []pdfconvert.Asset) error {
 	for _, asset := range assets {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		clean := filepath.Clean(filepath.FromSlash(asset.RelativePath))
-		if filepath.ToSlash(clean) != asset.RelativePath || filepath.Dir(clean) != "images" || filepath.Base(clean) == "." {
-			return fmt.Errorf("unsafe converted asset path %q", asset.RelativePath)
+		target, err := pdfasset.ImageTarget(assetRoot, asset.RelativePath)
+		if err != nil {
+			return err
 		}
-		target := filepath.Join(markdownRoot, clean)
 		if existing, err := os.ReadFile(target); err == nil {
 			if !bytes.Equal(existing, asset.Body) {
 				return fmt.Errorf("converted asset collision at %s", target)
