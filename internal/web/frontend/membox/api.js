@@ -16,6 +16,19 @@ async function request(path, { method = 'GET', body, keepalive = false, signal }
   return response;
 }
 
+export async function importPDF(file) {
+  const form = new FormData();
+  form.append('file', file, file.name || 'document.pdf');
+  const response = await fetch('/api/pdfs/import', {
+    method: 'POST',
+    headers: { 'X-Membox-Miru': '1' },
+    body: form,
+    cache: 'no-store',
+  });
+  if (!response.ok) throw new Error((await response.text()).trim() || `HTTP ${response.status}`);
+  return response.json();
+}
+
 export async function checkStatus() {
   try {
     const response = await fetch('/api/status', { cache: 'no-store' });

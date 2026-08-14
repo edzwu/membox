@@ -83,7 +83,7 @@ func TestServerServesReaderAndMarkdown(t *testing.T) {
 	}
 	adapterBody, _ := io.ReadAll(adapterResp.Body)
 	adapterResp.Body.Close()
-	if adapterResp.StatusCode != http.StatusOK || !strings.Contains(string(adapterBody), "./reading-state.js") {
+	if adapterResp.StatusCode != http.StatusOK || !strings.Contains(string(adapterBody), "./reading-state.js") || !strings.Contains(string(adapterBody), "./pdf-import.js") {
 		t.Fatalf("membox adapter composition root unavailable: status=%d", adapterResp.StatusCode)
 	}
 	// The adapter is split into cohesive feature modules; each must be served.
@@ -91,6 +91,7 @@ func TestServerServesReaderAndMarkdown(t *testing.T) {
 		"connection.js": {"membox-connection"},
 		"document.js":   {"membox-document-switcher", "Switch document · Ctrl+O", "membox-document-navigation"},
 		"notes.js":      {"membox-browse-notes", "Notes in this document", "Open full note"},
+		"pdf-import.js": {"Drop one PDF at a time", "importPDF(file)"},
 	}
 	for module, markers := range featureModules {
 		moduleResp, err := http.Get(baseURL + "/membox/" + module)
@@ -107,6 +108,17 @@ func TestServerServesReaderAndMarkdown(t *testing.T) {
 				t.Fatalf("membox adapter module %s missing %q", module, marker)
 			}
 		}
+	}
+
+	// The PDF import route must exist, but rejects form-style cross-site POSTs
+	// that cannot carry Miru's custom same-origin header.
+	pdfImportResp, err := http.Post(baseURL+"/api/pdfs/import", "multipart/form-data", strings.NewReader(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pdfImportResp.Body.Close()
+	if pdfImportResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("PDF import route status=%d, want forbidden without Miru header", pdfImportResp.StatusCode)
 	}
 
 	docResp, err := http.Get(baseURL + "/api/doc/" + docID)
