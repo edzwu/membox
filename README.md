@@ -35,6 +35,8 @@ go build -o mm ./cmd/mm
 ./mm pdf search "attention"
 ./mm pdf update <document-id> --keywords "gpu, kernels"
 ./mm pdf open <document-id>
+./mm pdf server http://192.168.3.42:8000
+./mm pdf convert <document-id>
 ./mm pdf rename <document-id> paper-v2.pdf
 ./mm pdf delete <document-id>
 ./mm pdf restore <document-id>
@@ -71,6 +73,23 @@ External edits are reflected after `mm path scan`. The scanner supports `.md`, `
 `mm pdf import` copies a PDF into `~/Documents/membox-pdfs` by default. Override the destination with `--to`; the chosen directory is remembered and registered as a scan path. PDF bytes remain ordinary filesystem files—SQLite stores only identity, location, SHA-256, extracted metadata, and the rebuildable FTS projection.
 
 Embedded title, author, keywords, publication year, page count, and up to 16 MiB of extracted plain text are indexed. `mm pdf update` changes searchable catalog metadata without rewriting the binary. Rescans preserve these catalog overrides. PDF open/view actions use the operating system opener (`open` on macOS), while delete/restore use the same soft trash and stable UUID model as Markdown.
+
+### Optional PDF-to-Markdown converter
+
+The converter integration is an isolated optional feature; it does not add a SQLite schema dependency or put HTTP concerns in the core catalog/application service. Configure a compatible LAN service (the FastAPI `POST /convert` API used by `pdf-converter`) and convert an indexed PDF:
+
+```bash
+./mm pdf server http://192.168.3.42:8000
+./mm pdf convert <document-id>
+```
+
+The client streams one multipart request to `POST /convert` with `format=zip`; the server returns one Markdown file plus its `images/` assets and may cache conversion results by PDF SHA-256 and options. The ZIP parser accepts only a root Markdown file and safe `images/<filename>` entries, with traversal, entry-count, and expanded-size limits. Markdown is published under the configured main path with stable filenames, and images are stored in the sibling `images/` directory so relative references remain valid.
+
+Converted Markdown is parsed with a Markdown AST. Converter-produced HTML table blocks are normalized to safe GFM pipe tables before publishing; `rowspan` and `colspan` are flattened by repeating their cell values, while table examples inside code or nested quotes are left untouched. When the AST contains at least two chapter headings, the result is postprocessed into an index-only document plus chapter documents. ATX and Setext headings are supported, while headings inside fenced/indented code, block quotes, and other nested blocks are not treated as book boundaries. Chapter names such as `第 1 章` and `Chapter 1`, together with introductions, appendices, and afterwords, become stable documents. The PDF links to the index in SQLite, and every index/chapter pair gets explicit links in both directions in addition to clickable relative Markdown links. Re-running conversion updates the same stable files and preserves their UUIDs.
+
+Feature configuration lives in `~/.membox/pdf-converter.json` (or the selected `MEMBOX_HOME`), independently of the catalog database; `MEMBOX_PDF_CONVERTER_URL` is a non-persistent fallback. LAN converter traffic uses a feature-local HTTP transport that deliberately bypasses global proxy environment variables.
+
+In the TUI select a PDF, press `:`, and run `pdf convert`. Configure the endpoint with `pdf server <url>`.
 
 ## Document dates from Git
 
@@ -123,6 +142,8 @@ In `CMD` mode, press Tab to progressively disclose commands and arguments. Choos
 
 ```text
 doc new <title>
+pdf server <url>
+pdf convert [document-id]
 topic create <name>
 topic list
 topic add <topic-id> <document-id>

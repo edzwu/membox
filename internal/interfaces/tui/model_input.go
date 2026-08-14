@@ -273,6 +273,9 @@ func (m Model) executeCommandInput() (tea.Model, tea.Cmd) {
 	}
 	m.loading = true
 	m.cmdMenuVisible = false
+	if len(tokens) >= 2 && tokens[0] == "pdf" && tokens[1] == "convert" {
+		m.statusMessage = "uploading PDF · waiting for Markdown…"
+	}
 	return m, tea.Batch(m.spinner.Tick, func() tea.Msg { return action() })
 }
 
@@ -299,6 +302,7 @@ func (m Model) commandSuggestions() []commandSuggestion {
 			{Value: "doc", Display: "doc", Description: "Create and manage documents"},
 			{Value: "topic", Display: "topic", Description: "Manage topic documents"},
 			{Value: "link", Display: "link", Description: "Manage document links"},
+			{Value: "pdf", Display: "pdf", Description: "Convert selected PDF to Markdown"},
 			{Value: "rename", Display: "rename", Description: "Rename file or virtual PDF title (keeps UUID)"},
 			{Value: "web", Display: "web", Description: "Control the Web Companion"},
 		}, partial)
@@ -323,6 +327,11 @@ func (m Model) commandSuggestions() []commandSuggestion {
 				{Value: "add", Display: "add", Description: "Link two documents"},
 				{Value: "remove", Display: "remove", Description: "Remove a document link"},
 				{Value: "list", Display: "list", Description: "Show links and topics"},
+			}, partial)
+		case "pdf":
+			return filterCommandSuggestions([]commandSuggestion{
+				{Value: "convert", Display: "convert", Description: "Upload selected PDF and publish Markdown"},
+				{Value: "server", Display: "server", Description: "Set converter URL: pdf server http://host:8000"},
 			}, partial)
 		case "web":
 			return filterCommandSuggestions([]commandSuggestion{
@@ -375,6 +384,19 @@ func (m Model) commandArgumentSuggestions(tokens []string, index int, partial st
 		}
 		return filterCommandSuggestions(out, partial)
 	}
+	pdfSuggestions := func() []commandSuggestion {
+		var out []commandSuggestion
+		if document, ok := m.selectedDocument(); ok && document.MediaType == "application/pdf" {
+			out = append(out, commandSuggestion{Value: "@selected", Display: "@selected", Description: "Current PDF: " + selected})
+		}
+		for _, candidate := range m.items {
+			if candidate.document.MediaType != "application/pdf" {
+				continue
+			}
+			out = append(out, commandSuggestion{Value: candidate.document.ID, Display: shortID(candidate.document.ID), Description: treeItemLabel(candidate)})
+		}
+		return filterCommandSuggestions(out, partial)
+	}
 	topicSuggestions := func() []commandSuggestion {
 		var out []commandSuggestion
 		for _, candidate := range m.items {
@@ -412,6 +434,10 @@ func (m Model) commandArgumentSuggestions(tokens []string, index int, partial st
 		}
 		if verb == "list" && index == 2 {
 			return documentSuggestions()
+		}
+	case "pdf":
+		if verb == "convert" && index == 2 {
+			return pdfSuggestions()
 		}
 	}
 	return nil
@@ -583,6 +609,37 @@ func (m Model) commandAction(tokens []string) (func() tea.Msg, string, error) {
 				return nil, "link graph <document-id>", fmt.Errorf("document is required")
 			}
 			return graphFocusCmd(m.ctx, m.app, selector(tokens[2]), "star"), "link graph <document-id>", nil
+		}
+	case "pdf":
+		switch tokens[1] {
+		case "convert":
+			target := selected
+			if len(tokens) == 3 {
+				target = selector(tokens[2])
+			} else if len(tokens) != 2 {
+				return nil, "pdf convert [document-id]", fmt.Errorf("expected zero or one document")
+			}
+			if target == "" {
+				return nil, "pdf convert [document-id]", fmt.Errorf("no PDF is selected")
+			}
+			return func() tea.Msg {
+				result, err := m.app.ConvertPDF(m.ctx, membox.ConvertPDFCommand{Selector: target})
+				return pdfConvertedMsg{result: result, err: err}
+			}, "pdf convert [document-id]", nil
+		case "server":
+			if len(tokens) != 3 {
+				return nil, "pdf server <url>", fmt.Errorf("converter server URL is required")
+			}
+			serverURL := tokens[2]
+			return func() tea.Msg {
+				config, err := m.app.SetPDFConverterServer(m.ctx, serverURL)
+				if err != nil {
+					return commandResultMsg{err: err}
+				}
+				return commandResultMsg{text: "PDF converter: " + config.ServerURL}
+			}, "pdf server <url>", nil
+		default:
+			return nil, "pdf convert [document-id] | pdf server <url>", fmt.Errorf("invalid pdf command")
 		}
 	case "rename":
 		// Rename operates on the highlighted document. Markdown remains

@@ -21,21 +21,23 @@ func (fakeLauncher) OpenCommand(context.Context, string) (*exec.Cmd, error) {
 }
 
 type fakeApp struct {
-	resolved         int
-	pins             map[string]bool
-	viewer           string
-	model            string
-	mainPath         string
-	webOpened        []string
-	scanCount        int
-	graph            membox.DocumentGraphView
-	searchResults    []membox.SearchResult
-	renamedTo        string
-	previewPath      string
-	readBody         []byte
-	readCount        int
-	pdfTitle         string
-	pdfTitleSelector string
+	resolved           int
+	pins               map[string]bool
+	viewer             string
+	model              string
+	mainPath           string
+	webOpened          []string
+	scanCount          int
+	graph              membox.DocumentGraphView
+	searchResults      []membox.SearchResult
+	renamedTo          string
+	previewPath        string
+	readBody           []byte
+	readCount          int
+	pdfTitle           string
+	pdfTitleSelector   string
+	pdfConverterServer string
+	pdfConverted       string
 
 	// Web Companion control knobs for tests.
 	webRunning      bool
@@ -107,6 +109,20 @@ func (f *fakeApp) UpdatePDFMetadata(_ context.Context, command membox.UpdatePDFM
 		f.pdfTitle = *command.Title
 	}
 	return membox.DocumentView{ID: command.Selector, Path: "/tmp/original.pdf", Title: f.pdfTitle, MediaType: "application/pdf"}, nil
+}
+func (f *fakeApp) ConvertPDF(_ context.Context, command membox.ConvertPDFCommand) (membox.ConvertPDFResult, error) {
+	f.pdfConverted = command.Selector
+	return membox.ConvertPDFResult{
+		SourceDocumentID: command.Selector,
+		MarkdownDocument: membox.DocumentView{ID: "converted-md", Path: "/tmp/converted.md", MediaType: "text/markdown"},
+		MarkdownPath:     "/tmp/converted.md",
+		MarkdownFilename: "converted.md",
+		Created:          true,
+	}, nil
+}
+func (f *fakeApp) SetPDFConverterServer(_ context.Context, serverURL string) (membox.PDFConverterConfigView, error) {
+	f.pdfConverterServer = serverURL
+	return membox.PDFConverterConfigView{ServerURL: serverURL, ConfigPath: "/tmp/pdf-converter.json"}, nil
 }
 func (f *fakeApp) CreateNote(_ context.Context, command membox.CreateNoteCommand) (membox.CreateNoteResult, error) {
 	document := membox.DocumentView{ID: "new-note", Title: command.Title, Path: "/tmp/new-note.md", RelativePath: "new-note.md", Status: "active"}

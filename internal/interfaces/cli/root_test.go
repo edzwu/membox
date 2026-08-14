@@ -506,6 +506,26 @@ func TestCLI_DocSummarizeSetsExplicitSummary(t *testing.T) {
 	}
 }
 
+func TestCLI_PDFConverterServerUsesFeatureOwnedConfig(t *testing.T) {
+	home := t.TempDir()
+	serverURL := "http://192.168.3.42:8000"
+	code, stdout, stderr := runTestCLI(t, "--home", home, "pdf", "server", serverURL)
+	if code != 0 || stderr != "" || !strings.Contains(stdout, serverURL) {
+		t.Fatalf("setting converter server: code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	body, err := os.ReadFile(filepath.Join(home, "pdf-converter.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), serverURL) {
+		t.Fatalf("feature config does not contain server URL: %s", body)
+	}
+	code, stdout, stderr = runTestCLI(t, "--home", home, "pdf", "server")
+	if code != 0 || stderr != "" || !strings.Contains(stdout, serverURL) {
+		t.Fatalf("showing converter server: code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+}
+
 func TestCLI_TUI001_NonTTYWithoutCommandShowsRootUsage(t *testing.T) {
 	code, _, stderr := runTestCLI(t)
 	if code != 2 {

@@ -50,6 +50,8 @@ type App interface {
 	TrashSummary(context.Context) (membox.TrashSummaryResult, error)
 	RenameDocument(context.Context, membox.RenameDocumentCommand) (membox.RenameDocumentResult, error)
 	UpdatePDFMetadata(context.Context, membox.UpdatePDFMetadataCommand) (membox.DocumentView, error)
+	ConvertPDF(context.Context, membox.ConvertPDFCommand) (membox.ConvertPDFResult, error)
+	SetPDFConverterServer(context.Context, string) (membox.PDFConverterConfigView, error)
 	CreateNote(context.Context, membox.CreateNoteCommand) (membox.CreateNoteResult, error)
 	CreateTopic(context.Context, membox.CreateTopicCommand) (membox.CreateTopicResult, error)
 	ListTopics(context.Context, membox.ListTopicsQuery) ([]membox.TopicView, error)
@@ -294,6 +296,10 @@ type renamedMsg struct {
 	title      string
 	virtual    bool
 	err        error
+}
+type pdfConvertedMsg struct {
+	result membox.ConvertPDFResult
+	err    error
 }
 type spaceTimeoutMsg struct{ sequence uint64 }
 
@@ -684,6 +690,21 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.statusMessage = "Renamed " + filepath.Base(msg.path)
 			}
+			commands = append(commands, listDocumentsCmd(m.ctx, m.app, m.listSequence))
+		}
+		m.clearExecutedCommand()
+	case pdfConvertedMsg:
+		m.loading, m.err = false, msg.err
+		if msg.err == nil {
+			verb := "updated"
+			if msg.result.Created {
+				verb = "created"
+			}
+			m.statusMessage = "PDF Markdown " + verb + ": " + shortID(msg.result.MarkdownDocument.ID)
+			if len(msg.result.Chapters) != 0 {
+				m.statusMessage += fmt.Sprintf(" · %d linked chapters", len(msg.result.Chapters))
+			}
+			m.hideInput()
 			commands = append(commands, listDocumentsCmd(m.ctx, m.app, m.listSequence))
 		}
 		m.clearExecutedCommand()

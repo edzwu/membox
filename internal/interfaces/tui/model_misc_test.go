@@ -629,6 +629,61 @@ func TestModel_RKeyRenamesPDFTitleWithoutMovingFile(t *testing.T) {
 	}
 }
 
+func TestModel_PDFConvertCommandUsesSelectedPDF(t *testing.T) {
+	app := &fakeApp{}
+	model := New(context.Background(), app, fakeLauncher{})
+	model.width, model.height = 100, 30
+	model.items = documentItems([]membox.DocumentView{{
+		ID: "pdf-alpha", Title: "Paper", Path: "/tmp/paper.pdf", MediaType: "application/pdf",
+	}})
+	model.refreshFilter()
+	model.inputVisible, model.inputActive, model.inputMode = true, true, inputModeCmd
+	model.input.SetValue("pdf convert")
+
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if model.statusMessage != "uploading PDF · waiting for Markdown…" {
+		t.Fatalf("conversion did not expose progress status: %q", model.statusMessage)
+	}
+	message := command()
+	if batch, ok := message.(tea.BatchMsg); ok {
+		message = batch[1]()
+	}
+	converted, ok := message.(pdfConvertedMsg)
+	if !ok {
+		t.Fatalf("expected pdfConvertedMsg, got %T", message)
+	}
+	if app.pdfConverted != "pdf-alpha" {
+		t.Fatalf("converted selector = %q", app.pdfConverted)
+	}
+	updated, _ = model.Update(converted)
+	model = updated.(Model)
+	if model.statusMessage != "PDF Markdown created: "+shortID(converted.result.MarkdownDocument.ID) || model.inputVisible {
+		t.Fatalf("unexpected conversion completion state: status=%q input=%v", model.statusMessage, model.inputVisible)
+	}
+}
+
+func TestModel_PDFServerCommandPersistsFeatureConfig(t *testing.T) {
+	app := &fakeApp{}
+	model := New(context.Background(), app, fakeLauncher{})
+	model.inputVisible, model.inputActive, model.inputMode = true, true, inputModeCmd
+	model.input.SetValue("pdf server http://192.168.3.42:8000")
+
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	message := command()
+	if batch, ok := message.(tea.BatchMsg); ok {
+		message = batch[1]()
+	}
+	result, ok := message.(commandResultMsg)
+	if !ok || result.err != nil {
+		t.Fatalf("expected successful server command, got %#v", message)
+	}
+	if app.pdfConverterServer != "http://192.168.3.42:8000" {
+		t.Fatalf("converter server = %q", app.pdfConverterServer)
+	}
+}
+
 func TestModel_ColonOpensCommandPaletteDirectly(t *testing.T) {
 	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})

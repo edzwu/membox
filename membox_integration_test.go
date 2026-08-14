@@ -1,11 +1,13 @@
 package membox_test
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -501,6 +503,99 @@ func TestPDFImportMetadataSearchRenameDeleteAndRestore(t *testing.T) {
 	restored, err := box.RestoreTrashedDocument(ctx, membox.RestoreDocumentCommand{Selector: imported.Document.ID})
 	if err != nil || filepath.Base(restored.Path) != "renamed.pdf" {
 		t.Fatalf("restoring PDF: %+v err=%v", restored, err)
+	}
+}
+
+func TestPDFConverterPublishesIndexedMarkdownAndLinksSource(t *testing.T) {
+	ctx := context.Background()
+	home, notes, pdfRoot, sourceDir := t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir()
+	source := filepath.Join(sourceDir, "fixture.pdf")
+	if err := os.WriteFile(source, testPDFBytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	converter := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPost || request.URL.Path != "/convert" {
+			http.NotFound(response, request)
+			return
+		}
+		file, header, err := request.FormFile("file")
+		if err != nil {
+			t.Error(err)
+			response.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		defer file.Close()
+		body, _ := io.ReadAll(file)
+		if header.Filename != "fixture.pdf" || !bytes.HasPrefix(body, []byte("%PDF-")) {
+			t.Errorf("unexpected converter upload: %s %q", header.Filename, body[:min(len(body), 12)])
+		}
+		if request.FormValue("format") != "zip" {
+			t.Errorf("converter format = %q", request.FormValue("format"))
+		}
+		response.Header().Set("Content-Type", "application/zip")
+		writer := zip.NewWriter(response)
+		markdown, _ := writer.Create("fixture.md")
+		_, _ = io.WriteString(markdown, "# Converted Fixture\n\nMinerU searchable projection.\n\n<table><tr><td>Name</td><td>Value</td></tr><tr><td>Agent</td><td>1</td></tr></table>\n\n![](images/chart.jpg)\n")
+		image, _ := writer.Create("images/chart.jpg")
+		_, _ = image.Write([]byte("jpeg-fixture"))
+		_ = writer.Close()
+	}))
+	defer converter.Close()
+
+	box, err := membox.Open(membox.Config{Home: home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer box.Close()
+	if _, err := box.AddPath(ctx, membox.AddPathCommand{Directory: notes}); err != nil {
+		t.Fatal(err)
+	}
+	imported, err := box.ImportPDF(ctx, membox.ImportPDFCommand{SourcePath: source, DestinationRoot: pdfRoot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := box.SetPDFConverterServer(ctx, converter.URL); err != nil {
+		t.Fatal(err)
+	}
+	converted, err := box.ConvertPDF(ctx, membox.ConvertPDFCommand{Selector: imported.Document.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !converted.Created || converted.MarkdownDocument.MediaType != "text/markdown" {
+		t.Fatalf("unexpected converted result: %+v", converted)
+	}
+	canonicalNotes, err := filepath.EvalSymlinks(notes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Dir(converted.MarkdownPath) != canonicalNotes {
+		t.Fatalf("converted Markdown was not published in main path: %s", converted.MarkdownPath)
+	}
+	markdown, err := os.ReadFile(converted.MarkdownPath)
+	if err != nil || !strings.Contains(string(markdown), "MinerU searchable projection") || !strings.Contains(string(markdown), "images/chart.jpg") {
+		t.Fatalf("converted Markdown missing: %q err=%v", markdown, err)
+	}
+	if strings.Contains(string(markdown), "<table>") || !strings.Contains(string(markdown), "| Name | Value |") {
+		t.Fatalf("converted HTML table was not normalized to GFM: %q", markdown)
+	}
+	image, err := os.ReadFile(filepath.Join(canonicalNotes, "images", "chart.jpg"))
+	if err != nil || string(image) != "jpeg-fixture" {
+		t.Fatalf("converted image missing: %q err=%v", image, err)
+	}
+	hits, err := box.SearchDocuments(ctx, membox.SearchDocumentsQuery{Query: "MinerU searchable", Limit: 10})
+	if err != nil || len(hits) != 1 || hits[0].DocumentID != converted.MarkdownDocument.ID {
+		t.Fatalf("converted Markdown was not indexed: hits=%+v err=%v", hits, err)
+	}
+	graph, err := box.GetDocumentGraph(ctx, membox.GetDocumentGraphQuery{Selector: imported.Document.ID})
+	if err != nil || len(graph.Outgoing) != 1 || graph.Outgoing[0].ID != converted.MarkdownDocument.ID {
+		t.Fatalf("PDF conversion link missing: %+v err=%v", graph, err)
+	}
+	convertedAgain, err := box.ConvertPDF(ctx, membox.ConvertPDFCommand{Selector: imported.Document.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if convertedAgain.Created || convertedAgain.MarkdownDocument.ID != converted.MarkdownDocument.ID || convertedAgain.MarkdownPath != converted.MarkdownPath {
+		t.Fatalf("reconversion did not preserve Markdown identity: first=%+v second=%+v", converted, convertedAgain)
 	}
 }
 

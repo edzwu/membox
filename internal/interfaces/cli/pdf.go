@@ -18,6 +18,7 @@ func newPDFCommand(runtime *runtime) *cobra.Command {
 		newPDFImportCommand(runtime), newPDFListCommand(runtime), newPDFSearchCommand(runtime),
 		newPDFShowCommand(runtime), newPDFUpdateCommand(runtime), newPDFOpenCommand(runtime),
 		newPDFRenameCommand(runtime), newPDFDeleteCommand(runtime), newPDFRestoreCommand(runtime),
+		newPDFConvertCommand(runtime), newPDFServerCommand(runtime),
 	)
 	return pdf
 }
@@ -129,6 +130,73 @@ func newPDFSearchCommand(runtime *runtime) *cobra.Command {
 			}
 			fmt.Fprintln(cmd.OutOrStdout())
 		}
+		return nil
+	}
+	return command
+}
+
+func newPDFConvertCommand(runtime *runtime) *cobra.Command {
+	var server string
+	var jsonOutput bool
+	command := &cobra.Command{Use: "convert <document-id>", Short: "Upload a PDF to the configured converter and publish its Markdown", Args: exactArgs(1, "document ID")}
+	command.Flags().StringVar(&server, "server", "", "one-off converter URL override")
+	command.Flags().BoolVar(&jsonOutput, "json", false, "output JSON")
+	command.RunE = func(cmd *cobra.Command, args []string) error {
+		box, _, err := requirePDF(cmd, runtime, args[0])
+		if err != nil {
+			return err
+		}
+		result, err := box.ConvertPDF(cmd.Context(), membox.ConvertPDFCommand{Selector: args[0], ServerURL: server})
+		if err != nil {
+			return err
+		}
+		if jsonOutput {
+			return writeJSON(cmd, result)
+		}
+		verb := "Updated"
+		if result.Created {
+			verb = "Created"
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "%s Markdown index %s from PDF %s: %s\n", verb, result.MarkdownDocument.ID, result.SourceDocumentID, result.MarkdownPath)
+		if len(result.Chapters) != 0 {
+			fmt.Fprintf(cmd.OutOrStdout(), "Published %d linked chapter document(s).\n", len(result.Chapters))
+		}
+		return nil
+	}
+	return command
+}
+
+func newPDFServerCommand(runtime *runtime) *cobra.Command {
+	var jsonOutput bool
+	command := &cobra.Command{Use: "server [url]", Short: "Show or set the optional PDF converter server", Args: func(cmd *cobra.Command, args []string) error {
+		if len(args) > 1 {
+			return usageErr(cmd, "expected at most one server URL")
+		}
+		return nil
+	}}
+	command.Flags().BoolVar(&jsonOutput, "json", false, "output JSON")
+	command.RunE = func(cmd *cobra.Command, args []string) error {
+		box, err := runtime.get()
+		if err != nil {
+			return err
+		}
+		var config membox.PDFConverterConfigView
+		if len(args) == 1 {
+			config, err = box.SetPDFConverterServer(cmd.Context(), args[0])
+		} else {
+			config, err = box.GetPDFConverterConfig(cmd.Context())
+		}
+		if err != nil {
+			return err
+		}
+		if jsonOutput {
+			return writeJSON(cmd, config)
+		}
+		if config.ServerURL == "" {
+			fmt.Fprintf(cmd.OutOrStdout(), "PDF converter server is not configured (%s)\n", config.ConfigPath)
+			return nil
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "PDF converter server: %s\n", config.ServerURL)
 		return nil
 	}
 	return command
