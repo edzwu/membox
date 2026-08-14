@@ -51,13 +51,18 @@ type DocumentChunk struct {
 
 // DocumentView is metadata for one document.
 type DocumentView struct {
-	ID       string `json:"id"`
-	Title    string `json:"title"`
-	Status   string `json:"status"`
-	Revision string `json:"revision"`
-	Summary  string `json:"summary,omitempty"`
-	Pinned   bool   `json:"pinned"`
-	Path     string `json:"path,omitempty"`
+	ID        string `json:"id"`
+	Title     string `json:"title"`
+	Status    string `json:"status"`
+	Revision  string `json:"revision"`
+	Summary   string `json:"summary,omitempty"`
+	MediaType string `json:"media_type"`
+	Authors   string `json:"authors,omitempty"`
+	Year      int    `json:"year,omitempty"`
+	Keywords  string `json:"keywords,omitempty"`
+	PageCount int    `json:"page_count,omitempty"`
+	Pinned    bool   `json:"pinned"`
+	Path      string `json:"path,omitempty"`
 }
 
 // RelatedView summarizes neighborhood links.
@@ -153,7 +158,7 @@ func (t *ServiceDocumentTools) ReadDocument(ctx context.Context, id string, curs
 	if err != nil {
 		return DocumentChunk{}, err
 	}
-	body, err := t.Service.ReadDocument(ctx, id)
+	body, err := t.Service.ReadDocumentText(ctx, id)
 	if err != nil {
 		return DocumentChunk{}, err
 	}
@@ -341,13 +346,18 @@ func (t *ServiceDocumentTools) LinkDocuments(ctx context.Context, cmd LinkDocume
 
 func documentView(doc *catalog.Document, abs string) DocumentView {
 	return DocumentView{
-		ID:       string(doc.ID),
-		Title:    doc.Index.Title,
-		Status:   string(doc.Status),
-		Revision: documentRevision(doc),
-		Summary:  doc.Index.Summary,
-		Pinned:   doc.Pinned,
-		Path:     abs,
+		ID:        string(doc.ID),
+		Title:     doc.Index.Title,
+		Status:    string(doc.Status),
+		Revision:  documentRevision(doc),
+		Summary:   doc.Index.Summary,
+		MediaType: doc.Index.MediaType,
+		Authors:   doc.Index.Authors,
+		Year:      doc.Index.Year,
+		Keywords:  doc.Index.Keywords,
+		PageCount: doc.Index.PageCount,
+		Pinned:    doc.Pinned,
+		Path:      abs,
 	}
 }
 

@@ -12,14 +12,14 @@ import (
 )
 
 func newPathCommand(runtime *runtime) *cobra.Command {
-	path := parentCommand("path", "Manage Markdown scan paths", "a path command is required")
+	path := parentCommand("path", "Manage document scan paths", "a path command is required")
 	path.AddCommand(newPathAddCommand(runtime), newPathListCommand(runtime), newPathRemoveCommand(runtime), newPathScanCommand(runtime))
 	return path
 }
 
 func newPathAddCommand(runtime *runtime) *cobra.Command {
 	var jsonOutput bool
-	command := &cobra.Command{Use: "add <directory>", Short: "Add a Markdown scan path", Args: exactArgs(1, "directory")}
+	command := &cobra.Command{Use: "add <directory>", Short: "Add a Markdown/PDF scan path", Args: exactArgs(1, "directory")}
 	command.Flags().BoolVar(&jsonOutput, "json", false, "output JSON")
 	command.RunE = func(cmd *cobra.Command, args []string) error {
 		box, err := runtime.get()
@@ -125,7 +125,7 @@ func newPathScanCommand(runtime *runtime) *cobra.Command {
 }
 
 func printScanSummary(cmd *cobra.Command, report membox.ScanReport) {
-	fmt.Fprintf(cmd.OutOrStdout(), "Scanned %d path(s) and %d Markdown file(s)\n", report.Paths, report.Files)
+	fmt.Fprintf(cmd.OutOrStdout(), "Scanned %d path(s) and %d document file(s)\n", report.Paths, report.Files)
 	fmt.Fprintf(cmd.OutOrStdout(), "  added:             %d\n", report.Added)
 	fmt.Fprintf(cmd.OutOrStdout(), "  updated:           %d\n", report.Updated)
 	fmt.Fprintf(cmd.OutOrStdout(), "  renamed:           %d\n", report.Renamed)

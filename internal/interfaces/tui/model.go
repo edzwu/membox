@@ -26,6 +26,13 @@ const (
 )
 
 const (
+	mediaScopeAll      = "all"
+	mediaScopeMarkdown = "markdown"
+	mediaScopePDF      = "pdf"
+	mediaScopeImage    = "image"
+)
+
+const (
 	viewTree  = "tree"
 	viewBoard = "board"
 )
@@ -42,6 +49,7 @@ type App interface {
 	DeleteDocument(context.Context, membox.DeleteDocumentCommand) (membox.DeleteDocumentResult, error)
 	TrashSummary(context.Context) (membox.TrashSummaryResult, error)
 	RenameDocument(context.Context, membox.RenameDocumentCommand) (membox.RenameDocumentResult, error)
+	UpdatePDFMetadata(context.Context, membox.UpdatePDFMetadataCommand) (membox.DocumentView, error)
 	CreateNote(context.Context, membox.CreateNoteCommand) (membox.CreateNoteResult, error)
 	CreateTopic(context.Context, membox.CreateTopicCommand) (membox.CreateTopicResult, error)
 	ListTopics(context.Context, membox.ListTopicsQuery) ([]membox.TopicView, error)
@@ -149,6 +157,7 @@ type Model struct {
 	lastKeyAt      time.Time
 	searchMode     string
 	inputMode      string
+	mediaScope     string
 	deleteConfirm  bool
 	deleteSelector string
 	deletePath     string
@@ -282,6 +291,8 @@ type deleteResultMsg struct {
 type renamedMsg struct {
 	documentID string
 	path       string
+	title      string
+	virtual    bool
 	err        error
 }
 type spaceTimeoutMsg struct{ sequence uint64 }
@@ -307,7 +318,7 @@ func New(ctx context.Context, app App, launcher host.Launcher) Model {
 	spin := spinner.New()
 	spin.Spinner = spinner.Dot
 	vp := viewport.New(40, 10)
-	model := Model{ctx: ctx, app: app, launcher: launcher, input: input, spinner: spin, preview: vp, searchMode: searchModeName, inputMode: inputModeSearch, viewMode: viewTree, viewerMode: "leaf", summarizing: map[string]bool{}, web: webState{controllerID: newWebControllerID()}, agent: newAgentUIState()}
+	model := Model{ctx: ctx, app: app, launcher: launcher, input: input, spinner: spin, preview: vp, searchMode: searchModeName, inputMode: inputModeSearch, mediaScope: mediaScopeAll, viewMode: viewTree, viewerMode: "leaf", summarizing: map[string]bool{}, web: webState{controllerID: newWebControllerID()}, agent: newAgentUIState()}
 	model.web.starting = true
 	model.preview.SetContent(previewPlaceholder("Loading documents…"))
 	return model
@@ -462,7 +473,7 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if query, exact := m.fullTextFilter(); query == msg.query && exact == msg.exact {
 			m.loading, m.err = false, msg.err
 			if msg.err == nil {
-				m.filtered = searchResultItems(m.items, msg.results, m.dateFilters, m.effectiveNameFilters(), m.hideNotes)
+				m.filtered = searchResultItems(m.items, msg.results, m.dateFilters, m.effectiveNameFilters(), m.hideNotes, m.mediaScope)
 				m.sortFiltered()
 				m.selected = 0
 				m.keepSelectionVisible()
@@ -667,7 +678,12 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case renamedMsg:
 		m.loading, m.err = false, msg.err
 		if msg.err == nil {
-			m.statusMessage = "Renamed " + filepath.Base(msg.path)
+			if msg.virtual {
+				m.applyDocumentTitle(msg.documentID, msg.title)
+				m.statusMessage = "Renamed title: " + msg.title
+			} else {
+				m.statusMessage = "Renamed " + filepath.Base(msg.path)
+			}
 			commands = append(commands, listDocumentsCmd(m.ctx, m.app, m.listSequence))
 		}
 		m.clearExecutedCommand()
@@ -739,11 +755,10 @@ func (m Model) loadPreview() tea.Cmd {
 		return previewCmd(m.ctx, m.app, m.fullDocument.ID)
 	}
 	if document, ok := m.selectedDocument(); ok {
-		selector := document.ID
-		return func() tea.Msg {
-			body, err := m.app.ReadDocument(m.ctx, membox.ReadDocumentQuery{Selector: selector})
-			return previewMsg{documentID: selector, content: string(body), err: err}
-		}
+		// Always resolve the media type before reading. In particular, never
+		// send PDF binary bytes to a terminal: embedded control sequences can
+		// corrupt the TUI in addition to rendering as mojibake.
+		return previewCmd(m.ctx, m.app, document.ID)
 	}
 	return func() tea.Msg { return previewMsg{content: previewPlaceholder("No document selected.")} }
 }

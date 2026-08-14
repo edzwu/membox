@@ -74,8 +74,8 @@ function toolError(err: unknown) {
 }
 
 const SYSTEM_APPEND = `
-You are the membox document assistant embedded in a personal Markdown knowledge base.
-membox is a Markdown identity/catalog, not a general coding repository.
+You are the membox document assistant embedded in a personal Markdown and PDF knowledge base.
+membox is a document identity/catalog, not a general coding repository.
 
 Rules:
 - Prefer Document UUIDs over file paths. Paths can change; UUIDs are stable.
@@ -133,7 +133,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "membox_read_document",
     label: "Read document",
-    description: "Read Markdown body by Document UUID. Supports cursor-based continuation for long documents.",
+    description: "Read Markdown or extracted PDF text by Document UUID. Supports cursor-based continuation for long documents.",
     parameters: Type.Object({
       id: Type.String({ description: "Document UUID" }),
       cursor: Type.Optional(Type.String({ description: "Continuation cursor from a previous read" })),
@@ -257,7 +257,7 @@ export default function (pi: ExtensionAPI) {
       parameters: Type.Object({
         id: Type.String({ description: "Document UUID" }),
         expected_revision: Type.String({ description: "Revision from membox_get_document/read" }),
-        new_filename: Type.String({ description: "New Markdown filename including extension" }),
+        new_filename: Type.String({ description: "New filename preserving the document media type (.md/.markdown or .pdf)" }),
       }),
       async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
         try {

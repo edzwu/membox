@@ -102,7 +102,9 @@ func (s *Store) ListDocuments(ctx context.Context, limit int, includeUnavailable
 		args = append([]any{statusFilter}, args...)
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT d.id,d.created_at,d.updated_at,d.pinned,l.path_id,l.relative_path,l.file_key,l.status,
-COALESCE(i.title,''),COALESCE(i.summary,''),COALESCE(i.mtime,0),COALESCE(i.size,0),COALESCE(i.sha256,''),i.indexed_at,
+COALESCE(i.title,''),COALESCE(i.summary,''),COALESCE(i.media_type,'text/markdown'),COALESCE(i.metadata_overrides,0),COALESCE(i.authors,''),
+COALESCE(i.publication_year,0),COALESCE(i.keywords,''),COALESCE(i.page_count,0),
+COALESCE(i.mtime,0),COALESCE(i.size,0),COALESCE(i.sha256,''),i.indexed_at,
 COALESCE(i.source_created_at,CASE WHEN i.mtime>0 THEN i.mtime/1000000 ELSE d.created_at END),
 MAX(COALESCE(i.source_updated_at,CASE WHEN i.mtime>0 THEN i.mtime/1000000 ELSE d.updated_at END),
     COALESCE((SELECT MAX(MAX(an.updated_at,COALESCE(ni.source_updated_at,0)))
@@ -121,8 +123,8 @@ LEFT JOIN document_read_state r ON r.document_id=d.id`+` `+where+` ORDER BY lowe
 	var records []port.DocumentRecord
 	for rows.Next() {
 		var readStatus string
-		// scanDocument scans 17 columns; feed the 18th (read_status) through
-		// a wrapper so both land in one rows.Scan call.
+		// Feed the trailing read_status through a wrapper so the shared
+		// document projection and caller-specific field land in one Scan.
 		document, absolutePath, err := scanDocument(&rowWithExtra{rows: rows, extra: &readStatus})
 		if err != nil {
 			return nil, err

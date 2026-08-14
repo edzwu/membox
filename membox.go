@@ -241,6 +241,9 @@ func (b *Box) OpenDocumentWeb(ctx context.Context, selector string) (string, err
 	if document.Status != catalog.DocumentActive {
 		return "", fmt.Errorf("document %s is %s at %s", document.ID, document.Status, absolute)
 	}
+	if document.Index.MediaType != "text/markdown" {
+		return "", fmt.Errorf("web reader does not support %s; open the file directly", document.Index.MediaType)
+	}
 	status, err := b.EnsureWebCompanion(ctx, "")
 	if err != nil {
 		return "", err
@@ -321,8 +324,9 @@ func (b *Box) ScanPaths(ctx context.Context, command ScanPathsCommand) (ScanRepo
 }
 
 type SearchDocumentsQuery struct {
-	Query string
-	Limit int
+	Query     string
+	Limit     int
+	MediaType string // optional, e.g. application/pdf
 	// Exact forces whole-token matching in the FTS query (no prefix
 	// wildcard): "wal" then no longer hits "wall"/"wallet".
 	Exact bool
@@ -335,21 +339,42 @@ type SearchResult struct {
 }
 
 func (b *Box) SearchDocuments(ctx context.Context, query SearchDocumentsQuery) ([]SearchResult, error) {
-	hits, err := b.service.Search(ctx, query.Query, query.Limit, query.Exact)
+	limit := query.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+	searchLimit := limit
+	if query.MediaType != "" {
+		searchLimit = 1000
+	}
+	hits, err := b.service.Search(ctx, query.Query, searchLimit, query.Exact)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]SearchResult, 0, len(hits))
 	for _, hit := range hits {
+		if query.MediaType != "" {
+			document, _, resolveErr := b.service.ResolveDocument(ctx, string(hit.DocumentID))
+			if resolveErr != nil {
+				return nil, resolveErr
+			}
+			if document.Index.MediaType != query.MediaType {
+				continue
+			}
+		}
 		out = append(out, SearchResult{DocumentID: string(hit.DocumentID), Title: hit.Title, Path: hit.Path, Snippet: hit.Snippet})
+		if len(out) == limit {
+			break
+		}
 	}
 	return out, nil
 }
 
 type ListDocumentsQuery struct {
-	Limit  int
-	All    bool
-	Status string // optional filter: unread | reading | finished
+	Limit     int
+	All       bool
+	Status    string // optional filter: unread | reading | finished
+	MediaType string // optional, e.g. application/pdf
 }
 
 type SetReadStatusCommand struct {
@@ -368,6 +393,11 @@ type DocumentView struct {
 	ReadStatus   string     `json:"read_status"`
 	Title        string     `json:"title"`
 	Summary      string     `json:"summary"`
+	MediaType    string     `json:"media_type"`
+	Authors      string     `json:"authors,omitempty"`
+	Year         int        `json:"year,omitempty"`
+	Keywords     string     `json:"keywords,omitempty"`
+	PageCount    int        `json:"page_count,omitempty"`
 	MTime        int64      `json:"mtime"`
 	Size         int64      `json:"size"`
 	SHA256       string     `json:"sha256"`
@@ -377,15 +407,29 @@ type DocumentView struct {
 }
 
 func (b *Box) ListDocuments(ctx context.Context, query ListDocumentsQuery) ([]DocumentView, error) {
-	records, err := b.service.ListDocuments(ctx, query.Limit, query.All, query.Status)
+	limit := query.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+	listLimit := limit
+	if query.MediaType != "" {
+		listLimit = 1000
+	}
+	records, err := b.service.ListDocuments(ctx, listLimit, query.All, query.Status)
 	if err != nil {
 		return nil, err
 	}
 	views := make([]DocumentView, 0, len(records))
 	for _, record := range records {
+		if query.MediaType != "" && record.Document.Index.MediaType != query.MediaType {
+			continue
+		}
 		view := documentView(record.Document, record.AbsolutePath)
 		view.ReadStatus = record.ReadStatus
 		views = append(views, view)
+		if len(views) == limit {
+			break
+		}
 	}
 	return views, nil
 }
@@ -416,13 +460,58 @@ func (b *Box) GetDocument(ctx context.Context, query GetDocumentQuery) (Document
 
 func documentView(document *catalog.Document, path string) DocumentView {
 	view := DocumentView{ID: string(document.ID), Path: path, PathID: int64(document.Location.PathID), RelativePath: document.Location.RelativePath,
-		Status: string(document.Status), Pinned: document.Pinned, Title: document.Index.Title, Summary: document.Index.Summary, MTime: document.Index.MTime, Size: document.Index.Size,
-		SHA256: document.Index.SHA256, CreatedAt: document.Index.SourceCreatedAt, UpdatedAt: document.Index.SourceUpdatedAt}
+		Status: string(document.Status), Pinned: document.Pinned, Title: document.Index.Title, Summary: document.Index.Summary,
+		MediaType: document.Index.MediaType, Authors: document.Index.Authors, Year: document.Index.Year, Keywords: document.Index.Keywords,
+		PageCount: document.Index.PageCount, MTime: document.Index.MTime, Size: document.Index.Size, SHA256: document.Index.SHA256,
+		CreatedAt: document.Index.SourceCreatedAt, UpdatedAt: document.Index.SourceUpdatedAt}
 	if !document.Index.IndexedAt.IsZero() {
 		value := document.Index.IndexedAt
 		view.IndexedAt = &value
 	}
 	return view
+}
+
+type ImportPDFCommand struct {
+	SourcePath      string
+	DestinationRoot string
+	Title           string
+	Authors         string
+	Year            int
+	Keywords        string
+}
+
+type ImportPDFResult struct {
+	Document DocumentView `json:"document"`
+	Path     string       `json:"path"`
+}
+
+func (b *Box) ImportPDF(ctx context.Context, command ImportPDFCommand) (ImportPDFResult, error) {
+	result, err := b.service.ImportPDF(ctx, application.ImportPDFOptions{
+		SourcePath: command.SourcePath, DestinationRoot: command.DestinationRoot, Title: command.Title,
+		Authors: command.Authors, Year: command.Year, Keywords: command.Keywords,
+	})
+	if err != nil {
+		return ImportPDFResult{}, err
+	}
+	return ImportPDFResult{Document: documentView(result.Document, result.Path), Path: result.Path}, nil
+}
+
+type UpdatePDFMetadataCommand struct {
+	Selector string
+	Title    *string
+	Authors  *string
+	Year     *int
+	Keywords *string
+}
+
+func (b *Box) UpdatePDFMetadata(ctx context.Context, command UpdatePDFMetadataCommand) (DocumentView, error) {
+	document, path, err := b.service.UpdateDocumentMetadata(ctx, command.Selector, application.DocumentMetadataPatch{
+		Title: command.Title, Authors: command.Authors, Year: command.Year, Keywords: command.Keywords,
+	})
+	if err != nil {
+		return DocumentView{}, err
+	}
+	return documentView(document, path), nil
 }
 
 type ResolveLocationQuery struct{ Selector string }
@@ -693,6 +782,12 @@ type ReadDocumentQuery struct{ Selector string }
 
 func (b *Box) ReadDocument(ctx context.Context, query ReadDocumentQuery) ([]byte, error) {
 	return b.service.ReadDocument(ctx, query.Selector)
+}
+
+// ReadDocumentText returns Markdown or extracted PDF text for agent-facing
+// consumers that must not receive binary PDF bytes.
+func (b *Box) ReadDocumentText(ctx context.Context, query ReadDocumentQuery) ([]byte, error) {
+	return b.service.ReadDocumentText(ctx, query.Selector)
 }
 
 type ToggleDocumentPinCommand struct{ Selector string }

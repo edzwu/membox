@@ -35,11 +35,12 @@ func helpSections() []helpSection {
 	return []helpSection{
 		{title: "Browse", entries: []helpEntry{
 			{"enter / ctrl+t", "open document / tree ⇄ board"},
+			{"ctrl+p", "show all → Markdown → PDF → images"},
 			{"tab", "focus tree ⇄ preview"},
 			{"↑ ↓ / pgup pgdn", "scroll focused preview"},
 			{"space", "details · ×2 opens filter input"},
 			{"e / o / d", "edit / open app / move to trash"},
-			{"r / p / s / ctrl+h", "rename file / pin / summarize / toggle *-note.md"},
+			{"r / p / s / ctrl+h", "rename file/PDF title / pin / summarize / toggle *-note.md"},
 			{"q / esc", "back / close result view"},
 		}},
 		{title: "Filter & commands", entries: []helpEntry{

@@ -24,7 +24,9 @@ const notTrashedClause = `d.id NOT IN (SELECT document_id FROM document_trash)`
 // Both annotation_notes.updated_at (app saves) and the note file's own source
 // time (external edits picked up by scans) participate.
 const documentSelect = `SELECT d.id,d.created_at,d.updated_at,d.pinned,l.path_id,l.relative_path,l.file_key,l.status,
-COALESCE(i.title,''),COALESCE(i.summary,''),COALESCE(i.mtime,0),COALESCE(i.size,0),COALESCE(i.sha256,''),i.indexed_at,
+COALESCE(i.title,''),COALESCE(i.summary,''),COALESCE(i.media_type,'text/markdown'),COALESCE(i.metadata_overrides,0),COALESCE(i.authors,''),
+COALESCE(i.publication_year,0),COALESCE(i.keywords,''),COALESCE(i.page_count,0),
+COALESCE(i.mtime,0),COALESCE(i.size,0),COALESCE(i.sha256,''),i.indexed_at,
 COALESCE(i.source_created_at,CASE WHEN i.mtime>0 THEN i.mtime/1000000 ELSE d.created_at END),
 MAX(COALESCE(i.source_updated_at,CASE WHEN i.mtime>0 THEN i.mtime/1000000 ELSE d.updated_at END),
     COALESCE((SELECT MAX(MAX(an.updated_at,COALESCE(ni.source_updated_at,0)))
@@ -36,10 +38,11 @@ FROM documents d JOIN document_locations l ON l.document_id=d.id
 JOIN paths p ON p.id=l.path_id LEFT JOIN document_index i ON i.document_id=d.id`
 
 func scanDocument(scanner interface{ Scan(...any) error }) (*catalog.Document, string, error) {
-	var id, relative, fileKey, status, title, summary, hash, root string
-	var created, updated, pinned, pathID, mtime, size, sourceCreated, sourceUpdated int64
+	var id, relative, fileKey, status, title, summary, mediaType, authors, keywords, hash, root string
+	var created, updated, pinned, pathID, metadataOverrides, year, pageCount, mtime, size, sourceCreated, sourceUpdated int64
 	var indexed sql.NullInt64
-	if err := scanner.Scan(&id, &created, &updated, &pinned, &pathID, &relative, &fileKey, &status, &title, &summary, &mtime, &size, &hash, &indexed, &sourceCreated, &sourceUpdated, &root); err != nil {
+	if err := scanner.Scan(&id, &created, &updated, &pinned, &pathID, &relative, &fileKey, &status, &title, &summary,
+		&mediaType, &metadataOverrides, &authors, &year, &keywords, &pageCount, &mtime, &size, &hash, &indexed, &sourceCreated, &sourceUpdated, &root); err != nil {
 		return nil, "", err
 	}
 	location, err := catalog.NewLocation(catalog.IndexedPathID(pathID), relative)
@@ -51,7 +54,8 @@ func scanDocument(scanner interface{ Scan(...any) error }) (*catalog.Document, s
 		indexedAt = fromMillis(indexed.Int64)
 	}
 	doc, err := catalog.RehydrateDocument(catalog.DocumentID(id), location, catalog.FileKey(fileKey), catalog.DocumentStatus(status), catalog.IndexState{
-		Title: title, Summary: summary, MTime: mtime, Size: size, SHA256: hash, IndexedAt: indexedAt,
+		Title: title, Summary: summary, MediaType: mediaType, MetadataOverrides: int(metadataOverrides),
+		Authors: authors, Year: int(year), Keywords: keywords, PageCount: int(pageCount), MTime: mtime, Size: size, SHA256: hash, IndexedAt: indexedAt,
 		SourceCreatedAt: fromMillis(sourceCreated), SourceUpdatedAt: fromMillis(sourceUpdated),
 	}, fromMillis(created), fromMillis(updated), pinned != 0)
 	if err != nil {
@@ -420,10 +424,12 @@ file_key=excluded.file_key,status=excluded.status,last_seen_at=excluded.last_see
 	if !save.Reindex {
 		return nil
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO document_index(document_id,title,summary,mtime,size,sha256,indexed_at,source_created_at,source_updated_at)
-VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(document_id) DO UPDATE SET title=excluded.title,summary=excluded.summary,mtime=excluded.mtime,size=excluded.size,
+	if _, err := tx.ExecContext(ctx, `INSERT INTO document_index(document_id,title,summary,media_type,metadata_overrides,authors,publication_year,keywords,page_count,mtime,size,sha256,indexed_at,source_created_at,source_updated_at)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(document_id) DO UPDATE SET title=excluded.title,summary=excluded.summary,media_type=excluded.media_type,metadata_overrides=excluded.metadata_overrides,
+authors=excluded.authors,publication_year=excluded.publication_year,keywords=excluded.keywords,page_count=excluded.page_count,mtime=excluded.mtime,size=excluded.size,
 sha256=excluded.sha256,indexed_at=excluded.indexed_at,source_created_at=excluded.source_created_at,source_updated_at=excluded.source_updated_at`,
-		d.ID, d.Index.Title, d.Index.Summary, d.Index.MTime, d.Index.Size, d.Index.SHA256, millis(d.Index.IndexedAt), millis(d.Index.SourceCreatedAt), millis(d.Index.SourceUpdatedAt)); err != nil {
+		d.ID, d.Index.Title, d.Index.Summary, d.Index.MediaType, d.Index.MetadataOverrides, d.Index.Authors, d.Index.Year, d.Index.Keywords, d.Index.PageCount,
+		d.Index.MTime, d.Index.Size, d.Index.SHA256, millis(d.Index.IndexedAt), millis(d.Index.SourceCreatedAt), millis(d.Index.SourceUpdatedAt)); err != nil {
 		return fmt.Errorf("saving document index: %w", err)
 	}
 	var root string
@@ -434,7 +440,7 @@ sha256=excluded.sha256,indexed_at=excluded.indexed_at,source_created_at=excluded
 	if _, err := tx.ExecContext(ctx, `DELETE FROM document_fts WHERE document_id=?`, d.ID); err != nil {
 		return fmt.Errorf("removing old search index: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO document_fts(document_id,title,path,body) VALUES(?,?,?,?)`, d.ID, d.Index.Title, fullPath, string(save.Body)); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO document_fts(document_id,title,path,body) VALUES(?,?,?,?)`, d.ID, d.Index.Title, fullPath, searchableBody(d.Index, save)); err != nil {
 		return fmt.Errorf("updating search index: %w", err)
 	}
 	// Persist clip provenance when front matter carries source_url (ingest + scan backfill).
@@ -452,6 +458,22 @@ ON CONFLICT(document_id) DO UPDATE SET
 		}
 	}
 	return nil
+}
+
+func searchableBody(index catalog.IndexState, save port.ScanSave) string {
+	text := save.SearchText
+	if text == nil && index.MediaType == "text/markdown" {
+		text = save.Body
+	}
+	metadata := []string{index.Authors, index.Keywords}
+	if index.Year > 0 {
+		metadata = append(metadata, fmt.Sprintf("%d", index.Year))
+	}
+	if index.PageCount > 0 {
+		metadata = append(metadata, fmt.Sprintf("%d pages", index.PageCount))
+	}
+	metadata = append(metadata, string(text))
+	return strings.Join(metadata, "\n")
 }
 
 func saveContentVersion(ctx context.Context, tx *sql.Tx, save port.ScanSave) error {

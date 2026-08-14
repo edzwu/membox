@@ -112,6 +112,9 @@ func (m Model) openGraphSelection() (tea.Model, tea.Cmd) {
 		target = m.graphCards[visible[m.graphSelected]]
 	}
 	m.loading = true
+	if target.MediaType == "application/pdf" {
+		return m, tea.Batch(m.spinner.Tick, openCmd(m.ctx, m.app, m.launcher, target.ID))
+	}
 	if m.viewerMode == "web" {
 		return m, tea.Batch(m.spinner.Tick, openDocumentWebCmd(m.ctx, m.app, m.launcher, target.ID))
 	}
@@ -287,6 +290,10 @@ func graphFocusCmd(ctx context.Context, app App, selectorValue string, layout st
 		// Load body previews so cards show content, not just filenames.
 		previews := make(map[string]string, len(cards))
 		for _, card := range cards {
+			if card.MediaType == "application/pdf" {
+				previews[card.ID] = "PDF · open with Enter"
+				continue
+			}
 			if body, readErr := app.ReadDocument(ctx, membox.ReadDocumentQuery{Selector: card.ID}); readErr == nil {
 				if preview := host.DocumentPreview(body, 220); preview != "" {
 					previews[card.ID] = preview

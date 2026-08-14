@@ -94,7 +94,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, stderr io.Writer
 func newRoot(ctx context.Context, runtime *runtime, in io.Reader, out, stderr io.Writer, isTTY bool) *cobra.Command {
 	root := &cobra.Command{
 		Use:           "mm",
-		Short:         "Local document identity for Markdown",
+		Short:         "Local document identity and search for Markdown and PDF",
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		Args: func(cmd *cobra.Command, args []string) error {
@@ -125,6 +125,7 @@ func newRoot(ctx context.Context, runtime *runtime, in io.Reader, out, stderr io
 	root.AddCommand(
 		newPathCommand(runtime),
 		newDocCommand(runtime),
+		newPDFCommand(runtime),
 		newNoteCommand(runtime),
 		newTopicCommand(runtime),
 		newLinkCommand(runtime),

@@ -2,6 +2,8 @@ package cli
 
 import (
 	"fmt"
+	"path/filepath"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -78,6 +80,16 @@ func newDocViewCommand(runtime *runtime) *cobra.Command {
 		if location.Status != "active" {
 			return fmt.Errorf("document %s is %s at %s", location.DocumentID, location.Status, location.Path)
 		}
+		if strings.EqualFold(filepath.Ext(location.Path), ".pdf") {
+			opener, openErr := runtime.launcher.OpenCommand(cmd.Context(), location.Path)
+			if openErr != nil {
+				return openErr
+			}
+			if openErr := opener.Run(); openErr != nil {
+				return fmt.Errorf("opening PDF: %w", openErr)
+			}
+			return nil
+		}
 		viewer, err := box.GetViewer(cmd.Context())
 		if err != nil {
 			return err
@@ -126,7 +138,7 @@ func newDocListCommand(runtime *runtime) *cobra.Command {
 	var limit int
 	var all, jsonOutput bool
 	var statusFilter string
-	command := &cobra.Command{Use: "list", Short: "List known Markdown documents", Args: noArgs}
+	command := &cobra.Command{Use: "list", Short: "List known documents", Args: noArgs}
 	command.Flags().IntVar(&limit, "limit", 100, "maximum documents")
 	command.Flags().BoolVar(&all, "all", false, "include missing and untracked documents")
 	command.Flags().BoolVar(&jsonOutput, "json", false, "output JSON")
@@ -180,7 +192,7 @@ func newDocMarkCommand(runtime *runtime) *cobra.Command {
 func newDocSearchCommand(runtime *runtime) *cobra.Command {
 	var limit int
 	var jsonOutput bool
-	command := &cobra.Command{Use: "search <query>", Short: "Search indexed Markdown", Args: exactArgs(1, "query")}
+	command := &cobra.Command{Use: "search <query>", Short: "Search indexed documents", Args: exactArgs(1, "query")}
 	command.Flags().IntVar(&limit, "limit", 20, "maximum results")
 	command.Flags().BoolVar(&jsonOutput, "json", false, "output JSON")
 	command.RunE = func(cmd *cobra.Command, args []string) error {
@@ -231,6 +243,19 @@ func newDocShowCommand(runtime *runtime) *cobra.Command {
 		fmt.Fprintf(cmd.OutOrStdout(), "Path:        %s\n", document.Path)
 		fmt.Fprintf(cmd.OutOrStdout(), "Status:      %s\n", document.Status)
 		fmt.Fprintf(cmd.OutOrStdout(), "Title:       %s\n", document.Title)
+		fmt.Fprintf(cmd.OutOrStdout(), "Media type:  %s\n", document.MediaType)
+		if document.Authors != "" {
+			fmt.Fprintf(cmd.OutOrStdout(), "Authors:     %s\n", document.Authors)
+		}
+		if document.Year != 0 {
+			fmt.Fprintf(cmd.OutOrStdout(), "Year:        %d\n", document.Year)
+		}
+		if document.Keywords != "" {
+			fmt.Fprintf(cmd.OutOrStdout(), "Keywords:    %s\n", document.Keywords)
+		}
+		if document.PageCount != 0 {
+			fmt.Fprintf(cmd.OutOrStdout(), "Pages:       %d\n", document.PageCount)
+		}
 		fmt.Fprintf(cmd.OutOrStdout(), "Created at:  %s\n", document.CreatedAt.Format(time.RFC3339))
 		fmt.Fprintf(cmd.OutOrStdout(), "Modified at: %s\n", document.UpdatedAt.Format(time.RFC3339))
 		fmt.Fprintf(cmd.OutOrStdout(), "Size:        %d\n", document.Size)
@@ -249,6 +274,13 @@ func newDocCatCommand(runtime *runtime) *cobra.Command {
 		box, err := runtime.get()
 		if err != nil {
 			return err
+		}
+		document, err := box.GetDocument(cmd.Context(), membox.GetDocumentQuery{Selector: args[0]})
+		if err != nil {
+			return err
+		}
+		if document.MediaType != "text/markdown" {
+			return fmt.Errorf("cat does not support %s; use 'mm doc open %s'", document.MediaType, args[0])
 		}
 		body, err := box.ReadDocument(cmd.Context(), membox.ReadDocumentQuery{Selector: args[0]})
 		if err != nil {
@@ -273,6 +305,9 @@ func newDocEditCommand(runtime *runtime) *cobra.Command {
 		}
 		if location.Status != "active" {
 			return fmt.Errorf("document %s is %s at %s", location.DocumentID, location.Status, location.Path)
+		}
+		if strings.EqualFold(filepath.Ext(location.Path), ".pdf") {
+			return fmt.Errorf("PDFs are not text-editable; use 'mm pdf update %s' for metadata or 'mm pdf open %s'", args[0], args[0])
 		}
 		editor, err := runtime.launcher.EditorCommand(cmd.Context(), location.Path)
 		if err != nil {
@@ -327,7 +362,7 @@ func newDocDeleteCommand(runtime *runtime) *cobra.Command {
 	command := &cobra.Command{
 		Use:   "delete <document-id>",
 		Short: "Move a document to the trash (soft delete)",
-		Long: `Move the document's Markdown file into the path's trash directory.
+		Long: `Move the document file into the path's trash directory.
 The document keeps its UUID, links, and annotations; restore it with
 'mm trash restore <document-id>' or empty the trash with 'mm trash purge'.`,
 		Args: exactArgs(1, "document ID"),
@@ -355,10 +390,10 @@ func newDocRenameCommand(runtime *runtime) *cobra.Command {
 	var jsonOutput bool
 	command := &cobra.Command{
 		Use:   "rename <document-id> <new-filename>",
-		Short: "Rename the Markdown file without changing the document UUID",
-		Long: `Move the document's Markdown file to a new filename in the same
-directory. The stable UUID, graph links, source URLs, and annotation
-relations are preserved. The new name must stay a Markdown file.`,
+		Short: "Rename a document file without changing its UUID",
+		Long: `Move the document file to a new filename in the same directory.
+The stable UUID and relations are preserved. The extension must remain the
+same supported media type. Use 'mm pdf rename' to also update PDF metadata.`,
 		Args: exactArgs(2, "document ID and new filename"),
 	}
 	command.Flags().BoolVar(&jsonOutput, "json", false, "output JSON")

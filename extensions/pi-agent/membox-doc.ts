@@ -15,9 +15,8 @@ import { promisify } from "node:util";
  *   scanned for membox document references (short IDs like `11e8`) and the
  *   resolved file is injected into the message context, so "把 membox 的
  *   11e8 列入今天的任务" knows exactly which file is meant.
- * - Registers doc CRUD tools (list / search / resolve / cat / create /
- *   rename / delete) and path/index admin tools (path add/remove/list/scan,
- *   index status), all backed by the `mm` CLI.
+ * - Registers document and PDF CRUD tools plus path/index admin tools, all
+ *   backed by the `mm` CLI. PDF binaries remain in membox's managed PDF root.
  */
 
 const execFileAsync = promisify(execFile);
@@ -37,7 +36,24 @@ type DocRecord = {
   relative_path: string;
   status: string;
   title: string;
+  media_type?: string;
+  authors?: string;
+  year?: number;
+  keywords?: string;
+  page_count?: number;
   size?: number;
+};
+
+type PDFImportOutput = {
+  document: DocRecord;
+  path: string;
+};
+
+type PDFSearchHit = {
+  document_id: string;
+  title: string;
+  path: string;
+  snippet: string;
 };
 
 async function runMm(args: string[], timeout = 10_000, signal?: AbortSignal): Promise<string> {
@@ -48,8 +64,8 @@ async function runMm(args: string[], timeout = 10_000, signal?: AbortSignal): Pr
   return stdout;
 }
 
-async function runMmJson<T>(args: string[], timeout = 10_000): Promise<T> {
-  const out = await runMm(args, timeout);
+async function runMmJson<T>(args: string[], timeout = 10_000, signal?: AbortSignal): Promise<T> {
+  const out = await runMm(args, timeout, signal);
   return JSON.parse(out) as T;
 }
 
@@ -501,7 +517,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "membox_doc_cat",
     label: "Read a membox document",
-    description: "Print the full content of a membox document (selector: short ID, UUID, or path).",
+    description: "Print the Markdown content of a membox document (selector: short ID, UUID, or path). For PDFs use membox_pdf_show/search/open.",
     parameters: Type.Object({
       selector: Type.String({ description: "Document selector" }),
       maxChars: Type.Optional(Type.Integer({ description: "Truncate output (default 6000)", minimum: 500 })),
@@ -597,9 +613,230 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
+  // ── PDF management ─────────────────────────────────────────────────────
+  // These are intentionally thin adapters over `mm pdf ...`. The CLI remains
+  // the authority for validation, metadata persistence, trash, and opening.
+
+  pi.registerTool({
+    name: "membox_pdf_import",
+    label: "Import PDF into membox",
+    description:
+      "Copy one local PDF into membox's managed PDF directory and index its metadata and extractable text. Wraps `mm pdf import`. Requires confirmation.",
+    parameters: Type.Object({
+      source: Type.String({ description: "Path to the source .pdf file" }),
+      destination: Type.Optional(Type.String({ description: "Optional managed PDF directory; defaults to ~/Documents/membox-pdfs" })),
+      title: Type.Optional(Type.String({ description: "Optional searchable title override" })),
+      authors: Type.Optional(Type.String({ description: "Optional searchable authors" })),
+      year: Type.Optional(Type.Integer({ description: "Optional four-digit publication year", minimum: 1000, maximum: 9999 })),
+      keywords: Type.Optional(Type.String({ description: "Optional searchable keywords" })),
+    }),
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      const target = params.destination || "~/Documents/membox-pdfs";
+      const ok = await ctx.ui.confirm(
+        "Import PDF into membox?",
+        `${params.source}\n→ ${target}\n\nThe source is copied; SQLite stores metadata/index data, not the PDF binary.`,
+      );
+      if (!ok) {
+        return { content: [{ type: "text", text: "PDF import cancelled." }], details: { cancelled: true } };
+      }
+      const args = ["pdf", "import", params.source, "--json"];
+      if (params.destination) args.push("--to", params.destination);
+      if (params.title) args.push("--title", params.title);
+      if (params.authors) args.push("--authors", params.authors);
+      if (params.year !== undefined) args.push("--year", String(params.year));
+      if (params.keywords) args.push("--keywords", params.keywords);
+      const result = await runMmJson<PDFImportOutput>(args, 120_000, signal);
+      return {
+        content: [{ type: "text", text: `Imported ${result.document.title || result.document.relative_path} → ${result.document.id}\n${result.path}` }],
+        details: result,
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "membox_pdf_list",
+    label: "List membox PDFs",
+    description: "List indexed PDF documents and searchable metadata. Wraps `mm pdf list --json`.",
+    parameters: Type.Object({
+      limit: Type.Optional(Type.Integer({ description: "Maximum PDFs (default 50)", minimum: 1, maximum: 200 })),
+      include_unavailable: Type.Optional(Type.Boolean({ description: "Include missing and untracked PDFs" })),
+    }),
+    async execute(_toolCallId, params, signal) {
+      const args = ["pdf", "list", "--json", "--limit", String(params.limit ?? 50)];
+      if (params.include_unavailable) args.push("--all");
+      const documents = await runMmJson<DocRecord[]>(args, 30_000, signal);
+      const rows = documents.map((doc) => {
+        const metadata = [doc.authors, doc.year, doc.page_count ? `${doc.page_count} pages` : ""].filter(Boolean).join(" · ");
+        return `- ${doc.id.slice(-4)} ${doc.title || doc.relative_path}${metadata ? ` — ${metadata}` : ""}\n  ${doc.path}`;
+      });
+      return {
+        content: [{ type: "text", text: rows.length ? rows.join("\n") : "No PDFs." }],
+        details: { count: documents.length, documents },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "membox_pdf_search",
+    label: "Search membox PDFs",
+    description: "Search PDF title, authors, year, keywords, path, and extracted text. Wraps `mm pdf search --json`.",
+    parameters: Type.Object({
+      query: Type.String({ description: "Search query" }),
+      limit: Type.Optional(Type.Integer({ description: "Maximum results (default 20)", minimum: 1, maximum: 50 })),
+    }),
+    async execute(_toolCallId, params, signal) {
+      const hits = await runMmJson<PDFSearchHit[]>([
+        "pdf", "search", params.query, "--json", "--limit", String(params.limit ?? 20),
+      ], 30_000, signal);
+      const rows = hits.map((hit) =>
+        `- ${hit.document_id.slice(-4)} ${hit.title}\n  ${hit.path}${hit.snippet ? `\n  ${hit.snippet.replace(/\s+/g, " ").slice(0, 300)}` : ""}`,
+      );
+      return {
+        content: [{ type: "text", text: rows.length ? rows.join("\n") : "No PDF hits." }],
+        details: { count: hits.length, hits },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "membox_pdf_show",
+    label: "Show membox PDF",
+    description: "Show one PDF's stable UUID, path, status, metadata, size, and SHA-256. Wraps `mm pdf show --json`.",
+    parameters: Type.Object({
+      selector: Type.String({ description: "PDF selector: short ID or full UUID" }),
+    }),
+    async execute(_toolCallId, params, signal) {
+      const doc = await runMmJson<DocRecord>(["pdf", "show", params.selector, "--json"], 10_000, signal);
+      return {
+        content: [{ type: "text", text: JSON.stringify(doc, null, 2) }],
+        details: doc,
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "membox_pdf_update",
+    label: "Update membox PDF metadata",
+    description:
+      "Update searchable PDF catalog metadata without rewriting binary PDF bytes. Wraps `mm pdf update`. Requires confirmation.",
+    parameters: Type.Object({
+      selector: Type.String({ description: "PDF selector: short ID or full UUID" }),
+      title: Type.Optional(Type.String({ description: "New title; empty resets to filename" })),
+      authors: Type.Optional(Type.String({ description: "New authors; empty clears" })),
+      year: Type.Optional(Type.Integer({ description: "Four-digit publication year, or 0 to clear", minimum: 0, maximum: 9999 })),
+      keywords: Type.Optional(Type.String({ description: "New keywords; empty clears" })),
+    }),
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      const changes = [
+        params.title !== undefined ? `title=${JSON.stringify(params.title)}` : "",
+        params.authors !== undefined ? `authors=${JSON.stringify(params.authors)}` : "",
+        params.year !== undefined ? `year=${params.year}` : "",
+        params.keywords !== undefined ? `keywords=${JSON.stringify(params.keywords)}` : "",
+      ].filter(Boolean);
+      if (changes.length === 0) throw new Error("At least one PDF metadata field is required");
+      const ok = await ctx.ui.confirm("Update PDF metadata?", `${params.selector}\n${changes.join("\n")}`);
+      if (!ok) {
+        return { content: [{ type: "text", text: "PDF metadata update cancelled." }], details: { cancelled: true } };
+      }
+      const args = ["pdf", "update", params.selector, "--json"];
+      if (params.title !== undefined) args.push("--title", params.title);
+      if (params.authors !== undefined) args.push("--authors", params.authors);
+      if (params.year !== undefined) args.push("--year", String(params.year));
+      if (params.keywords !== undefined) args.push("--keywords", params.keywords);
+      const doc = await runMmJson<DocRecord>(args, 30_000, signal);
+      return {
+        content: [{ type: "text", text: `Updated PDF metadata for ${doc.title || doc.id} (${doc.id})` }],
+        details: doc,
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "membox_pdf_open",
+    label: "Open membox PDF",
+    description: "Open an indexed PDF with the operating system viewer (`open` on macOS). Wraps `mm pdf open`.",
+    parameters: Type.Object({
+      selector: Type.String({ description: "PDF selector: short ID or full UUID" }),
+    }),
+    async execute(_toolCallId, params, signal) {
+      await runMm(["pdf", "open", params.selector], 30_000, signal);
+      return { content: [{ type: "text", text: `Opened PDF ${params.selector}.` }], details: { selector: params.selector } };
+    },
+  });
+
+  pi.registerTool({
+    name: "membox_pdf_rename",
+    label: "Rename membox PDF",
+    description: "Rename a PDF while preserving its UUID; optionally update its searchable title. Wraps `mm pdf rename`. Requires confirmation.",
+    parameters: Type.Object({
+      selector: Type.String({ description: "PDF selector: short ID or full UUID" }),
+      new_filename: Type.String({ description: "New filename ending in .pdf" }),
+      title: Type.Optional(Type.String({ description: "Optional new searchable title" })),
+    }),
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      const ok = await ctx.ui.confirm("Rename PDF?", `${params.selector}\n→ ${params.new_filename}${params.title ? `\ntitle: ${params.title}` : ""}`);
+      if (!ok) {
+        return { content: [{ type: "text", text: "PDF rename cancelled." }], details: { cancelled: true } };
+      }
+      const args = ["pdf", "rename", params.selector, params.new_filename, "--json"];
+      if (params.title !== undefined) args.push("--title", params.title);
+      const result = await runMmJson<{ document_id: string; path: string; title?: string }>(args, 30_000, signal);
+      return {
+        content: [{ type: "text", text: `Renamed PDF ${result.document_id}: ${result.path}` }],
+        details: result,
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "membox_pdf_delete",
+    label: "Delete membox PDF (soft)",
+    description: "Move an indexed PDF to membox trash. It remains restorable. Wraps `mm pdf delete`. Requires confirmation.",
+    parameters: Type.Object({
+      selector: Type.String({ description: "PDF selector: short ID or full UUID" }),
+    }),
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      const doc = await runMmJson<DocRecord>(["pdf", "show", params.selector, "--json"], 10_000, signal);
+      const ok = await ctx.ui.confirm("Delete PDF?", `Move to trash?\n${doc.title || doc.relative_path}\n${doc.path}`);
+      if (!ok) {
+        return { content: [{ type: "text", text: "PDF deletion cancelled." }], details: { cancelled: true } };
+      }
+      const result = await runMmJson<{ document_id: string; path: string; trashed: boolean }>(
+        ["pdf", "delete", params.selector, "--json"], 30_000, signal,
+      );
+      return {
+        content: [{ type: "text", text: `Trashed PDF ${result.document_id}: ${result.path}` }],
+        details: result,
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "membox_pdf_restore",
+    label: "Restore membox PDF",
+    description: "Restore a PDF from membox trash to its original location. Wraps `mm pdf restore`. Requires confirmation.",
+    parameters: Type.Object({
+      selector: Type.String({ description: "PDF selector: short ID or full UUID" }),
+    }),
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      const doc = await runMmJson<DocRecord>(["pdf", "show", params.selector, "--json"], 10_000, signal);
+      const ok = await ctx.ui.confirm("Restore PDF?", `${doc.title || doc.relative_path}\n${doc.path}`);
+      if (!ok) {
+        return { content: [{ type: "text", text: "PDF restore cancelled." }], details: { cancelled: true } };
+      }
+      const result = await runMmJson<{ document_id: string; path: string }>(
+        ["pdf", "restore", params.selector, "--json"], 30_000, signal,
+      );
+      return {
+        content: [{ type: "text", text: `Restored PDF ${result.document_id}: ${result.path}` }],
+        details: result,
+      };
+    },
+  });
+
   // ── path & index management ────────────────────────────────────────────
-  // Wrap `mm path add/remove/list/scan` and `mm index status`. The doc CRUD
-  // tools above intentionally leave catalog admin out; these cover it.
+  // Wrap `mm path add/remove/list/scan` and `mm index status`. The document
+  // and PDF CRUD tools above intentionally leave catalog admin out.
 
   function formatScan(s: {
     paths?: number; files?: number; added?: number; updated?: number;
@@ -634,7 +871,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "membox_path_add",
     label: "Add a membox scan path",
-    description: "Add a directory to membox's scan paths and scan it immediately. Use when the user wants membox to index a new folder of Markdown files. Relative paths resolve against the current working directory.",
+    description: "Add a directory to membox's scan paths and scan it immediately. Use when the user wants membox to index a new folder of Markdown or PDF files. Relative paths resolve against the current working directory.",
     parameters: Type.Object({
       directory: Type.String({ description: "Directory to add (absolute or relative path)" }),
     }),

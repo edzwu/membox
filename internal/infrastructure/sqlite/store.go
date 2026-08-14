@@ -101,6 +101,12 @@ CREATE TABLE IF NOT EXISTS document_index (
     document_id TEXT PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
     title TEXT NOT NULL DEFAULT '',
     summary TEXT NOT NULL DEFAULT '',
+    media_type TEXT NOT NULL DEFAULT 'text/markdown',
+    metadata_overrides INTEGER NOT NULL DEFAULT 0,
+    authors TEXT NOT NULL DEFAULT '',
+    publication_year INTEGER NOT NULL DEFAULT 0,
+    keywords TEXT NOT NULL DEFAULT '',
+    page_count INTEGER NOT NULL DEFAULT 0,
     mtime INTEGER NOT NULL DEFAULT 0,
     size INTEGER NOT NULL DEFAULT 0,
     sha256 TEXT NOT NULL DEFAULT '',
@@ -234,6 +240,12 @@ CREATE TABLE IF NOT EXISTS document_heads (
 		sql  string
 	}{
 		{"summary", `ALTER TABLE document_index ADD COLUMN summary TEXT NOT NULL DEFAULT ''`},
+		{"media_type", `ALTER TABLE document_index ADD COLUMN media_type TEXT NOT NULL DEFAULT 'text/markdown'`},
+		{"metadata_overrides", `ALTER TABLE document_index ADD COLUMN metadata_overrides INTEGER NOT NULL DEFAULT 0`},
+		{"authors", `ALTER TABLE document_index ADD COLUMN authors TEXT NOT NULL DEFAULT ''`},
+		{"publication_year", `ALTER TABLE document_index ADD COLUMN publication_year INTEGER NOT NULL DEFAULT 0`},
+		{"keywords", `ALTER TABLE document_index ADD COLUMN keywords TEXT NOT NULL DEFAULT ''`},
+		{"page_count", `ALTER TABLE document_index ADD COLUMN page_count INTEGER NOT NULL DEFAULT 0`},
 		{"source_created_at", `ALTER TABLE document_index ADD COLUMN source_created_at INTEGER`},
 		{"source_updated_at", `ALTER TABLE document_index ADD COLUMN source_updated_at INTEGER`},
 	}

@@ -1,7 +1,9 @@
 package membox_test
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -420,4 +422,112 @@ func TestRenameDocumentKeepsUUID(t *testing.T) {
 	if _, err := box.RenameDocument(ctx, membox.RenameDocumentCommand{Selector: id, NewFilename: "renamed.txt"}); err == nil {
 		t.Fatal("rename to a non-Markdown extension should fail")
 	}
+}
+
+func TestPDFImportMetadataSearchRenameDeleteAndRestore(t *testing.T) {
+	ctx := context.Background()
+	home, pdfRoot, sourceDir := t.TempDir(), t.TempDir(), t.TempDir()
+	source := filepath.Join(sourceDir, "fixture.pdf")
+	if err := os.WriteFile(source, testPDFBytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	box, err := membox.Open(membox.Config{Home: home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer box.Close()
+
+	imported, err := box.ImportPDF(ctx, membox.ImportPDFCommand{SourcePath: source, DestinationRoot: pdfRoot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if imported.Document.MediaType != "application/pdf" || imported.Document.Title != "Fixture Paper" ||
+		imported.Document.Authors != "Ada Lovelace" || imported.Document.Year != 2024 || imported.Document.PageCount != 1 {
+		t.Fatalf("unexpected imported PDF metadata: %+v", imported.Document)
+	}
+	if imported.Path == source {
+		t.Fatal("import did not copy the PDF into its managed root")
+	}
+	if _, err := os.Stat(imported.Path); err != nil {
+		t.Fatalf("managed PDF missing: %v", err)
+	}
+
+	hits, err := box.SearchDocuments(ctx, membox.SearchDocumentsQuery{Query: "searchable", Limit: 10, MediaType: "application/pdf"})
+	if err != nil || len(hits) != 1 || hits[0].DocumentID != imported.Document.ID {
+		t.Fatalf("PDF extracted-text search failed: hits=%+v err=%v", hits, err)
+	}
+	title, authors, keywords, year := "Attention Systems", "Grace Hopper", "gpu kernels", 2025
+	updated, err := box.UpdatePDFMetadata(ctx, membox.UpdatePDFMetadataCommand{
+		Selector: imported.Document.ID, Title: &title, Authors: &authors, Keywords: &keywords, Year: &year,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Title != title || updated.Authors != authors || updated.Year != year || updated.Keywords != keywords {
+		t.Fatalf("PDF metadata update failed: %+v", updated)
+	}
+	if _, err := box.ScanPaths(ctx, membox.ScanPathsCommand{}); err != nil {
+		t.Fatal(err)
+	}
+	rescanned, err := box.GetDocument(ctx, membox.GetDocumentQuery{Selector: imported.Document.ID})
+	if err != nil || rescanned.Title != title || rescanned.Authors != authors {
+		t.Fatalf("catalog metadata did not survive scan: %+v err=%v", rescanned, err)
+	}
+	empty, zero := "", 0
+	if _, err := box.UpdatePDFMetadata(ctx, membox.UpdatePDFMetadataCommand{
+		Selector: imported.Document.ID, Authors: &empty, Keywords: &empty, Year: &zero,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := box.ScanPaths(ctx, membox.ScanPathsCommand{}); err != nil {
+		t.Fatal(err)
+	}
+	cleared, err := box.GetDocument(ctx, membox.GetDocumentQuery{Selector: imported.Document.ID})
+	if err != nil || cleared.Authors != "" || cleared.Keywords != "" || cleared.Year != 0 {
+		t.Fatalf("cleared PDF metadata did not survive scan: %+v err=%v", cleared, err)
+	}
+
+	renamed, err := box.RenameDocument(ctx, membox.RenameDocumentCommand{Selector: imported.Document.ID, NewFilename: "renamed.pdf"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(renamed.Path) != "renamed.pdf" || renamed.Title != title {
+		t.Fatalf("unexpected PDF rename: %+v", renamed)
+	}
+	deleted, err := box.DeleteDocument(ctx, membox.DeleteDocumentCommand{Selector: imported.Document.ID})
+	if err != nil || !deleted.Trashed {
+		t.Fatalf("deleting PDF: %+v err=%v", deleted, err)
+	}
+	restored, err := box.RestoreTrashedDocument(ctx, membox.RestoreDocumentCommand{Selector: imported.Document.ID})
+	if err != nil || filepath.Base(restored.Path) != "renamed.pdf" {
+		t.Fatalf("restoring PDF: %+v err=%v", restored, err)
+	}
+}
+
+func testPDFBytes() []byte {
+	objects := []string{
+		`<< /Type /Catalog /Pages 2 0 R >>`,
+		`<< /Type /Pages /Kids [3 0 R] /Count 1 >>`,
+		`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>`,
+		`<< /Length 65 >>
+stream
+BT /F1 18 Tf 72 720 Td (Flash Attention searchable PDF body) Tj ET
+endstream`,
+		`<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>`,
+		`<< /Title (Fixture Paper) /Author (Ada Lovelace) /Keywords (attention transformer) /CreationDate (D:20240801000000Z) >>`,
+	}
+	var output bytes.Buffer
+	output.WriteString("%PDF-1.4\n")
+	offsets := make([]int, len(objects)+1)
+	for index, object := range objects {
+		offsets[index+1] = output.Len()
+		fmt.Fprintf(&output, "%d 0 obj\n%s\nendobj\n", index+1, object)
+	}
+	xref := output.Len()
+	fmt.Fprintf(&output, "xref\n0 %d\n0000000000 65535 f \n", len(objects)+1)
+	for index := 1; index <= len(objects); index++ {
+		fmt.Fprintf(&output, "%010d 00000 n \n", offsets[index])
+	}
+	fmt.Fprintf(&output, "trailer\n<< /Size %d /Root 1 0 R /Info 6 0 R >>\nstartxref\n%d\n%%%%EOF\n", len(objects)+1, xref)
+	return output.Bytes()
 }

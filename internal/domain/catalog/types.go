@@ -13,7 +13,7 @@ type IndexedPathID int64
 
 type DocumentStatus string
 
-// TrashDir is the per-path-root directory holding soft-deleted Markdown.
+// TrashDir is the per-path-root directory holding soft-deleted documents.
 // Scanners skip it and queries hide its members; documents keep their UUID,
 // relations, and index entries until purged, so a restore is a file move.
 const TrashDir = ".membox-trash"
@@ -62,25 +62,44 @@ type ContentFingerprint struct {
 
 type FileKey string
 
+const (
+	MetadataTitleOverride = 1 << iota
+	MetadataAuthorsOverride
+	MetadataYearOverride
+	MetadataKeywordsOverride
+)
+
 type IndexState struct {
-	Title           string
-	Summary         string
-	MTime           int64
-	Size            int64
-	SHA256          string
-	IndexedAt       time.Time
-	SourceCreatedAt time.Time
-	SourceUpdatedAt time.Time
+	Title             string
+	Summary           string
+	MediaType         string
+	MetadataOverrides int
+	Authors           string
+	Year              int
+	Keywords          string
+	PageCount         int
+	MTime             int64
+	Size              int64
+	SHA256            string
+	IndexedAt         time.Time
+	SourceCreatedAt   time.Time
+	SourceUpdatedAt   time.Time
 }
 
 type Observation struct {
-	Location Location
-	FileKey  FileKey
-	Title    string
-	MTime    int64
-	Size     int64
-	SHA256   string
-	Body     []byte
+	Location   Location
+	FileKey    FileKey
+	Title      string
+	MediaType  string
+	Authors    string
+	Year       int
+	Keywords   string
+	PageCount  int
+	MTime      int64
+	Size       int64
+	SHA256     string
+	Body       []byte // authoritative file bytes
+	SearchText []byte // rebuildable text projection; Body for Markdown
 }
 
 type Document struct {
@@ -108,8 +127,10 @@ func NewDocument(id DocumentID, observation Observation, now time.Time) (*Docume
 		FileKey:  observation.FileKey,
 		Status:   DocumentActive,
 		Index: IndexState{
-			Title: observation.Title, MTime: observation.MTime, Size: observation.Size,
-			SHA256: observation.SHA256, IndexedAt: now, SourceCreatedAt: fileTime, SourceUpdatedAt: fileTime,
+			Title: observation.Title, MediaType: normalizedMediaType(observation.MediaType), Authors: observation.Authors,
+			Year: observation.Year, Keywords: observation.Keywords, PageCount: observation.PageCount,
+			MTime: observation.MTime, Size: observation.Size, SHA256: observation.SHA256, IndexedAt: now,
+			SourceCreatedAt: fileTime, SourceUpdatedAt: fileTime,
 		},
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -131,6 +152,7 @@ func RehydrateDocument(id DocumentID, location Location, fileKey FileKey, status
 	if createdAt.IsZero() || updatedAt.IsZero() {
 		return nil, errors.New("document timestamps are required")
 	}
+	index.MediaType = normalizedMediaType(index.MediaType)
 	return &Document{ID: id, Location: location, FileKey: fileKey, Status: status, Index: index, CreatedAt: createdAt, UpdatedAt: updatedAt, Pinned: pinned}, nil
 }
 
@@ -200,11 +222,38 @@ func (d *Document) applyObservation(observation Observation, now time.Time) {
 	}
 	d.FileKey = observation.FileKey
 	d.Status = DocumentActive
+	mediaType := normalizedMediaType(observation.MediaType)
+	title, authors, year, keywords := observation.Title, observation.Authors, observation.Year, observation.Keywords
+	// PDF metadata can be edited in membox without rewriting the binary. Keep
+	// those catalog values across scans; page count remains extractor-owned.
+	if mediaType == "application/pdf" && d.Index.MediaType == mediaType {
+		if d.Index.MetadataOverrides&MetadataTitleOverride != 0 {
+			title = d.Index.Title
+		}
+		if d.Index.MetadataOverrides&MetadataAuthorsOverride != 0 {
+			authors = d.Index.Authors
+		}
+		if d.Index.MetadataOverrides&MetadataYearOverride != 0 {
+			year = d.Index.Year
+		}
+		if d.Index.MetadataOverrides&MetadataKeywordsOverride != 0 {
+			keywords = d.Index.Keywords
+		}
+	}
 	d.Index = IndexState{
-		Title: observation.Title, Summary: d.Index.Summary, MTime: observation.MTime, Size: observation.Size,
+		Title: title, Summary: d.Index.Summary, MediaType: mediaType, MetadataOverrides: d.Index.MetadataOverrides,
+		Authors: authors, Year: year, Keywords: keywords, PageCount: observation.PageCount, MTime: observation.MTime, Size: observation.Size,
 		SHA256: observation.SHA256, IndexedAt: now, SourceCreatedAt: sourceCreatedAt, SourceUpdatedAt: sourceUpdatedAt,
 	}
 	d.UpdatedAt = now
+}
+
+func normalizedMediaType(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "text/markdown"
+	}
+	return value
 }
 
 func validateObservation(observation Observation) error {

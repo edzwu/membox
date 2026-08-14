@@ -1,8 +1,9 @@
 # membox-doc — pi agent extension
 
-Wraps the `mm doc` CLI as a [pi](https://github.com/earendil-works/pi) coding-agent
-extension: the agent can resolve, search, read, create, rename, and trash membox
-documents, and — when toggled on — short IDs like `11e8` in your messages are
+Wraps the `mm doc` and `mm pdf` CLIs as a [pi](https://github.com/earendil-works/pi) coding-agent
+extension: the agent can operate Markdown documents and import, search, inspect,
+update, open, rename, trash, and restore PDFs. When toggled on, short IDs like
+`11e8` in your messages are
 auto-resolved to the concrete file before the model sees them.
 
 ## Install
@@ -62,19 +63,29 @@ also provide it explicitly:
 |---|---|---|
 | `membox_doc_resolve` | `mm doc show --json` | short ID / UUID / path → file |
 | `membox_doc_search` | `mm doc search --json` | full-text over titles + bodies |
-| `membox_doc_cat` | `mm doc cat` | read full content (truncatable) |
+| `membox_doc_cat` | `mm doc cat` | read Markdown content (truncatable; use PDF tools for PDFs) |
 | `membox_doc_list` | `mm doc list --json` | optional title/path filter |
 | `membox_doc_create` | write file + `mm path scan` | any extension (not just .md) |
 | `membox_doc_rename` | `mm doc rename` | keeps the UUID |
 | `membox_doc_delete` | `mm doc delete` | soft delete (trash) + confirm |
+| `membox_pdf_import` | `mm pdf import --json` | copy into managed PDF root + index; confirm |
+| `membox_pdf_list` | `mm pdf list --json` | list PDF metadata |
+| `membox_pdf_search` | `mm pdf search --json` | metadata + extracted-text search |
+| `membox_pdf_show` | `mm pdf show --json` | identity, metadata, path, hash |
+| `membox_pdf_update` | `mm pdf update --json` | update catalog metadata; confirm |
+| `membox_pdf_open` | `mm pdf open` | system viewer (`open` on macOS) |
+| `membox_pdf_rename` | `mm pdf rename --json` | preserve UUID; confirm |
+| `membox_pdf_delete` | `mm pdf delete --json` | soft delete; confirm |
+| `membox_pdf_restore` | `mm pdf restore --json` | restore original location; confirm |
 | `membox_resource_ingest` | Companion `/api/resources/ingest` | deterministic URL capture into Membox |
 | `membox_resource_list` | Companion `/api/resources` | knowledge-value ranking |
 | `membox_resource_assess` | Companion `/api/resources/assess` | H/M/L + score + reason |
 | `membox_resource_scan` | Companion `/api/resources/scan` | review cursor |
 | `membox_video_summarize` | `mm video summarize` → `mmd` → `echo-bp` | download one lecture, summarize it, and upsert `<course>-lec<N>.md` |
 
-All tools talk JSON to the `mm` CLI, so any new `mm doc` subcommand can be
-exposed by adding a `pi.registerTool` wrapper here.
+Document and PDF tools call the corresponding `mm doc` / `mm pdf` CLI commands;
+resource tools use the Companion API. PDF binaries remain filesystem-authoritative
+under the managed PDF root and are never read or written directly by the extension.
 
 `membox_video_summarize` additionally requires `mmd` to be running for the same
 home (`MEMBOX_HOME` or `--home`). It resolves echo-bp from `$MMD_EBP_BIN`, then

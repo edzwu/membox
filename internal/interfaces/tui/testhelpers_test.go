@@ -21,16 +21,21 @@ func (fakeLauncher) OpenCommand(context.Context, string) (*exec.Cmd, error) {
 }
 
 type fakeApp struct {
-	resolved      int
-	pins          map[string]bool
-	viewer        string
-	model         string
-	mainPath      string
-	webOpened     []string
-	scanCount     int
-	graph         membox.DocumentGraphView
-	searchResults []membox.SearchResult
-	renamedTo     string
+	resolved         int
+	pins             map[string]bool
+	viewer           string
+	model            string
+	mainPath         string
+	webOpened        []string
+	scanCount        int
+	graph            membox.DocumentGraphView
+	searchResults    []membox.SearchResult
+	renamedTo        string
+	previewPath      string
+	readBody         []byte
+	readCount        int
+	pdfTitle         string
+	pdfTitleSelector string
 
 	// Web Companion control knobs for tests.
 	webRunning      bool
@@ -71,11 +76,19 @@ func (f *fakeApp) SummarizeDocument(_ context.Context, selector string) (membox.
 	return membox.DocumentView{ID: selector, Summary: "fake summary"}, nil
 }
 func (f *fakeApp) ReadDocument(context.Context, membox.ReadDocumentQuery) ([]byte, error) {
+	f.readCount++
+	if f.readBody != nil {
+		return f.readBody, nil
+	}
 	return []byte("body"), nil
 }
-func (f *fakeApp) ResolveDocumentLocation(context.Context, membox.ResolveLocationQuery) (membox.LocationView, error) {
+func (f *fakeApp) ResolveDocumentLocation(_ context.Context, query membox.ResolveLocationQuery) (membox.LocationView, error) {
 	f.resolved++
-	return membox.LocationView{DocumentID: "019-alpha", Path: "/tmp/alpha.md", Status: "active"}, nil
+	path := f.previewPath
+	if path == "" {
+		path = "/tmp/alpha.md"
+	}
+	return membox.LocationView{DocumentID: query.Selector, Path: path, Status: "active"}, nil
 }
 func (f *fakeApp) ReindexDocument(context.Context, membox.ReindexDocumentCommand) error { return nil }
 func (f *fakeApp) DeleteDocument(_ context.Context, command membox.DeleteDocumentCommand) (membox.DeleteDocumentResult, error) {
@@ -87,6 +100,13 @@ func (f *fakeApp) TrashSummary(_ context.Context) (membox.TrashSummaryResult, er
 func (f *fakeApp) RenameDocument(_ context.Context, command membox.RenameDocumentCommand) (membox.RenameDocumentResult, error) {
 	f.renamedTo = command.NewFilename
 	return membox.RenameDocumentResult{DocumentID: command.Selector, Path: "/tmp/renamed.md"}, nil
+}
+func (f *fakeApp) UpdatePDFMetadata(_ context.Context, command membox.UpdatePDFMetadataCommand) (membox.DocumentView, error) {
+	f.pdfTitleSelector = command.Selector
+	if command.Title != nil {
+		f.pdfTitle = *command.Title
+	}
+	return membox.DocumentView{ID: command.Selector, Path: "/tmp/original.pdf", Title: f.pdfTitle, MediaType: "application/pdf"}, nil
 }
 func (f *fakeApp) CreateNote(_ context.Context, command membox.CreateNoteCommand) (membox.CreateNoteResult, error) {
 	document := membox.DocumentView{ID: "new-note", Title: command.Title, Path: "/tmp/new-note.md", RelativePath: "new-note.md", Status: "active"}

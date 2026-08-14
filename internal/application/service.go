@@ -13,7 +13,7 @@ import (
 
 type Service struct {
 	store    port.CatalogStore
-	scanner  port.MarkdownScanner
+	scanner  port.DocumentScanner
 	reader   port.ContentReader
 	writer   port.ContentWriter
 	ids      port.IDGenerator
@@ -25,7 +25,7 @@ type Service struct {
 	mutations port.MutationLocker
 }
 
-func NewService(store port.CatalogStore, scanner port.MarkdownScanner, reader port.ContentReader, writer port.ContentWriter, ids port.IDGenerator, clock port.Clock, history port.GitHistory) *Service {
+func NewService(store port.CatalogStore, scanner port.DocumentScanner, reader port.ContentReader, writer port.ContentWriter, ids port.IDGenerator, clock port.Clock, history port.GitHistory) *Service {
 	return &Service{store: store, scanner: scanner, reader: reader, writer: writer, ids: ids, clock: clock, history: history}
 }
 
@@ -48,6 +48,11 @@ func (s *Service) prepareSaveContent(ctx context.Context, save *port.ScanSave) e
 	}
 	if save.Document == nil {
 		return errors.New("cannot publish content for nil document")
+	}
+	// PDFs remain filesystem-authoritative in the current local catalog. Do
+	// not duplicate large binaries into the Markdown version object store.
+	if save.Document.Index.MediaType == "application/pdf" {
+		return nil
 	}
 	object, err := s.contents.Put(ctx, save.Body)
 	if err != nil {
@@ -298,7 +303,7 @@ func (s *Service) scanOne(ctx context.Context, indexedPath *catalog.IndexedPath)
 			if err := document.Observe(observation, now); err != nil {
 				return report, err
 			}
-			saves = append(saves, port.ScanSave{Document: document, Body: observation.Body, Reindex: true})
+			saves = append(saves, port.ScanSave{Document: document, Body: observation.Body, SearchText: observation.SearchText, Reindex: true})
 			if unchanged {
 				report.Unchanged++
 			} else {
@@ -332,7 +337,7 @@ func (s *Service) scanOne(ctx context.Context, indexedPath *catalog.IndexedPath)
 		if err := relocation.Document.Relocate(relocation.Observation.Location, relocation.Observation, now); err != nil {
 			return report, err
 		}
-		saves = append(saves, port.ScanSave{Document: relocation.Document, Body: relocation.Observation.Body, Reindex: true})
+		saves = append(saves, port.ScanSave{Document: relocation.Document, Body: relocation.Observation.Body, SearchText: relocation.Observation.SearchText, Reindex: true})
 		report.Renamed++
 	}
 	for _, document := range reconciled.Missing {
@@ -351,7 +356,7 @@ func (s *Service) scanOne(ctx context.Context, indexedPath *catalog.IndexedPath)
 		if createErr != nil {
 			return report, createErr
 		}
-		saves = append(saves, port.ScanSave{Document: document, Body: observation.Body, Reindex: true})
+		saves = append(saves, port.ScanSave{Document: document, Body: observation.Body, SearchText: observation.SearchText, Reindex: true})
 		report.Added++
 	}
 	report.PossibleRenames = len(reconciled.Candidates)

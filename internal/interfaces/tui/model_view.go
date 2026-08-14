@@ -249,7 +249,7 @@ func (m Model) treePreviewView() string {
 			pin = lipgloss.NewStyle().Foreground(colors.Warning).Bold(true).Render("▌") + " "
 		}
 		uuid := dimStyle.Render(fitWidth(shortID(candidate.document.ID), uuidWidth))
-		filename := fitMiddle(candidate.filename, filenameWidth)
+		filename := fitMiddle(treeItemLabel(candidate), filenameWidth)
 		dates := ""
 		if listWidth >= 72 {
 			created, updated := dateOnly(candidate.document.CreatedAt), dateOnly(candidate.document.UpdatedAt)
@@ -339,7 +339,7 @@ func (m Model) visibleGraphIndices() []int {
 	// Only apply body hits once they belong to the current query; before the
 	// async result arrives the thread keeps showing its cards.
 	fullReady := fullQuery != "" && m.graphSearchQuery == fullQuery && m.graphSearchHits != nil
-	if len(nameFilters) == 0 && len(m.dateFilters) == 0 && !fullReady {
+	if m.mediaScope == mediaScopeAll && len(nameFilters) == 0 && len(m.dateFilters) == 0 && !fullReady {
 		for i := 1; i < len(m.graphCards); i++ {
 			indices = append(indices, i)
 		}
@@ -347,6 +347,9 @@ func (m Model) visibleGraphIndices() []int {
 	}
 	for original, doc := range m.graphCards[1:] {
 		if fullReady && !m.graphSearchHits[doc.ID] {
+			continue
+		}
+		if !matchesMediaScope(doc, m.mediaScope) {
 			continue
 		}
 		candidate := documentItems([]membox.DocumentView{doc})[0]
@@ -718,7 +721,7 @@ func (m Model) commandMenuView() string {
 
 func (m Model) statusBar() string {
 	width := max(20, m.width)
-	left := dimStyle.Render(m.hints()) + "  " + m.webBadge() + m.agentStatusBarBadge()
+	left := dimStyle.Render(m.hints()) + "  " + m.webBadge() + m.agentStatusBarBadge() + m.mediaScopeBadge()
 	right := ""
 	if m.loading {
 		right = m.spinner.View() + " " + right
@@ -783,6 +786,13 @@ func (m Model) statusBar() string {
 	return left + strings.Repeat(" ", padding) + right
 }
 
+func (m Model) mediaScopeBadge() string {
+	if m.mediaScope == "" || m.mediaScope == mediaScopeAll {
+		return ""
+	}
+	return "  " + accentStyle.Render(strings.ToUpper(mediaScopeLabel(m.mediaScope)))
+}
+
 func (m Model) previewLineRange() (first, last, total int) {
 	total = m.preview.TotalLineCount()
 	if total == 0 {
@@ -822,7 +832,46 @@ func (m Model) hints() string {
 	return "? help"
 }
 
-func searchResultItems(items []item, results []membox.SearchResult, dateFilters []dateFilter, nameFilters []textFilter, hideNotes bool) []item {
+func mediaScopeLabel(scope string) string {
+	switch scope {
+	case mediaScopeMarkdown:
+		return "Markdown only"
+	case mediaScopePDF:
+		return "PDF only"
+	case mediaScopeImage:
+		return "Images only"
+	default:
+		return "all documents"
+	}
+}
+
+func matchesMediaScope(document membox.DocumentView, scope string) bool {
+	if scope == "" || scope == mediaScopeAll {
+		return true
+	}
+	mediaType := strings.ToLower(strings.TrimSpace(document.MediaType))
+	extension := strings.ToLower(filepath.Ext(document.Path))
+	if extension == "" {
+		extension = strings.ToLower(filepath.Ext(document.RelativePath))
+	}
+	switch scope {
+	case mediaScopeMarkdown:
+		return mediaType == "text/markdown" || extension == ".md" || extension == ".markdown" || (mediaType == "" && extension == "")
+	case mediaScopePDF:
+		return mediaType == "application/pdf" || extension == ".pdf"
+	case mediaScopeImage:
+		if strings.HasPrefix(mediaType, "image/") {
+			return true
+		}
+		switch extension {
+		case ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".heic", ".avif":
+			return true
+		}
+	}
+	return false
+}
+
+func searchResultItems(items []item, results []membox.SearchResult, dateFilters []dateFilter, nameFilters []textFilter, hideNotes bool, mediaScope string) []item {
 	allowed := make(map[string]bool, len(results))
 	for _, result := range results {
 		allowed[result.DocumentID] = true
@@ -832,7 +881,7 @@ func searchResultItems(items []item, results []membox.SearchResult, dateFilters 
 		if hideNotes && isClippedNote(candidate.filename) {
 			continue
 		}
-		if allowed[candidate.document.ID] && matchesDateFilters(candidate.document, dateFilters) && matchesTextFilters(candidate.title, candidate.filename, candidate.match, nameFilters) {
+		if allowed[candidate.document.ID] && matchesMediaScope(candidate.document, mediaScope) && matchesDateFilters(candidate.document, dateFilters) && matchesTextFilters(candidate.title, candidate.filename, candidate.match, nameFilters) {
 			filtered = append(filtered, candidate)
 		}
 	}
@@ -860,6 +909,18 @@ func documentFilename(document membox.DocumentView) string {
 		return filepath.Base(document.RelativePath)
 	}
 	return filepath.Base(document.Path)
+}
+
+// treeItemLabel keeps Markdown filesystem-authoritative while letting PDFs use
+// their catalog title as a virtual, user-editable name.
+func treeItemLabel(candidate item) string {
+	isPDF := candidate.document.MediaType == "application/pdf" || strings.EqualFold(filepath.Ext(candidate.filename), ".pdf")
+	if isPDF {
+		if title := strings.TrimSpace(candidate.document.Title); title != "" {
+			return title
+		}
+	}
+	return candidate.filename
 }
 
 func displayTitle(title, path string) string {

@@ -1,8 +1,8 @@
 # membox
 
-Local document identity and search for Markdown.
+Local document identity and search for Markdown and PDF.
 
-membox keeps Markdown files as the content authority and stores stable document UUIDs, current locations, metadata, and an FTS5 index in local SQLite. It does not copy or rewrite source Markdown.
+membox keeps managed files as the content authority and stores stable document UUIDs, current locations, metadata, and an FTS5 index in local SQLite. Markdown stays in its registered source directories; imported PDFs are copied to a dedicated filesystem directory rather than into SQLite.
 
 ## Build
 
@@ -30,6 +30,14 @@ go build -o mm ./cmd/mm
 ./mm doc cat <document-id>
 ./mm doc edit <document-id>
 ./mm doc rename <document-id> <new-filename>
+./mm pdf import paper.pdf --title "Paper title" --authors "Author"
+./mm pdf list
+./mm pdf search "attention"
+./mm pdf update <document-id> --keywords "gpu, kernels"
+./mm pdf open <document-id>
+./mm pdf rename <document-id> paper-v2.pdf
+./mm pdf delete <document-id>
+./mm pdf restore <document-id>
 ./mm note new "Online Softmax Intuition" --from <document-id>
 ./mm topic create attention
 ./mm topic add <topic-id> <document-id>
@@ -56,7 +64,13 @@ SHA-256         current byte fingerprint
 SQLite FTS5     rebuildable search projection
 ```
 
-External edits are reflected after `mm path scan`. A conservative scanner preserves identity for unique filesystem-file-key and exact-hash renames; ambiguous matches are never automatically merged.
+External edits are reflected after `mm path scan`. The scanner supports `.md`, `.markdown`, and `.pdf`. A conservative scanner preserves identity for unique filesystem-file-key and exact-hash renames; ambiguous matches are never automatically merged.
+
+## PDF library
+
+`mm pdf import` copies a PDF into `~/Documents/membox-pdfs` by default. Override the destination with `--to`; the chosen directory is remembered and registered as a scan path. PDF bytes remain ordinary filesystem files—SQLite stores only identity, location, SHA-256, extracted metadata, and the rebuildable FTS projection.
+
+Embedded title, author, keywords, publication year, page count, and up to 16 MiB of extracted plain text are indexed. `mm pdf update` changes searchable catalog metadata without rewriting the binary. Rescans preserve these catalog overrides. PDF open/view actions use the operating system opener (`open` on macOS), while delete/restore use the same soft trash and stable UUID model as Markdown.
 
 ## Document dates from Git
 
@@ -88,22 +102,22 @@ Open ranges such as `+2026-07..` and `+..2026-07` are supported. Enter on ordina
 
 `/clear` removes all filter tags; Backspace on an empty input removes the most recently added tag. Esc hides the input without clearing active tags.
 
-The TUI opens in modified-time order: the newest documents come first, and documents without a timestamp last. Outside the filter input, press `s` to toggle back to filename (dictionary) order; changing the sort focuses the new first row. In the tree view, Home and End jump to the first and last rows.
+The TUI opens in modified-time order: the newest documents come first, and documents without a timestamp last. Markdown and PDF files share one tree. Press `ctrl+p` to cycle its media scope through all documents → Markdown → PDF → images; a full-word status badge is shown whenever the scope is not all. The image scope is ready for image documents once image ingest lands. Outside the filter input, press `s` to toggle back to filename (dictionary) order; changing the sort focuses the new first row. In the tree view, Home and End jump to the first and last rows.
 
 Press `p` to toggle the selected document's pinned state. Pinned documents stay visible in a marked, sticky section at the top regardless of scrolling, details height, or the active sort mode, and pins persist across TUI restarts.
 
 Press `ctrl+h` to toggle whether selection notes (`*-note.md`) appear in the list; the preference persists as the `hide notes` setting (also in the settings panel via `ctrl+o`). Press `?` to open the keyboard help overlay.
 
-Press `d` to move the focused Markdown file to the trash after a `y/n` confirmation. This is a soft delete: the file moves into the path's hidden `.membox-trash/` directory and the document keeps its UUID, links, topics, and annotations but disappears from listings, search, graphs, and the Miru annotation DTO. Restore it with `mm trash restore <document-id>`; empty the trash with `mm trash purge` (by default only items older than 30 days, `--all` for everything).
+Press `d` to move the focused document file to the trash after a `y/n` confirmation. This is a soft delete: the file moves into the path's hidden `.membox-trash/` directory and the document keeps its UUID, links, topics, and annotations but disappears from listings, search, graphs, and the Miru annotation DTO. Restore it with `mm trash restore <document-id>`; empty the trash with `mm trash purge` (by default only items older than 30 days, `--all` for everything).
 
 ### Command palette and agent input
 
-The TUI reuses the bottom input field for distinct modes, identified by the colored badge. Open it with Space × 2, then use Ctrl+P to cycle modes:
+The TUI reuses the bottom input field for distinct modes, identified by the colored badge:
 
-- `NAME`: filename/ID filtering
-- `FULL`: full-text search
-- `CMD`: deterministic commands
-- `AGENT`: natural-language prompts (agent backend is not connected yet)
+- Space × 2 opens `NAME` filename/ID filtering; `ctrl+f` toggles name/content search.
+- `:` opens `CMD` deterministic commands.
+- `ctrl+k` opens `AGENT` natural-language prompts.
+- `ctrl+p` keeps its global meaning while the input is focused: cycle the tree's media scope.
 
 In `CMD` mode, press Tab to progressively disclose commands and arguments. Choose a suggestion with ↑/↓ and Enter; Tab inserts it without executing. Supported commands mirror the CLI:
 

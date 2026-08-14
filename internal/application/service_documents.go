@@ -90,6 +90,30 @@ func (s *Service) ReadDocument(ctx context.Context, selector string) ([]byte, er
 	return s.reader.Read(ctx, absolute)
 }
 
+// ReadDocumentText returns user-readable text. Markdown is read directly;
+// PDFs are re-extracted from their filesystem authority instead of exposing
+// binary bytes to agents or summarizers.
+func (s *Service) ReadDocumentText(ctx context.Context, selector string) ([]byte, error) {
+	document, absolute, err := s.ResolveDocument(ctx, selector)
+	if err != nil {
+		return nil, err
+	}
+	if document.Status != catalog.DocumentActive {
+		return nil, fmt.Errorf("document %s is %s at %s", document.ID, document.Status, absolute)
+	}
+	if document.Index.MediaType == "text/markdown" {
+		return s.reader.Read(ctx, absolute)
+	}
+	if document.Index.MediaType != "application/pdf" {
+		return nil, fmt.Errorf("text extraction does not support %s", document.Index.MediaType)
+	}
+	observation, err := s.scanner.ObserveFile(ctx, document.Location, absolute)
+	if err != nil {
+		return nil, err
+	}
+	return observation.SearchText, nil
+}
+
 type ToggleDocumentPinResult struct {
 	DocumentID catalog.DocumentID
 	Pinned     bool
@@ -401,6 +425,9 @@ func (s *Service) SyncDocument(ctx context.Context, selector, body string) (Sync
 	if document.Status != catalog.DocumentActive {
 		return SyncDocumentResult{}, fmt.Errorf("document %s is %s at %s", document.ID, document.Status, absolute)
 	}
+	if document.Index.MediaType != "text/markdown" {
+		return SyncDocumentResult{}, fmt.Errorf("sync text does not support %s documents", document.Index.MediaType)
+	}
 	if strings.TrimSpace(body) == "" {
 		return SyncDocumentResult{}, errors.New("Markdown body is required")
 	}
@@ -414,7 +441,7 @@ func (s *Service) SyncDocument(ctx context.Context, selector, body string) (Sync
 	if err := document.Observe(observation, s.clock.Now()); err != nil {
 		return SyncDocumentResult{}, err
 	}
-	if err := s.saveDocument(ctx, port.ScanSave{Document: document, Body: observation.Body, Reindex: true}); err != nil {
+	if err := s.saveDocument(ctx, port.ScanSave{Document: document, Body: observation.Body, SearchText: observation.SearchText, Reindex: true}); err != nil {
 		return SyncDocumentResult{}, err
 	}
 	return SyncDocumentResult{DocumentID: document.ID, Path: absolute}, nil
@@ -440,7 +467,7 @@ func (s *Service) ReindexDocument(ctx context.Context, selector string) error {
 	if err := document.Observe(observation, s.clock.Now()); err != nil {
 		return err
 	}
-	return s.saveDocument(ctx, port.ScanSave{Document: document, Body: observation.Body, Reindex: true})
+	return s.saveDocument(ctx, port.ScanSave{Document: document, Body: observation.Body, SearchText: observation.SearchText, Reindex: true})
 }
 
 func (s *Service) DeleteDocumentFile(ctx context.Context, selector string) (catalog.Document, string, error) {
@@ -469,7 +496,7 @@ func (s *Service) DeleteDocumentFile(ctx context.Context, selector string) (cata
 	return *document, absolute, nil
 }
 
-// TrashDocumentFile soft-deletes a document: the Markdown file moves into the
+// TrashDocumentFile soft-deletes a document: its source file moves into the
 // path root's hidden trash directory and a trash record hides the document
 // from listings, search, graphs, and annotation DTOs. UUID, relations, index,
 // and FTS entries stay intact so RestoreDocument is a plain move back.
@@ -644,10 +671,9 @@ type RenameDocumentResult struct {
 // stable UUID, graph links, source URLs, and annotation relations survive
 // untouched because only the location changes.
 //
-// displayTitle, when non-empty, is written into YAML front matter (title:)
-// and the first ATX H1 so the index title, file basename, and body stay
-// aligned. Without this, a UI rename that only moved the file would appear
-// to "snap back" on reopen because extractTitle still read the old H1.
+// For Markdown, displayTitle is written into YAML front matter and the first
+// ATX H1. For PDF, it only updates searchable catalog metadata; binary bytes
+// are never rewritten.
 func (s *Service) RenameDocument(ctx context.Context, selector, newFilename, displayTitle string) (RenameDocumentResult, error) {
 	release, lockErr := s.beginMutation()
 	if lockErr != nil {
@@ -666,12 +692,23 @@ func (s *Service) RenameDocument(ctx context.Context, selector, newFilename, dis
 		strings.ContainsAny(newFilename, "/\\") || strings.HasPrefix(newFilename, ".") {
 		return RenameDocumentResult{}, fmt.Errorf("invalid filename %q", newFilename)
 	}
-	if ext := strings.ToLower(filepath.Ext(newFilename)); ext != ".md" && ext != ".markdown" {
-		return RenameDocumentResult{}, errors.New("renamed files must stay Markdown (.md or .markdown)")
+	ext := strings.ToLower(filepath.Ext(newFilename))
+	isPDF := document.Index.MediaType == "application/pdf"
+	if isPDF {
+		if ext != ".pdf" {
+			return RenameDocumentResult{}, errors.New("renamed PDF files must keep the .pdf extension")
+		}
+	} else if ext != ".md" && ext != ".markdown" {
+		return RenameDocumentResult{}, errors.New("renamed Markdown files must keep .md or .markdown")
 	}
+	requestedTitle := strings.TrimSpace(displayTitle) != ""
 	displayTitle = strings.TrimSpace(displayTitle)
 	if displayTitle == "" {
-		displayTitle = strings.TrimSuffix(newFilename, filepath.Ext(newFilename))
+		if isPDF {
+			displayTitle = document.Index.Title
+		} else {
+			displayTitle = strings.TrimSuffix(newFilename, filepath.Ext(newFilename))
+		}
 	}
 
 	target := absolute
@@ -693,12 +730,14 @@ func (s *Service) RenameDocument(ctx context.Context, selector, newFilename, dis
 	if err != nil {
 		return RenameDocumentResult{}, err
 	}
-	rewritten, changed := rewriteMarkdownDisplayTitle(body, displayTitle)
-	if changed {
-		if err := s.writer.Write(ctx, target, rewritten); err != nil {
-			return RenameDocumentResult{}, err
+	if !isPDF {
+		rewritten, changed := rewriteMarkdownDisplayTitle(body, displayTitle)
+		if changed {
+			if err := s.writer.Write(ctx, target, rewritten); err != nil {
+				return RenameDocumentResult{}, err
+			}
+			body = rewritten
 		}
-		body = rewritten
 	}
 
 	relative := document.Location.RelativePath
@@ -713,9 +752,9 @@ func (s *Service) RenameDocument(ctx context.Context, selector, newFilename, dis
 	if err != nil {
 		return RenameDocumentResult{}, err
 	}
-	// ObserveFile re-reads disk; ensure title matches even if body rewrite
-	// and scanner disagree on edge cases (e.g. title only in code fence).
-	if strings.TrimSpace(observation.Title) == "" || observation.Title != displayTitle {
+	// ObserveFile re-reads disk; ensure an explicit PDF title or rewritten
+	// Markdown title remains authoritative in the catalog.
+	if (!isPDF && observation.Title != displayTitle) || (isPDF && requestedTitle) {
 		observation.Title = displayTitle
 		observation.Body = body
 	}
@@ -728,7 +767,11 @@ func (s *Service) RenameDocument(ctx context.Context, selector, newFilename, dis
 			return RenameDocumentResult{}, err
 		}
 	}
-	if err := s.saveDocument(ctx, port.ScanSave{Document: document, Body: observation.Body, Reindex: true}); err != nil {
+	if isPDF && requestedTitle {
+		document.Index.Title = displayTitle
+		document.Index.MetadataOverrides |= catalog.MetadataTitleOverride
+	}
+	if err := s.saveDocument(ctx, port.ScanSave{Document: document, Body: observation.Body, SearchText: observation.SearchText, Reindex: true}); err != nil {
 		return RenameDocumentResult{}, err
 	}
 	return RenameDocumentResult{DocumentID: document.ID, Path: target, Title: displayTitle}, nil

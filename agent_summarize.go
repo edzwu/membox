@@ -73,7 +73,7 @@ func (b *Box) agentSummarize(ctx context.Context, selector string) (string, erro
 	if document.Status != "active" {
 		return "", fmt.Errorf("document %s is %s at %s", document.ID, document.Status, document.Path)
 	}
-	body, err := b.ReadDocument(ctx, ReadDocumentQuery{Selector: document.ID})
+	body, err := b.ReadDocumentText(ctx, ReadDocumentQuery{Selector: document.ID})
 	if err != nil {
 		return "", err
 	}

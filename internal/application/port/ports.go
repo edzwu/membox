@@ -18,7 +18,7 @@ type ScanResult struct {
 	Issues       []ScanIssue
 }
 
-type MarkdownScanner interface {
+type DocumentScanner interface {
 	Canonicalize(directory string) (string, error)
 	Scan(ctx context.Context, indexedPath catalog.IndexedPath) (ScanResult, error)
 	ObserveFile(
@@ -112,9 +112,10 @@ type ImmutableContentStore interface {
 }
 
 type ScanSave struct {
-	Document *catalog.Document
-	Body     []byte
-	Reindex  bool
+	Document   *catalog.Document
+	Body       []byte // authoritative source bytes (used for immutable versions)
+	SearchText []byte // rebuildable text projection (Markdown body or extracted PDF text)
+	Reindex    bool
 	// Content is set only after Body has been published to immutable storage.
 	// SaveScan/SaveDocument atomically create a Version and advance the head
 	// when this content differs from the current head.

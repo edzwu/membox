@@ -273,7 +273,7 @@ func TestModel_HideNotesFiltersClippedNotes(t *testing.T) {
 	// Search results honor the same setting.
 	results := []membox.SearchResult{{DocumentID: "019-note"}, {DocumentID: "019-doc"}}
 	model.hideNotes = true
-	got := searchResultItems(model.items, results, nil, nil, model.hideNotes)
+	got := searchResultItems(model.items, results, nil, nil, model.hideNotes, model.mediaScope)
 	if len(got) != 1 || got[0].document.ID != "019-doc" {
 		t.Fatalf("search with hide_notes leaked notes: %+v", got)
 	}
@@ -580,6 +580,52 @@ func TestModel_RKeyOpensPrefilledRenameInput(t *testing.T) {
 	}
 	if app.renamedTo != "alpha.md" {
 		t.Fatalf("prefilled rename passed %q, want alpha.md", app.renamedTo)
+	}
+}
+
+func TestModel_RKeyRenamesPDFTitleWithoutMovingFile(t *testing.T) {
+	app := &fakeApp{}
+	model := New(context.Background(), app, fakeLauncher{})
+	model.width, model.height = 100, 30
+	model.resize()
+	model.items = documentItems([]membox.DocumentView{{
+		ID: "pdf-alpha", Title: "Old Library Title", Path: "/tmp/original.pdf", RelativePath: "original.pdf", MediaType: "application/pdf",
+	}})
+	model.refreshFilter()
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	model = updated.(Model)
+	if got, want := model.input.Value(), "rename Old Library Title"; got != want {
+		t.Fatalf("PDF r should prefill virtual title %q, got %q", want, got)
+	}
+	model.input.SetValue("rename New Library Title")
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	message := command()
+	if batch, ok := message.(tea.BatchMsg); ok {
+		message = batch[1]()
+	}
+	renamed, ok := message.(renamedMsg)
+	if !ok || !renamed.virtual {
+		t.Fatalf("expected virtual PDF renamedMsg, got %#v", message)
+	}
+	if app.pdfTitleSelector != "pdf-alpha" || app.pdfTitle != "New Library Title" {
+		t.Fatalf("PDF metadata update = %q/%q", app.pdfTitleSelector, app.pdfTitle)
+	}
+	if app.renamedTo != "" {
+		t.Fatalf("PDF virtual rename moved filesystem file to %q", app.renamedTo)
+	}
+
+	updated, _ = model.Update(renamed)
+	model = updated.(Model)
+	if model.items[0].document.Path != "/tmp/original.pdf" {
+		t.Fatalf("PDF path changed to %q", model.items[0].document.Path)
+	}
+	if label := treeItemLabel(model.items[0]); label != "New Library Title" {
+		t.Fatalf("tree label = %q, want virtual title", label)
+	}
+	if model.statusMessage != "Renamed title: New Library Title" {
+		t.Fatalf("status after PDF rename = %q", model.statusMessage)
 	}
 }
 

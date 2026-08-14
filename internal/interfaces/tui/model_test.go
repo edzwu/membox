@@ -433,32 +433,82 @@ func TestModel_DeleteConfirmationCanBeCanceled(t *testing.T) {
 	}
 }
 
-func TestModel_CtrlPCyclesInputModes(t *testing.T) {
+func TestModel_CtrlPCyclesMediaScope(t *testing.T) {
 	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
-	model = updated.(Model)
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
-	model = updated.(Model)
-	if !model.inputVisible || model.inputMode != inputModeSearch || model.searchMode != searchModeName {
-		t.Fatalf("double space did not open NAME filter: visible=%v input=%s search=%s", model.inputVisible, model.inputMode, model.searchMode)
-	}
+	model.items = documentItems([]membox.DocumentView{
+		{ID: "doc-md", Title: "Markdown", Path: "/tmp/note.md", MediaType: "text/markdown"},
+		{ID: "doc-pdf", Title: "PDF", Path: "/tmp/paper.pdf", MediaType: "application/pdf"},
+		{ID: "doc-image", Title: "Image", Path: "/tmp/diagram.png", MediaType: "image/png"},
+	})
+	model.refreshFilter()
 	for index, expected := range []struct {
-		inputMode  string
-		searchMode string
+		scope string
+		count int
+		badge string
 	}{
-		{inputModeCmd, searchModeName},
-		{inputModeAgent, searchModeName},
-		{inputModeSearch, searchModeName},
+		{mediaScopeMarkdown, 1, "MARKDOWN ONLY"},
+		{mediaScopePDF, 1, "PDF ONLY"},
+		{mediaScopeImage, 1, "IMAGES ONLY"},
+		{mediaScopeAll, 3, ""},
 	} {
-		updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
+		updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
 		model = updated.(Model)
-		if model.inputMode != expected.inputMode || model.searchMode != expected.searchMode {
-			t.Fatalf("cycle %d: got input=%s search=%s, want %s/%s", index, model.inputMode, model.searchMode, expected.inputMode, expected.searchMode)
+		if model.mediaScope != expected.scope || len(model.filtered) != expected.count {
+			t.Fatalf("cycle %d: scope=%s count=%d, want %s/%d", index, model.mediaScope, len(model.filtered), expected.scope, expected.count)
+		}
+		if badge := model.mediaScopeBadge(); expected.badge != "" && !strings.Contains(badge, expected.badge) {
+			t.Fatalf("cycle %d badge=%q, want %q", index, badge, expected.badge)
 		}
 	}
-	status := model.statusBar()
-	if !strings.Contains(status, "? help") {
-		t.Fatalf("status does not show the single help hint: %q", status)
+}
+
+func TestModel_PDFPreviewNeverReadsBinaryIntoTerminal(t *testing.T) {
+	app := &fakeApp{
+		previewPath: "/tmp/paper.pdf",
+		readBody:    []byte("%PDF-1.4\nstream\x1b[2Jbinary"),
+	}
+	model := New(context.Background(), app, fakeLauncher{})
+	model.width, model.height = 100, 24
+	model.resize()
+	model.items = documentItems([]membox.DocumentView{{
+		ID: "doc-pdf", Title: "Paper", Path: app.previewPath, MediaType: "application/pdf",
+	}})
+	model.refreshFilter()
+
+	message := model.loadPreview()()
+	preview, ok := message.(previewMsg)
+	if !ok {
+		t.Fatalf("loadPreview returned %T, want previewMsg", message)
+	}
+	if app.readCount != 0 {
+		t.Fatalf("PDF preview read %d binary bodies, want 0", app.readCount)
+	}
+	if preview.documentID != "doc-pdf" || !strings.Contains(preview.content, "PDF document") || strings.Contains(preview.content, "%PDF-") {
+		t.Fatalf("unsafe PDF preview: %+v", preview)
+	}
+
+	updated, _ := model.Update(preview)
+	model = updated.(Model)
+	view := model.treePreviewView()
+	if !strings.Contains(view, "paper.pdf") || !strings.Contains(view, "PDF document") {
+		t.Fatalf("PDF preview should preserve tree and show safe placeholder: %q", view)
+	}
+	if strings.Contains(view, "%PDF-") || strings.Contains(view, "\x1b[2J") {
+		t.Fatalf("PDF binary leaked into terminal view: %q", view)
+	}
+}
+
+func TestModel_CtrlPCyclesMediaScopeWithoutChangingInputMode(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+	model = updated.(Model)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
+	model = updated.(Model)
+	if model.inputMode != inputModeCmd || !model.inputVisible {
+		t.Fatalf("ctrl+p changed/closed command input: mode=%s visible=%v", model.inputMode, model.inputVisible)
+	}
+	if model.mediaScope != mediaScopeMarkdown {
+		t.Fatalf("ctrl+p did not change media scope: %s", model.mediaScope)
 	}
 }
 
@@ -469,12 +519,12 @@ func TestModel_DoubleSpaceAlwaysOpensFilterInput(t *testing.T) {
 	model = updated.(Model)
 	updated, _ = model.Update(space)
 	model = updated.(Model)
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	model = updated.(Model)
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlK})
 	model = updated.(Model)
 	if model.inputMode != inputModeAgent {
-		t.Fatalf("did not reach agent mode: %s", model.inputMode)
+		t.Fatalf("ctrl+k did not reach agent mode: %s", model.inputMode)
 	}
 	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	model = updated.(Model)
@@ -501,10 +551,12 @@ func TestModel_CommandPaletteProgressiveDisclosure(t *testing.T) {
 	model = updated.(Model)
 	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
 	model = updated.(Model)
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model = updated.(Model)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
 	model = updated.(Model)
 	if !model.inputVisible || model.inputMode != inputModeCmd || model.cmdMenuVisible {
-		t.Fatalf("ctrl+p did not open quiet command input: visible=%v mode=%s menu=%v", model.inputVisible, model.inputMode, model.cmdMenuVisible)
+		t.Fatalf(": did not open quiet command input: visible=%v mode=%s menu=%v", model.inputVisible, model.inputMode, model.cmdMenuVisible)
 	}
 	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
 	model = updated.(Model)
@@ -625,16 +677,10 @@ func TestModel_CommandTabShowsFuzzyDocumentChoices(t *testing.T) {
 
 func TestModel_AgentModeUsesBadgeAndPlaceholderError(t *testing.T) {
 	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
-	model = updated.(Model)
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
-	model = updated.(Model)
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
-	model = updated.(Model)
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlK})
 	model = updated.(Model)
 	if model.inputMode != inputModeAgent || !strings.Contains(model.modeBadge(), "AGENT") {
-		t.Fatalf("ctrl+p did not cycle to agent mode: mode=%s badge=%q", model.inputMode, model.modeBadge())
+		t.Fatalf("ctrl+k did not open agent mode: mode=%s badge=%q", model.inputMode, model.modeBadge())
 	}
 	if !strings.Contains(model.input.Placeholder, "agent") {
 		t.Fatalf("agent mode still shows placeholder %q", model.input.Placeholder)

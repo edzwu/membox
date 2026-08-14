@@ -16,7 +16,7 @@ import (
 
 func (m Model) updateFilterInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "ctrl+p" {
-		return m, m.cycleInputMode()
+		return m, m.cycleMediaScope()
 	}
 	if m.inputMode == inputModeCmd {
 		return m.updateCommandInput(msg)
@@ -78,6 +78,9 @@ func (m Model) updateFilterInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.hideInput()
 		if document, ok := m.selectedDocument(); ok {
 			m.loading = true
+			if document.MediaType == "application/pdf" {
+				return m, tea.Batch(m.spinner.Tick, openCmd(m.ctx, m.app, m.launcher, document.ID))
+			}
 			if m.viewerMode == "web" {
 				return m, tea.Batch(m.spinner.Tick, openDocumentWebCmd(m.ctx, m.app, m.launcher, document.ID))
 			}
@@ -296,7 +299,7 @@ func (m Model) commandSuggestions() []commandSuggestion {
 			{Value: "doc", Display: "doc", Description: "Create and manage documents"},
 			{Value: "topic", Display: "topic", Description: "Manage topic documents"},
 			{Value: "link", Display: "link", Description: "Manage document links"},
-			{Value: "rename", Display: "rename", Description: "Rename selected file (keeps UUID)"},
+			{Value: "rename", Display: "rename", Description: "Rename file or virtual PDF title (keeps UUID)"},
 			{Value: "web", Display: "web", Description: "Control the Web Companion"},
 		}, partial)
 	}
@@ -416,8 +419,10 @@ func (m Model) commandArgumentSuggestions(tokens []string, index int, partial st
 
 func (m Model) commandAction(tokens []string) (func() tea.Msg, string, error) {
 	selected := ""
+	var selectedDocument membox.DocumentView
 	if document, ok := m.selectedDocument(); ok {
 		selected = document.ID
+		selectedDocument = document
 	}
 	selector := func(value string) string {
 		if value == "@selected" {
@@ -580,15 +585,25 @@ func (m Model) commandAction(tokens []string) (func() tea.Msg, string, error) {
 			return graphFocusCmd(m.ctx, m.app, selector(tokens[2]), "star"), "link graph <document-id>", nil
 		}
 	case "rename":
-		// Rename operates on the highlighted document so the command stays a
-		// single argument: `rename new-name.md`.
+		// Rename operates on the highlighted document. Markdown remains
+		// filesystem-authoritative; for PDF this is a virtual title stored in
+		// catalog metadata and the managed file path is left untouched.
 		if len(tokens) < 2 {
-			return nil, "rename <new-filename>", fmt.Errorf("new filename is required")
+			return nil, "rename <new-name>", fmt.Errorf("new name is required")
 		}
 		if selected == "" {
-			return nil, "rename <new-filename>", fmt.Errorf("no document is selected")
+			return nil, "rename <new-name>", fmt.Errorf("no document is selected")
 		}
 		name := strings.Join(tokens[1:], " ")
+		if selectedDocument.MediaType == "application/pdf" {
+			return func() tea.Msg {
+				document, err := m.app.UpdatePDFMetadata(m.ctx, membox.UpdatePDFMetadataCommand{Selector: selected, Title: &name})
+				if err != nil {
+					return renamedMsg{virtual: true, err: err}
+				}
+				return renamedMsg{documentID: document.ID, path: document.Path, title: document.Title, virtual: true}
+			}, "rename <new-title>", nil
+		}
 		return func() tea.Msg {
 			result, err := m.app.RenameDocument(m.ctx, membox.RenameDocumentCommand{Selector: selected, NewFilename: name})
 			if err != nil {

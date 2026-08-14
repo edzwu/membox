@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -61,11 +62,12 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "enter":
 		if document, ok := m.selectedDocument(); ok {
-			if m.viewerMode == "web" {
-				m.loading = true
+			m.loading = true
+			if document.MediaType == "application/pdf" {
+				commands = append(commands, m.spinner.Tick, openCmd(m.ctx, m.app, m.launcher, document.ID))
+			} else if m.viewerMode == "web" {
 				commands = append(commands, m.spinner.Tick, openDocumentWebCmd(m.ctx, m.app, m.launcher, document.ID))
 			} else {
-				m.loading = true
 				commands = append(commands, m.spinner.Tick, resolveViewerCmd(m.ctx, m.app, document.ID))
 			}
 		}
@@ -134,7 +136,7 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "ctrl+p":
-		return m, m.cycleInputMode()
+		return m, m.cycleMediaScope()
 	case "s":
 		// Summarize the selected document with the agent (same flow as
 		// `mm doc summarize <id>`); the board keeps rendering while it runs.
@@ -157,12 +159,15 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "r":
-		// Rename the highlighted file: open the command palette prefilled with
-		// `rename <current-filename>` so only the name needs editing (Enter
-		// reuses the existing rename command; esc cancels).
+		// Markdown rename changes the filesystem name. PDF rename is virtual:
+		// it edits the catalog title while preserving the managed PDF path.
 		if document, ok := m.selectedDocument(); ok {
 			cmd := m.openInput(inputModeCmd)
-			m.input.SetValue("rename " + documentFilename(document))
+			value := documentFilename(document)
+			if document.MediaType == "application/pdf" {
+				value = displayTitle(document.Title, document.Path)
+			}
+			m.input.SetValue("rename " + value)
 			m.input.CursorEnd()
 			return m, cmd
 		}
@@ -489,21 +494,25 @@ func (m *Model) toggleInput() tea.Cmd {
 	return m.openInput(m.inputMode)
 }
 
-func (m *Model) cycleInputMode() tea.Cmd {
-	switch m.inputMode {
-	case inputModeSearch:
-		m.inputMode = inputModeCmd
-	case inputModeCmd:
-		m.inputMode = inputModeAgent
-	case inputModeAgent:
-		m.inputMode = inputModeSearch
+func (m *Model) cycleMediaScope() tea.Cmd {
+	previousID := ""
+	if document, ok := m.selectedDocument(); ok {
+		previousID = document.ID
 	}
-	m.input.Placeholder = inputPlaceholder(m.inputMode)
-	m.cmdSuggestions = nil
-	m.cmdSelected = 0
-	m.cmdMenuVisible = false
-	m.filterErr = nil
-	return m.filterChanged(nil)
+	switch m.mediaScope {
+	case mediaScopeAll:
+		m.mediaScope = mediaScopeMarkdown
+	case mediaScopeMarkdown:
+		m.mediaScope = mediaScopePDF
+	case mediaScopePDF:
+		m.mediaScope = mediaScopeImage
+	default:
+		m.mediaScope = mediaScopeAll
+	}
+	m.statusMessage = "showing " + mediaScopeLabel(m.mediaScope)
+	command := m.filterChanged(nil)
+	m.restoreSelection(previousID)
+	return command
 }
 
 func (m *Model) hideInput() {
@@ -701,7 +710,7 @@ func (m *Model) refreshFilter() {
 		if m.hideNotes && isClippedNote(candidate.filename) {
 			continue
 		}
-		if matchesTextFilters(candidate.title, candidate.filename, candidate.match, nameFilters) && matchesDateFilters(candidate.document, m.dateFilters) {
+		if matchesMediaScope(candidate.document, m.mediaScope) && matchesTextFilters(candidate.title, candidate.filename, candidate.match, nameFilters) && matchesDateFilters(candidate.document, m.dateFilters) {
 			m.filtered = append(m.filtered, candidate)
 		}
 	}
@@ -773,6 +782,23 @@ func formatScanStatus(report membox.ScanReport) string {
 	return fmt.Sprintf("scan +%d ~%d missing=%d files=%d", report.Added, report.Updated, report.Missing, report.Files)
 }
 
+func (m *Model) applyDocumentTitle(documentID, title string) {
+	previousID := ""
+	if selected, ok := m.selectedDocument(); ok {
+		previousID = selected.ID
+	}
+	for index := range m.items {
+		if m.items[index].document.ID != documentID {
+			continue
+		}
+		m.items[index].document.Title = title
+		m.items[index] = documentItems([]membox.DocumentView{m.items[index].document})[0]
+		break
+	}
+	m.refreshFilter()
+	m.restoreSelection(previousID)
+}
+
 func (m *Model) applyPinnedState(documentID string, pinned bool) {
 	for index := range m.items {
 		if m.items[index].document.ID == documentID {
@@ -804,7 +830,7 @@ func (m *Model) applyPinnedState(documentID string, pinned bool) {
 
 func (m *Model) sortFiltered() {
 	byName := func(left, right item) bool {
-		leftName, rightName := strings.ToLower(left.filename), strings.ToLower(right.filename)
+		leftName, rightName := strings.ToLower(treeItemLabel(left)), strings.ToLower(treeItemLabel(right))
 		if leftName != rightName {
 			return leftName < rightName
 		}
@@ -947,8 +973,15 @@ func listDocumentsCmd(ctx context.Context, app App, sequence uint64) tea.Cmd {
 }
 func previewCmd(ctx context.Context, app App, selector string) tea.Cmd {
 	return func() tea.Msg {
+		location, err := app.ResolveDocumentLocation(ctx, membox.ResolveLocationQuery{Selector: selector})
+		if err != nil {
+			return previewMsg{documentID: selector, err: err}
+		}
+		if strings.EqualFold(filepath.Ext(location.Path), ".pdf") {
+			return previewMsg{documentID: selector, content: "PDF document\n\n" + location.Path + "\n\nPress Enter to open with the system viewer."}
+		}
 		body, err := app.ReadDocument(ctx, membox.ReadDocumentQuery{Selector: selector})
-		return previewMsg{content: string(body), err: err}
+		return previewMsg{documentID: selector, content: string(body), err: err}
 	}
 }
 func scanCmd(ctx context.Context, app App) tea.Cmd {
