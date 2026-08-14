@@ -273,7 +273,6 @@ func (m Model) executeCommandInput() (tea.Model, tea.Cmd) {
 	}
 	m.loading = true
 	m.cmdMenuVisible = false
-	var progressTick tea.Cmd
 	if len(tokens) >= 2 && tokens[0] == "pdf" && tokens[1] == "convert" {
 		target := ""
 		if document, ok := m.selectedDocument(); ok {
@@ -282,9 +281,10 @@ func (m Model) executeCommandInput() (tea.Model, tea.Cmd) {
 		if len(tokens) == 3 && tokens[2] != "@selected" {
 			target = tokens[2]
 		}
-		progressTick = m.beginPDFProgress(target)
+		progressTick := m.beginPDFProgress(target)
+		return m, tea.Batch(m.spinner.Tick, startPDFConversionCmd(m.ctx, m.app, target, m.pdfProgressSequence), progressTick)
 	}
-	return m, tea.Batch(m.spinner.Tick, func() tea.Msg { return action() }, progressTick)
+	return m, tea.Batch(m.spinner.Tick, func() tea.Msg { return action() })
 }
 
 func commandTokens(value string) []string {

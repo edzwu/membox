@@ -38,7 +38,11 @@ func TestDocumentItemsMarksPDFWhenStableConvertedIndexExists(t *testing.T) {
 }
 
 func TestConvertedPDFIDRejectsChapterAndMalformedNames(t *testing.T) {
+	if id, ok := convertedPDFID("AI-Agents中文版--pdf-019ffe54a5137da8bfac0ae403223ccf.md"); !ok || id != "019ffe54-a513-7da8-bfac-0ae403223ccf" {
+		t.Fatalf("readable converted filename resolved as (%q,%v)", id, ok)
+	}
 	for _, filename := range []string{
+		"AI-Agents--pdf-019ffe54a5137da8bfac0ae403223ccf-chapter-001.md",
 		"pdf-019ffe54a5137da8bfac0ae403223ccf-chapter-001.md",
 		"pdf-not-a-uuid.md",
 		"ordinary.md",

@@ -6,16 +6,20 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/text"
+	"golang.org/x/text/unicode/norm"
 )
 
 var (
 	chineseChapterPattern = regexp.MustCompile(`^第\s*([0-9０-９一二三四五六七八九十百千〇零两]+)\s*章(?:\s*[:：]?\s*)(.*)$`)
 	englishChapterPattern = regexp.MustCompile(`(?i)^chapter\s+([0-9ivxlcdm]+)\b(?:\s*[:：.-]?\s*)(.*)$`)
 	ancillaryPattern      = regexp.MustCompile(`(?i)^(引言|前言|序言|序|导言|绪论|后记|结语|附录|preface|introduction|epilogue|afterword|appendix)(?:\s*[:：.-]?\s*.*)?$`)
+	tocChapterPattern     = regexp.MustCompile(`^(?:第\s*)?([0-9０-９一二三四五六七八九十百千〇零两]+)\s*章\s*[、,:：.．-]?\s*(.*?)\s+\d+(?:\.\d+)+\s*$`)
+	tocEntryPattern       = regexp.MustCompile(`^(.*?)\s+\d+(?:\.\d+)+\s*$`)
 )
 
 type ChapterMarkdown struct {
@@ -30,12 +34,25 @@ type PostprocessResult struct {
 }
 
 type sectionBoundary struct {
-	start      int
-	bodyStart  int
-	title      string
-	chapterKey string
-	ancillary  string
-	chapter    bool
+	start           int
+	bodyStart       int
+	title           string
+	chapterKey      string
+	ancillary       string
+	chapter         bool
+	preserveHeading string
+}
+
+type tocChapter struct {
+	number  string
+	title   string
+	entries []string
+}
+
+type topLevelHeading struct {
+	start     int
+	bodyStart int
+	title     string
 }
 
 // PostprocessMarkdown turns a long converted book into an index and stable
@@ -73,6 +90,14 @@ func PostprocessMarkdown(markdown, baseFilename string) PostprocessResult {
 		}
 		usedNames[filename] = true
 		body := strings.TrimSpace(markdown[boundary.bodyStart:end])
+		if boundary.preserveHeading != "" {
+			preserved := "## " + boundary.preserveHeading
+			if body != "" {
+				body = preserved + "\n\n" + body
+			} else {
+				body = preserved
+			}
+		}
 		chapterBody := "# " + boundary.title + "\n\n[← " + bookTitle + "](" + baseFilename + ")\n"
 		if body != "" {
 			chapterBody += "\n" + body + "\n"
@@ -120,7 +145,199 @@ func markdownSections(markdown string) ([]sectionBoundary, int) {
 		}
 		return ast.WalkContinue, nil
 	})
+	if chapterCount >= 2 {
+		return boundaries, chapterCount
+	}
+	if tocBoundaries := tocMarkdownSections(document, source); len(tocBoundaries) >= 2 {
+		return tocBoundaries, len(tocBoundaries)
+	}
 	return boundaries, chapterCount
+}
+
+func tocMarkdownSections(document ast.Node, source []byte) []sectionBoundary {
+	var tocHeading ast.Node
+	for node := document.FirstChild(); node != nil; node = node.NextSibling() {
+		if node.Kind() != ast.KindHeading {
+			continue
+		}
+		title := normalizeTOCTitle(string(node.(*ast.Heading).Text(source)))
+		if title == "tableofcontents" || title == "目录" {
+			tocHeading = node
+			break
+		}
+	}
+	if tocHeading == nil {
+		return nil
+	}
+
+	chapters := parseTOCChapters(tocHeading, source)
+	if len(chapters) < 2 {
+		return nil
+	}
+	headings := bodyHeadingsAfter(tocHeading, source)
+	if len(headings) < 2 {
+		return nil
+	}
+
+	// First pass: exact chapter-title matches establish trustworthy windows.
+	matches := make([]int, len(chapters))
+	trusted := make([]bool, len(chapters))
+	for index := range matches {
+		matches[index] = -1
+	}
+	cursor := 0
+	for chapterIndex, chapter := range chapters {
+		want := normalizeTOCTitle(chapter.title)
+		for headingIndex := cursor; headingIndex < len(headings); headingIndex++ {
+			if normalizeTOCTitle(headings[headingIndex].title) == want {
+				matches[chapterIndex] = headingIndex
+				trusted[chapterIndex] = true
+				cursor = headingIndex + 1
+				break
+			}
+		}
+	}
+
+	// A converter may drop the chapter heading but retain its first article.
+	// Fill only inside windows bounded by exact neighboring chapters. For the
+	// first TOC chapter, the first body heading is the only safe fallback.
+	preserve := make([]bool, len(chapters))
+	for chapterIndex, chapter := range chapters {
+		if matches[chapterIndex] >= 0 {
+			continue
+		}
+		lower := 0
+		for previous := chapterIndex - 1; previous >= 0; previous-- {
+			if matches[previous] >= 0 {
+				lower = matches[previous] + 1
+				break
+			}
+		}
+		upper := len(headings)
+		for next := chapterIndex + 1; next < len(chapters); next++ {
+			if matches[next] >= 0 {
+				upper = matches[next]
+				break
+			}
+		}
+		if lower >= upper {
+			continue
+		}
+		if chapterIndex == 0 && lower == 0 {
+			matches[chapterIndex], preserve[chapterIndex] = 0, true
+			continue
+		}
+		entryTitles := make(map[string]bool, len(chapter.entries))
+		for _, entry := range chapter.entries {
+			entryTitles[normalizeTOCTitle(entry)] = true
+		}
+		for headingIndex := lower; headingIndex < upper; headingIndex++ {
+			if entryTitles[normalizeTOCTitle(headings[headingIndex].title)] {
+				matches[chapterIndex], preserve[chapterIndex], trusted[chapterIndex] = headingIndex, true, true
+				break
+			}
+		}
+	}
+
+	trustedCount := 0
+	for _, matched := range trusted {
+		if matched {
+			trustedCount++
+		}
+	}
+	if trustedCount < 2 {
+		return nil
+	}
+
+	boundaries := make([]sectionBoundary, 0, len(chapters))
+	lastHeading := -1
+	for chapterIndex, headingIndex := range matches {
+		if headingIndex < 0 || headingIndex <= lastHeading {
+			continue
+		}
+		chapter := chapters[chapterIndex]
+		heading := headings[headingIndex]
+		number, ok := parseChapterNumber(chapter.number)
+		if !ok {
+			continue
+		}
+		displayNumber := chapter.number
+		if number == 0 {
+			displayNumber = "零"
+		}
+		boundary := sectionBoundary{
+			start: heading.start, bodyStart: heading.bodyStart,
+			title:      "第" + displayNumber + "章、" + chapter.title,
+			chapterKey: fmt.Sprintf("chapter-%03d", number), chapter: true,
+		}
+		if preserve[chapterIndex] {
+			boundary.preserveHeading = heading.title
+		}
+		boundaries = append(boundaries, boundary)
+		lastHeading = headingIndex
+	}
+	return boundaries
+}
+
+func parseTOCChapters(tocHeading ast.Node, source []byte) []tocChapter {
+	chapters := make([]tocChapter, 0)
+	for node := tocHeading.NextSibling(); node != nil; node = node.NextSibling() {
+		if node.Kind() == ast.KindHeading {
+			break
+		}
+		if node.Kind() != ast.KindParagraph {
+			continue
+		}
+		lines := node.Lines()
+		for index := 0; index < lines.Len(); index++ {
+			segment := lines.At(index)
+			line := strings.TrimSpace(string(segment.Value(source)))
+			line = strings.TrimSpace(strings.TrimSuffix(line, "  "))
+			if match := tocChapterPattern.FindStringSubmatch(line); len(match) != 0 {
+				title := strings.TrimSpace(match[2])
+				if title != "" {
+					chapters = append(chapters, tocChapter{number: match[1], title: title})
+				}
+				continue
+			}
+			if len(chapters) == 0 {
+				continue
+			}
+			if match := tocEntryPattern.FindStringSubmatch(line); len(match) != 0 {
+				title := strings.TrimSpace(match[1])
+				if title != "" {
+					last := len(chapters) - 1
+					chapters[last].entries = append(chapters[last].entries, title)
+				}
+			}
+		}
+	}
+	return chapters
+}
+
+func bodyHeadingsAfter(tocHeading ast.Node, source []byte) []topLevelHeading {
+	headings := make([]topLevelHeading, 0)
+	for node := tocHeading.NextSibling(); node != nil; node = node.NextSibling() {
+		if node.Kind() != ast.KindHeading {
+			continue
+		}
+		heading := node.(*ast.Heading)
+		start, bodyStart := headingOffsets(source, heading)
+		headings = append(headings, topLevelHeading{
+			start: start, bodyStart: bodyStart, title: strings.TrimSpace(string(heading.Text(source))),
+		})
+	}
+	return headings
+}
+
+func normalizeTOCTitle(value string) string {
+	value = norm.NFKC.String(strings.ToLower(strings.TrimSpace(value)))
+	return strings.Map(func(r rune) rune {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			return r
+		}
+		return -1
+	}, value)
 }
 
 func headingOffsets(source []byte, heading *ast.Heading) (int, int) {

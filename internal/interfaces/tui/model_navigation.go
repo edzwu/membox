@@ -101,7 +101,7 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			progressTick := m.beginPDFProgress(document.ID)
-			commands = append(commands, m.spinner.Tick, convertPDFCmd(m.ctx, m.app, document.ID), progressTick)
+			commands = append(commands, m.spinner.Tick, startPDFConversionCmd(m.ctx, m.app, document.ID, m.pdfProgressSequence), progressTick)
 			return m, tea.Batch(commands...)
 		}
 		if m.viewMode == viewTree {
@@ -979,13 +979,6 @@ func listDocumentsCmd(ctx context.Context, app App, sequence uint64) tea.Cmd {
 		return documentsMsg{sequence: sequence, documents: documents, err: err}
 	}
 }
-func convertPDFCmd(ctx context.Context, app App, selector string) tea.Cmd {
-	return func() tea.Msg {
-		result, err := app.ConvertPDF(ctx, membox.ConvertPDFCommand{Selector: selector})
-		return pdfConvertedMsg{result: result, err: err}
-	}
-}
-
 func previewCmd(ctx context.Context, app App, selector string) tea.Cmd {
 	return func() tea.Msg {
 		location, err := app.ResolveDocumentLocation(ctx, membox.ResolveLocationQuery{Selector: selector})

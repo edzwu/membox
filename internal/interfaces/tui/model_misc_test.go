@@ -696,6 +696,40 @@ func TestModel_TabConvertsSelectedPDFWithIndeterminateProgress(t *testing.T) {
 	}
 }
 
+func TestModel_PDFStreamProgressUpdatesStatusBar(t *testing.T) {
+	app := &fakeApp{pdfProgress: []membox.PDFConversionProgress{{
+		Stage: "chunk_done", Description: "pages 1–25/100 done · next 25", PageFrom: 1, PageTo: 25, TotalPages: 100,
+	}}}
+	model := New(context.Background(), app, fakeLauncher{})
+	model.width, model.height = 120, 30
+	model.items = documentItems([]membox.DocumentView{{ID: "pdf-stream", Path: "/tmp/book.pdf", MediaType: "application/pdf"}})
+	model.refreshFilter()
+
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	model = updated.(Model)
+	message := command()
+	batch, ok := message.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("conversion command returned %T", message)
+	}
+	progressMessage := batch[1]()
+	progress, ok := progressMessage.(pdfConversionProgressMsg)
+	if !ok {
+		t.Fatalf("first stream message=%T, want progress", progressMessage)
+	}
+	updated, wait := model.Update(progress)
+	model = updated.(Model)
+	if bar := model.statusBar(); !strings.Contains(bar, "25%") || !strings.Contains(bar, "pages 1–25/100") {
+		t.Fatalf("status bar did not use server progress: %q", bar)
+	}
+	if wait == nil {
+		t.Fatal("progress did not schedule the next stream read")
+	}
+	if _, ok := wait().(pdfConvertedMsg); !ok {
+		t.Fatal("stream did not deliver completion after progress")
+	}
+}
+
 func TestModel_CNoLongerConvertsSelectedPDF(t *testing.T) {
 	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
 	model.items = documentItems([]membox.DocumentView{{ID: "pdf", Path: "/tmp/doc.pdf", MediaType: "application/pdf"}})

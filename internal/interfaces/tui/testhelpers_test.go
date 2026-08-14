@@ -38,6 +38,7 @@ type fakeApp struct {
 	pdfTitleSelector   string
 	pdfConverterServer string
 	pdfConverted       string
+	pdfProgress        []membox.PDFConversionProgress
 
 	// Web Companion control knobs for tests.
 	webRunning      bool
@@ -112,6 +113,11 @@ func (f *fakeApp) UpdatePDFMetadata(_ context.Context, command membox.UpdatePDFM
 }
 func (f *fakeApp) ConvertPDF(_ context.Context, command membox.ConvertPDFCommand) (membox.ConvertPDFResult, error) {
 	f.pdfConverted = command.Selector
+	if command.OnProgress != nil {
+		for _, progress := range f.pdfProgress {
+			command.OnProgress(progress)
+		}
+	}
 	return membox.ConvertPDFResult{
 		SourceDocumentID: command.Selector,
 		MarkdownDocument: membox.DocumentView{ID: "converted-md", Path: "/tmp/converted.md", MediaType: "text/markdown"},

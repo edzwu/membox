@@ -4,6 +4,8 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -514,7 +516,7 @@ func TestPDFConverterPublishesIndexedMarkdownAndLinksSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	converter := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if request.Method != http.MethodPost || request.URL.Path != "/convert" {
+		if request.Method != http.MethodPost || request.URL.Path != "/convert/stream" {
 			http.NotFound(response, request)
 			return
 		}
@@ -526,19 +528,24 @@ func TestPDFConverterPublishesIndexedMarkdownAndLinksSource(t *testing.T) {
 		}
 		defer file.Close()
 		body, _ := io.ReadAll(file)
-		if header.Filename != "fixture.pdf" || !bytes.HasPrefix(body, []byte("%PDF-")) {
+		if !strings.HasSuffix(header.Filename, ".pdf") || !bytes.HasPrefix(body, []byte("%PDF-")) {
 			t.Errorf("unexpected converter upload: %s %q", header.Filename, body[:min(len(body), 12)])
 		}
 		if request.FormValue("format") != "zip" {
 			t.Errorf("converter format = %q", request.FormValue("format"))
 		}
-		response.Header().Set("Content-Type", "application/zip")
-		writer := zip.NewWriter(response)
+		var bundle bytes.Buffer
+		writer := zip.NewWriter(&bundle)
 		markdown, _ := writer.Create("fixture.md")
 		_, _ = io.WriteString(markdown, "# Converted Fixture\n\nMinerU searchable projection.\n\n<table><tr><td>Name</td><td>Value</td></tr><tr><td>Agent</td><td>1</td></tr></table>\n\n![](images/chart.jpg)\n")
 		image, _ := writer.Create("images/chart.jpg")
 		_, _ = image.Write([]byte("jpeg-fixture"))
 		_ = writer.Close()
+		response.Header().Set("Content-Type", "application/x-ndjson")
+		encoder := json.NewEncoder(response)
+		_ = encoder.Encode(map[string]any{"type": "progress", "stage": "split", "total_pages": 1, "initial_chunk_pages": 1})
+		_ = encoder.Encode(map[string]any{"type": "progress", "stage": "chunk_done", "page_from": 1, "page_to": 1, "total_pages": 1})
+		_ = encoder.Encode(map[string]any{"type": "result", "format": "zip", "zip_base64": base64.StdEncoding.EncodeToString(bundle.Bytes())})
 	}))
 	defer converter.Close()
 
@@ -557,12 +564,27 @@ func TestPDFConverterPublishesIndexedMarkdownAndLinksSource(t *testing.T) {
 	if _, err := box.SetPDFConverterServer(ctx, converter.URL); err != nil {
 		t.Fatal(err)
 	}
-	converted, err := box.ConvertPDF(ctx, membox.ConvertPDFCommand{Selector: imported.Document.ID})
+	compactPDFID := strings.ReplaceAll(imported.Document.ID, "-", "")
+	legacy, err := box.CreateNote(ctx, membox.CreateNoteCommand{Title: "pdf-" + compactPDFID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !converted.Created || converted.MarkdownDocument.MediaType != "text/markdown" {
-		t.Fatalf("unexpected converted result: %+v", converted)
+	var progress []membox.PDFConversionProgress
+	converted, err := box.ConvertPDF(ctx, membox.ConvertPDFCommand{
+		Selector: imported.Document.ID,
+		OnProgress: func(event membox.PDFConversionProgress) {
+			progress = append(progress, event)
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(progress) != 3 || progress[0].Stage != "split" || progress[1].Stage != "chunk_done" || progress[2].Stage != "publish" {
+		t.Fatalf("conversion progress=%+v", progress)
+	}
+	wantFilename := "fixture--pdf-" + compactPDFID + ".md"
+	if converted.Created || converted.MarkdownDocument.ID != legacy.Document.ID || converted.MarkdownDocument.MediaType != "text/markdown" || filepath.Base(converted.MarkdownPath) != wantFilename {
+		t.Fatalf("legacy conversion was not migrated readably with stable identity: legacy=%+v converted=%+v", legacy, converted)
 	}
 	canonicalNotes, err := filepath.EvalSymlinks(notes)
 	if err != nil {
@@ -590,6 +612,9 @@ func TestPDFConverterPublishesIndexedMarkdownAndLinksSource(t *testing.T) {
 	graph, err := box.GetDocumentGraph(ctx, membox.GetDocumentGraphQuery{Selector: imported.Document.ID})
 	if err != nil || len(graph.Outgoing) != 1 || graph.Outgoing[0].ID != converted.MarkdownDocument.ID {
 		t.Fatalf("PDF conversion link missing: %+v err=%v", graph, err)
+	}
+	if _, err := box.RenameDocument(ctx, membox.RenameDocumentCommand{Selector: imported.Document.ID, NewFilename: "renamed-source.pdf"}); err != nil {
+		t.Fatal(err)
 	}
 	convertedAgain, err := box.ConvertPDF(ctx, membox.ConvertPDFCommand{Selector: imported.Document.ID})
 	if err != nil {

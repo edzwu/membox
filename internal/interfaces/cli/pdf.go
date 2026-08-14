@@ -146,7 +146,13 @@ func newPDFConvertCommand(runtime *runtime) *cobra.Command {
 		if err != nil {
 			return err
 		}
-		result, err := box.ConvertPDF(cmd.Context(), membox.ConvertPDFCommand{Selector: args[0], ServerURL: server})
+		convertCommand := membox.ConvertPDFCommand{Selector: args[0], ServerURL: server}
+		if !jsonOutput {
+			convertCommand.OnProgress = func(progress membox.PDFConversionProgress) {
+				fmt.Fprintf(cmd.ErrOrStderr(), "[converter] %s\n", progress.Description)
+			}
+		}
+		result, err := box.ConvertPDF(cmd.Context(), convertCommand)
 		if err != nil {
 			return err
 		}

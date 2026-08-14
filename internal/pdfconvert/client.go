@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -22,6 +23,7 @@ const (
 	defaultConversionTimeout = 30 * time.Minute
 	maxErrorBody             = 64 << 10
 	maxZIPResponse           = 512 << 20
+	maxStreamResponse        = (maxZIPResponse+2)/3*4 + 8<<20
 	maxMarkdownBytes         = 64 << 20
 	maxAssetBytes            = 128 << 20
 	maxBundleBytes           = 1 << 30
@@ -33,9 +35,10 @@ var imageExtensions = map[string]bool{
 	".webp": true, ".bmp": true, ".gif": true,
 }
 
-// HTTPClient implements the converter's stateless POST /convert protocol.
-// One request owns upload, conversion, and ZIP download; the server does not
-// retain documents and membox remains the sole persistence authority.
+// HTTPClient implements the converter's stateless POST /convert/stream
+// protocol. One request owns upload, conversion, and NDJSON progress/result
+// events; the server does not retain documents and membox remains the sole
+// persistence authority.
 type HTTPClient struct {
 	HTTP              *http.Client
 	ConversionTimeout time.Duration
@@ -55,7 +58,7 @@ func newLANHTTPClient() *http.Client {
 	return &http.Client{Transport: transport}
 }
 
-func (c *HTTPClient) Convert(ctx context.Context, serverURL, filename string, body io.Reader) (RemoteResult, error) {
+func (c *HTTPClient) Convert(ctx context.Context, serverURL, filename string, body io.Reader, onProgress func(Progress)) (RemoteResult, error) {
 	if c == nil {
 		return RemoteResult{}, errors.New("PDF converter HTTP client is nil")
 	}
@@ -90,7 +93,7 @@ func (c *HTTPClient) Convert(ctx context.Context, serverURL, filename string, bo
 		_ = pipeWriter.CloseWithError(err)
 	}()
 
-	endpoint := strings.TrimRight(serverURL, "/") + "/convert"
+	endpoint := strings.TrimRight(serverURL, "/") + "/convert/stream"
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, pipeReader)
 	if err != nil {
 		_ = pipeReader.Close()
@@ -106,12 +109,9 @@ func (c *HTTPClient) Convert(ctx context.Context, serverURL, filename string, bo
 	if response.StatusCode != http.StatusOK {
 		return RemoteResult{}, responseError("converting PDF", response)
 	}
-	payload, err := io.ReadAll(io.LimitReader(response.Body, maxZIPResponse+1))
+	payload, err := readStreamResult(response.Body, onProgress)
 	if err != nil {
-		return RemoteResult{}, fmt.Errorf("reading converted ZIP: %w", err)
-	}
-	if len(payload) > maxZIPResponse {
-		return RemoteResult{}, fmt.Errorf("converted ZIP exceeds %d bytes", maxZIPResponse)
+		return RemoteResult{}, err
 	}
 	markdown, assets, err := decodeBundle(payload)
 	if err != nil {
@@ -124,6 +124,56 @@ func (c *HTTPClient) Convert(ctx context.Context, serverURL, filename string, bo
 		MarkdownSHA256: hex.EncodeToString(digest[:]),
 		Assets:         assets,
 	}, nil
+}
+
+type streamEvent struct {
+	Progress
+	Type      string `json:"type"`
+	Format    string `json:"format,omitempty"`
+	ZIPBase64 string `json:"zip_base64,omitempty"`
+}
+
+func readStreamResult(reader io.Reader, onProgress func(Progress)) ([]byte, error) {
+	decoder := json.NewDecoder(io.LimitReader(reader, maxStreamResponse+1))
+	for {
+		var event streamEvent
+		if err := decoder.Decode(&event); err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil, errors.New("converter stream ended before a result event")
+			}
+			return nil, fmt.Errorf("reading converter stream event: %w", err)
+		}
+		switch event.Type {
+		case "heartbeat":
+			continue
+		case "progress":
+			if onProgress != nil {
+				onProgress(event.Progress)
+			}
+		case "error":
+			detail := strings.TrimSpace(event.Detail)
+			if detail == "" {
+				detail = "unknown converter error"
+			}
+			return nil, errors.New(detail)
+		case "result":
+			if event.Format != "zip" {
+				return nil, fmt.Errorf("converter stream returned %q, want zip", event.Format)
+			}
+			if event.ZIPBase64 == "" {
+				return nil, errors.New("converter stream returned an empty ZIP result")
+			}
+			decoded := base64.NewDecoder(base64.StdEncoding, strings.NewReader(event.ZIPBase64))
+			payload, err := io.ReadAll(io.LimitReader(decoded, maxZIPResponse+1))
+			if err != nil {
+				return nil, fmt.Errorf("decoding converted ZIP: %w", err)
+			}
+			if len(payload) > maxZIPResponse {
+				return nil, fmt.Errorf("converted ZIP exceeds %d bytes", maxZIPResponse)
+			}
+			return payload, nil
+		}
+	}
 }
 
 func writeConvertMultipart(writer *multipart.Writer, filename string, body io.Reader) error {

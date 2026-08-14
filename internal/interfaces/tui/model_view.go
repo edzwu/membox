@@ -800,6 +800,11 @@ func statusBarLine(width int, left, right string) string {
 
 func (m Model) pdfConversionProgress() string {
 	const barWidth, segmentWidth = 18, 5
+	determinate := m.pdfProgressTotal > 0
+	filled := 0
+	if determinate {
+		filled = min(barWidth, max(0, m.pdfProgressCompleted*barWidth/m.pdfProgressTotal))
+	}
 	travel := barWidth - segmentWidth
 	cycle := max(1, travel*2)
 	position := m.pdfProgressFrame % cycle
@@ -809,7 +814,11 @@ func (m Model) pdfConversionProgress() string {
 	var bar strings.Builder
 	bar.WriteString(dimStyle.Render("["))
 	for index := 0; index < barWidth; index++ {
-		if index >= position && index < position+segmentWidth {
+		active := index < filled
+		if !determinate {
+			active = index >= position && index < position+segmentWidth
+		}
+		if active {
 			bar.WriteString(accentStyle.Render("━"))
 		} else {
 			bar.WriteString(dimStyle.Render("─"))
@@ -820,7 +829,15 @@ func (m Model) pdfConversionProgress() string {
 	if m.pdfConversionStarted.IsZero() || elapsed < 0 {
 		elapsed = 0
 	}
-	return bar.String() + " " + accentStyle.Render("PDF→MD "+shortID(m.pdfConversionID)) + dimStyle.Render(" "+compactElapsed(elapsed))
+	label := "PDF→MD " + shortID(m.pdfConversionID)
+	if determinate {
+		label += fmt.Sprintf(" %d%%", min(100, m.pdfProgressCompleted*100/m.pdfProgressTotal))
+	}
+	description := strings.TrimSpace(m.pdfProgressDescription)
+	if description != "" {
+		description = " · " + description
+	}
+	return bar.String() + " " + accentStyle.Render(label) + dimStyle.Render(description+" · "+compactElapsed(elapsed))
 }
 
 func compactElapsed(elapsed time.Duration) string {
@@ -963,10 +980,19 @@ func documentItems(documents []membox.DocumentView) []item {
 
 func convertedPDFID(filename string) (string, bool) {
 	filename = strings.ToLower(filepath.Base(strings.TrimSpace(filename)))
-	if len(filename) != len("pdf-")+32+len(".md") || !strings.HasPrefix(filename, "pdf-") || !strings.HasSuffix(filename, ".md") {
+	if !strings.HasSuffix(filename, ".md") {
 		return "", false
 	}
-	compact := strings.TrimSuffix(strings.TrimPrefix(filename, "pdf-"), ".md")
+	stem := strings.TrimSuffix(filename, ".md")
+	compact := ""
+	if len(stem) == len("pdf-")+32 && strings.HasPrefix(stem, "pdf-") {
+		compact = strings.TrimPrefix(stem, "pdf-") // legacy UUID-only name
+	} else if marker := strings.LastIndex(stem, "--pdf-"); marker >= 0 {
+		compact = stem[marker+len("--pdf-"):]
+	}
+	if len(compact) != 32 {
+		return "", false // also rejects chapter suffixes
+	}
 	if _, err := hex.DecodeString(compact); err != nil {
 		return "", false
 	}

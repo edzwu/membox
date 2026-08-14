@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"membox/internal/application"
 	"membox/internal/domain/catalog"
@@ -17,8 +18,19 @@ import (
 // ConvertPDFCommand runs the optional LAN PDF-to-Markdown feature. ServerURL
 // overrides the persisted feature config for this call only.
 type ConvertPDFCommand struct {
-	Selector  string
-	ServerURL string
+	Selector   string
+	ServerURL  string
+	OnProgress func(PDFConversionProgress)
+}
+
+// PDFConversionProgress is a truthful projection of one server NDJSON event.
+// Page counters advance at chunk boundaries; zero values mean unavailable.
+type PDFConversionProgress struct {
+	Stage       string
+	Description string
+	PageFrom    int
+	PageTo      int
+	TotalPages  int
 }
 
 type ConvertedPDFChapterView struct {
@@ -70,7 +82,16 @@ func (b *Box) GetPDFConverterConfig(_ context.Context) (PDFConverterConfigView, 
 
 func (b *Box) ConvertPDF(ctx context.Context, command ConvertPDFCommand) (ConvertPDFResult, error) {
 	workspace := boxPDFConvertWorkspace{service: b.service}
-	converted, err := b.pdfConverterWorkflow().Convert(ctx, workspace, command.Selector, command.ServerURL)
+	var onProgress func(pdfconvert.Progress)
+	if command.OnProgress != nil {
+		onProgress = func(progress pdfconvert.Progress) {
+			command.OnProgress(PDFConversionProgress{
+				Stage: progress.Stage, Description: progress.Description(),
+				PageFrom: progress.PageFrom, PageTo: progress.PageTo, TotalPages: progress.TotalPages,
+			})
+		}
+	}
+	converted, err := b.pdfConverterWorkflow().ConvertWithProgress(ctx, workspace, command.Selector, command.ServerURL, onProgress)
 	if err != nil {
 		return ConvertPDFResult{}, err
 	}
@@ -127,7 +148,47 @@ func (w boxPDFConvertWorkspace) OpenPDF(ctx context.Context, selector string) (p
 	}, nil
 }
 
+func (w boxPDFConvertWorkspace) ResolveBundleFilename(ctx context.Context, assetOwnerDocumentID, proposedFilename string) (string, error) {
+	suffix, err := generatedPDFSuffix(assetOwnerDocumentID, proposedFilename)
+	if err != nil {
+		return "", err
+	}
+	document, existingPath, found, err := w.service.FindMarkdownByFilenameSuffix(ctx, suffix)
+	if err != nil {
+		return "", err
+	}
+	if !found {
+		return proposedFilename, nil
+	}
+	if document.Status != catalog.DocumentActive {
+		return "", fmt.Errorf("generated document %s is %s; restore it before publishing", document.ID, document.Status)
+	}
+	existingFilename := filepath.Base(existingPath)
+	// An exact suffix is the old UUID-only convention. Return the readable
+	// proposal so PublishBundle migrates it while preserving the UUID.
+	if existingFilename == suffix {
+		return proposedFilename, nil
+	}
+	// Once a readable prefix has been published, freeze it. Renaming the PDF
+	// later must not churn generated paths or break chapter backlinks.
+	return existingFilename, nil
+}
+
 func (w boxPDFConvertWorkspace) PublishBundle(ctx context.Context, assetOwnerDocumentID, filename, markdown string, assets []pdfconvert.Asset) (pdfconvert.PublishedMarkdown, error) {
+	suffix, err := generatedPDFSuffix(assetOwnerDocumentID, filename)
+	if err != nil {
+		return pdfconvert.PublishedMarkdown{}, err
+	}
+	if existing, existingPath, found, findErr := w.service.FindMarkdownByFilenameSuffix(ctx, suffix); findErr != nil {
+		return pdfconvert.PublishedMarkdown{}, findErr
+	} else if found && filepath.Base(existingPath) != filename {
+		if existing.Status != catalog.DocumentActive {
+			return pdfconvert.PublishedMarkdown{}, fmt.Errorf("generated document %s is %s; restore it before publishing", existing.ID, existing.Status)
+		}
+		if _, renameErr := w.service.RenameDocument(ctx, string(existing.ID), filename, existing.Index.Title); renameErr != nil {
+			return pdfconvert.PublishedMarkdown{}, fmt.Errorf("migrating generated Markdown filename: %w", renameErr)
+		}
+	}
 	if len(assets) != 0 {
 		owner, pdfPath, err := w.service.ResolveDocument(ctx, assetOwnerDocumentID)
 		if err != nil {
@@ -149,6 +210,20 @@ func (w boxPDFConvertWorkspace) PublishBundle(ctx context.Context, assetOwnerDoc
 		return pdfconvert.PublishedMarkdown{}, err
 	}
 	return pdfconvert.PublishedMarkdown{DocumentID: string(result.Document.ID), Path: result.Path, Created: result.Created}, nil
+}
+
+func generatedPDFSuffix(assetOwnerDocumentID, filename string) (string, error) {
+	identity := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(assetOwnerDocumentID), "-", ""))
+	marker := "pdf-" + identity
+	index := strings.LastIndex(strings.ToLower(filename), marker)
+	if identity == "" || index < 0 {
+		return "", fmt.Errorf("generated filename %q does not contain PDF identity", filename)
+	}
+	suffix := filename[index:]
+	if filepath.Base(suffix) != suffix || strings.ToLower(filepath.Ext(suffix)) != ".md" {
+		return "", fmt.Errorf("invalid generated PDF suffix %q", suffix)
+	}
+	return suffix, nil
 }
 
 func publishConvertedAssets(ctx context.Context, assetRoot string, assets []pdfconvert.Asset) error {

@@ -86,6 +86,42 @@ func (s *Service) ResolveDocumentByRelativePath(ctx context.Context, filename st
 	return nil, "", fmt.Errorf("document path %q not found", filename)
 }
 
+// FindMarkdownByFilenameSuffix resolves a generated Markdown projection in the
+// configured main path by an identity-bearing filename suffix. It supports
+// migrating an exact legacy filename to a readable-prefix convention without
+// relying on a mutable PDF title or path.
+func (s *Service) FindMarkdownByFilenameSuffix(ctx context.Context, suffix string) (*catalog.Document, string, bool, error) {
+	suffix = strings.TrimSpace(suffix)
+	if !validFlatMarkdownFilename(suffix) {
+		return nil, "", false, fmt.Errorf("invalid generated Markdown suffix %q", suffix)
+	}
+	indexedPath, err := s.defaultCreatePath(ctx)
+	if err != nil {
+		return nil, "", false, err
+	}
+	documents, err := s.store.DocumentsForPath(ctx, indexedPath.ID)
+	if err != nil {
+		return nil, "", false, err
+	}
+	var match *catalog.Document
+	var absolute string
+	for _, document := range documents {
+		filename := filepath.Base(filepath.FromSlash(document.Location.RelativePath))
+		if document.Index.MediaType != "text/markdown" || !strings.HasSuffix(filename, suffix) {
+			continue
+		}
+		if match != nil {
+			return nil, "", false, fmt.Errorf("multiple generated Markdown files end in %q", suffix)
+		}
+		match = document
+		absolute = filepath.Join(indexedPath.Root, filepath.FromSlash(document.Location.RelativePath))
+	}
+	if match == nil {
+		return nil, "", false, nil
+	}
+	return match, absolute, true, nil
+}
+
 // UpsertMarkdown writes one generated Markdown projection into the configured
 // main path under an exact, stable filename. Existing active documents are
 // updated in place so their UUID, links and annotations survive regeneration.

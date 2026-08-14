@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"path/filepath"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 const pdfMediaType = "application/pdf"
@@ -38,6 +40,10 @@ func (w *Workflow) SetServerURL(serverURL string) (string, error) {
 }
 
 func (w *Workflow) Convert(ctx context.Context, workspace Workspace, selector, serverOverride string) (Result, error) {
+	return w.ConvertWithProgress(ctx, workspace, selector, serverOverride, nil)
+}
+
+func (w *Workflow) ConvertWithProgress(ctx context.Context, workspace Workspace, selector, serverOverride string, onProgress func(Progress)) (Result, error) {
 	if w == nil || w.client == nil {
 		return Result{}, errors.New("PDF converter client is unavailable")
 	}
@@ -71,14 +77,20 @@ func (w *Workflow) Convert(ctx context.Context, workspace Workspace, selector, s
 		return Result{}, fmt.Errorf("document %s is %s, not a PDF", source.DocumentID, source.MediaType)
 	}
 
-	remote, err := w.client.Convert(ctx, serverURL, source.Filename, source.Body)
+	remote, err := w.client.Convert(ctx, serverURL, source.Filename, source.Body, onProgress)
 	if err != nil {
 		return Result{}, err
 	}
 	if strings.TrimSpace(remote.Markdown) == "" {
 		return Result{}, errors.New("converter returned empty Markdown")
 	}
-	filename := convertedFilename(source)
+	if onProgress != nil {
+		onProgress(Progress{Stage: "publish"})
+	}
+	filename, err := workspace.ResolveBundleFilename(ctx, source.DocumentID, convertedFilename(source))
+	if err != nil {
+		return Result{}, fmt.Errorf("resolving stable converted filename: %w", err)
+	}
 	remote.Markdown = rewriteAssetReferences(remote.Markdown, source.DocumentID, remote.Assets)
 	processed := PostprocessMarkdown(remote.Markdown, filename)
 	if len(processed.Chapters) == 0 {
@@ -142,12 +154,41 @@ func conversionResult(source Source, filename, markdownSHA256 string, published 
 }
 
 func convertedFilename(source Source) string {
-	// Only stable catalog identity participates in the generated path. PDF
-	// titles and filesystem names are editable, but reconversion must update
-	// the same Markdown document and preserve its UUID.
+	// The readable prefix is frozen by Workspace.ResolveBundleFilename after
+	// first publication. The full source UUID remains in the suffix so legacy
+	// files can be migrated and reconversion can always recover stable identity.
 	identity := strings.ToLower(strings.ReplaceAll(source.DocumentID, "-", ""))
 	if identity == "" {
 		identity = "document"
 	}
-	return "pdf-" + identity + ".md"
+	return readablePDFStem(source.Filename) + "--pdf-" + identity + ".md"
+}
+
+func readablePDFStem(filename string) string {
+	const maxBytes = 120
+	stem := strings.TrimSpace(strings.TrimSuffix(filepath.Base(filename), filepath.Ext(filename)))
+	var output strings.Builder
+	separator := false
+	for _, r := range stem {
+		switch {
+		case unicode.IsLetter(r) || unicode.IsDigit(r):
+			if separator && output.Len() > 0 && output.Len()+1 <= maxBytes {
+				output.WriteByte('-')
+			}
+			separator = false
+			if output.Len()+utf8.RuneLen(r) > maxBytes {
+				continue
+			}
+			output.WriteRune(r)
+		case r == '-' || r == '_' || unicode.IsSpace(r):
+			separator = output.Len() > 0
+		default:
+			separator = output.Len() > 0
+		}
+	}
+	value := strings.Trim(output.String(), "-")
+	if value == "" {
+		return "document"
+	}
+	return value
 }

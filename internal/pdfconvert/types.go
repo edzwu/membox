@@ -2,6 +2,7 @@ package pdfconvert
 
 import (
 	"context"
+	"fmt"
 	"io"
 )
 
@@ -33,6 +34,7 @@ type Asset struct {
 // membox core. Implementations adapt existing resolve/upsert/link operations.
 type Workspace interface {
 	OpenPDF(ctx context.Context, selector string) (Source, error)
+	ResolveBundleFilename(ctx context.Context, assetOwnerDocumentID, proposedFilename string) (string, error)
 	PublishBundle(ctx context.Context, assetOwnerDocumentID, filename, markdown string, assets []Asset) (PublishedMarkdown, error)
 	LinkDocuments(ctx context.Context, fromDocumentID, toDocumentID string) error
 }
@@ -44,9 +46,46 @@ type RemoteResult struct {
 	Assets         []Asset
 }
 
+// Progress is one server-emitted NDJSON progress event. Page counters describe
+// completed/current chunks rather than a fabricated continuously increasing
+// percentage.
+type Progress struct {
+	Stage             string  `json:"stage"`
+	Detail            string  `json:"detail,omitempty"`
+	Index             int     `json:"index,omitempty"`
+	PageFrom          int     `json:"page_from,omitempty"`
+	PageTo            int     `json:"page_to,omitempty"`
+	TotalPages        int     `json:"total_pages,omitempty"`
+	InitialChunkPages int     `json:"initial_chunk_pages,omitempty"`
+	NextChunkPages    int     `json:"next_chunk_pages,omitempty"`
+	Chunks            int     `json:"chunks,omitempty"`
+	MemTargetPct      float64 `json:"mem_target_pct,omitempty"`
+	PeakDeltaMB       float64 `json:"peak_delta_mb,omitempty"`
+}
+
+func (p Progress) Description() string {
+	switch p.Stage {
+	case "split":
+		return fmt.Sprintf("%d pages · initial chunks of %d", p.TotalPages, p.InitialChunkPages)
+	case "chunk_start":
+		return fmt.Sprintf("pages %d–%d/%d converting", p.PageFrom, p.PageTo, p.TotalPages)
+	case "chunk_done":
+		return fmt.Sprintf("pages %d–%d/%d done · next %d", p.PageFrom, p.PageTo, p.TotalPages, p.NextChunkPages)
+	case "merge":
+		return fmt.Sprintf("merging %d chunks", p.Chunks)
+	case "publish":
+		return "publishing Markdown"
+	default:
+		if p.Detail != "" {
+			return p.Detail
+		}
+		return p.Stage
+	}
+}
+
 // Client knows the remote converter protocol but nothing about membox.
 type Client interface {
-	Convert(ctx context.Context, serverURL, filename string, body io.Reader) (RemoteResult, error)
+	Convert(ctx context.Context, serverURL, filename string, body io.Reader, onProgress func(Progress)) (RemoteResult, error)
 }
 
 type PublishedChapter struct {

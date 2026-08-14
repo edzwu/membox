@@ -57,6 +57,70 @@ afterword body
 	}
 }
 
+func TestPostprocessMarkdownUsesTOCWhenBodyDropsChapterNumbers(t *testing.T) {
+	markdown := `## Table of Contents
+
+第零章、必读系列 1.2
+学习算法和刷题的框架思维 1.2.1
+第一章、动态规划系列 1.3
+动态规划解题套路框架 1.3.1
+第二章、数据结构系列 2.1
+算法学习之路 2.1.1
+三章、技术文章系列 3.1
+Linux的进程、线程、文件描述符是什么 3.1.1
+
+# 学习算法和刷题的思路指南
+
+intro
+
+## 动态规划系列
+
+dp body
+
+## 数据结构系列
+
+data body
+
+## Linux的进程、线程、⽂件描述符是什么
+
+linux body
+`
+	result := PostprocessMarkdown(markdown, "pdf-toc.md")
+	if len(result.Chapters) != 4 {
+		t.Fatalf("TOC chapters=%d: %+v", len(result.Chapters), result.Chapters)
+	}
+	wantFiles := []string{
+		"pdf-toc-chapter-000.md", "pdf-toc-chapter-001.md", "pdf-toc-chapter-002.md", "pdf-toc-chapter-003.md",
+	}
+	for index, filename := range wantFiles {
+		if result.Chapters[index].Filename != filename || !strings.Contains(result.IndexMarkdown, "]("+filename+")") {
+			t.Fatalf("TOC chapter %d=%+v index=%q", index, result.Chapters[index], result.IndexMarkdown)
+		}
+	}
+	if result.Chapters[0].Title != "第零章、必读系列" || !strings.Contains(result.Chapters[0].Markdown, "## 学习算法和刷题的思路指南") {
+		t.Fatalf("first TOC fallback did not preserve its article heading: %+v", result.Chapters[0])
+	}
+	if result.Chapters[1].Title != "第一章、动态规划系列" || strings.Contains(result.Chapters[1].Markdown, "## 动态规划系列") {
+		t.Fatalf("exact TOC chapter heading was not normalized: %+v", result.Chapters[1])
+	}
+	if result.Chapters[3].Title != "第三章、技术文章系列" || !strings.Contains(result.Chapters[3].Markdown, "## Linux的进程、线程、⽂件描述符是什么") {
+		t.Fatalf("TOC article fallback was not preserved: %+v", result.Chapters[3])
+	}
+}
+
+func TestPostprocessMarkdownRequiresTwoMatchedTOCChapters(t *testing.T) {
+	cases := []string{
+		"## Table of Contents\n\n第一章、Only One 1.1\n第二章、Missing 2.1\n\n## Only One\n\nbody\n",
+		"## Table of Contents\n\n第零章、Missing Prelude 0.1\n第一章、Only One 1.1\n\n# Arbitrary First Heading\n\nintro\n\n## Only One\n\nbody\n",
+	}
+	for _, markdown := range cases {
+		result := PostprocessMarkdown(markdown, "pdf-id.md")
+		if result.IndexMarkdown != markdown || len(result.Chapters) != 0 {
+			t.Fatalf("single trusted TOC match should not split: %+v", result)
+		}
+	}
+}
+
 func TestPostprocessMarkdownLeavesUnstructuredDocumentWhole(t *testing.T) {
 	markdown := "# Short\n\n## 第 1 章 Only\n\nbody\n"
 	result := PostprocessMarkdown(markdown, "pdf-id.md")

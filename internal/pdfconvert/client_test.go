@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -29,7 +31,7 @@ func TestHTTPClientDownloadsMarkdownAndImagesAsZIP(t *testing.T) {
 		"images/chart.jpg": []byte("jpeg-content"),
 	})
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if request.Method != http.MethodPost || request.URL.Path != "/convert" {
+		if request.Method != http.MethodPost || request.URL.Path != "/convert/stream" {
 			http.NotFound(response, request)
 			return
 		}
@@ -63,15 +65,22 @@ func TestHTTPClientDownloadsMarkdownAndImagesAsZIP(t *testing.T) {
 				t.Errorf("field %s=%q, want %q", name, fields[name], expected)
 			}
 		}
-		response.Header().Set("Content-Type", "application/zip")
-		_, _ = response.Write(bundle)
+		response.Header().Set("Content-Type", "application/x-ndjson")
+		encoder := json.NewEncoder(response)
+		_ = encoder.Encode(streamEvent{Type: "progress", Progress: Progress{Stage: "split", TotalPages: 12, InitialChunkPages: 4}})
+		_ = encoder.Encode(streamEvent{Type: "heartbeat"})
+		_ = encoder.Encode(streamEvent{Type: "progress", Progress: Progress{Stage: "chunk_done", PageFrom: 1, PageTo: 4, TotalPages: 12}})
+		_ = encoder.Encode(streamEvent{Type: "result", Format: "zip", ZIPBase64: base64.StdEncoding.EncodeToString(bundle)})
 	}))
 	defer server.Close()
 
 	client := NewHTTPClient()
 	client.HTTP = server.Client()
 	client.ConversionTimeout = time.Second
-	result, err := client.Convert(context.Background(), server.URL, "paper.pdf", strings.NewReader("%PDF-fixture"))
+	var progress []Progress
+	result, err := client.Convert(context.Background(), server.URL, "paper.pdf", strings.NewReader("%PDF-fixture"), func(event Progress) {
+		progress = append(progress, event)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,6 +90,24 @@ func TestHTTPClientDownloadsMarkdownAndImagesAsZIP(t *testing.T) {
 	}
 	if len(result.Assets) != 1 || result.Assets[0].RelativePath != "images/chart.jpg" || string(result.Assets[0].Body) != "jpeg-content" {
 		t.Fatalf("converted image missing: %+v", result.Assets)
+	}
+	if len(progress) != 2 || progress[0].Stage != "split" || progress[1].PageTo != 4 {
+		t.Fatalf("stream progress=%+v", progress)
+	}
+}
+
+func TestHTTPClientSurfacesStreamErrorEvent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "application/x-ndjson")
+		_ = json.NewEncoder(response).Encode(streamEvent{Type: "error", Progress: Progress{Detail: "worker ran out of memory"}})
+	}))
+	defer server.Close()
+	client := NewHTTPClient()
+	client.HTTP = server.Client()
+	client.ConversionTimeout = time.Second
+	_, err := client.Convert(context.Background(), server.URL, "paper.pdf", strings.NewReader("%PDF-fixture"), nil)
+	if err == nil || !strings.Contains(err.Error(), "worker ran out of memory") {
+		t.Fatalf("stream error=%v", err)
 	}
 }
 
@@ -105,7 +132,7 @@ func TestHTTPClientSurfacesRemoteFailure(t *testing.T) {
 	client := NewHTTPClient()
 	client.HTTP = server.Client()
 	client.ConversionTimeout = time.Second
-	_, err := client.Convert(context.Background(), server.URL, "paper.pdf", strings.NewReader("%PDF-fixture"))
+	_, err := client.Convert(context.Background(), server.URL, "paper.pdf", strings.NewReader("%PDF-fixture"), nil)
 	if err == nil || !strings.Contains(err.Error(), "CUDA out of memory") {
 		t.Fatalf("expected remote failure, got %v", err)
 	}

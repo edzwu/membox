@@ -155,35 +155,39 @@ type Model struct {
 	statusMessage string
 	summarizing   map[string]bool
 
-	// PDF conversion is a synchronous remote call with no server-side percent
-	// endpoint. Keep a dedicated indeterminate progress state so the status bar
-	// remains honest while upload/conversion/download is in flight.
-	pdfConversionActive  bool
-	pdfConversionID      string
-	pdfConversionStarted time.Time
-	pdfProgressFrame     int
-	pdfProgressSequence  uint64
-	width, height        int
-	listSequence         uint64
-	spaceSequence        uint64
-	lastKeyAt            time.Time
-	searchMode           string
-	inputMode            string
-	mediaScope           string
-	deleteConfirm        bool
-	deleteSelector       string
-	deletePath           string
-	commandHistory       []string
-	historyIndex         int
-	cmdSuggestions       []commandSuggestion
-	cmdSelected          int
-	cmdMenuVisible       bool
-	viewMode             string
-	viewerMode           string
-	hideNotes            bool
-	configVisible        bool
-	configSelected       int
-	settings             []membox.SettingView
+	// PDF conversion is one synchronous remote call. The streaming endpoint
+	// reports truthful chunk/page boundaries; upload and cache-hit phases keep
+	// the indeterminate animation instead of fabricating continuous progress.
+	pdfConversionActive    bool
+	pdfConversionID        string
+	pdfConversionStarted   time.Time
+	pdfProgressFrame       int
+	pdfProgressSequence    uint64
+	pdfProgressStage       string
+	pdfProgressDescription string
+	pdfProgressCompleted   int
+	pdfProgressTotal       int
+	width, height          int
+	listSequence           uint64
+	spaceSequence          uint64
+	lastKeyAt              time.Time
+	searchMode             string
+	inputMode              string
+	mediaScope             string
+	deleteConfirm          bool
+	deleteSelector         string
+	deletePath             string
+	commandHistory         []string
+	historyIndex           int
+	cmdSuggestions         []commandSuggestion
+	cmdSelected            int
+	cmdMenuVisible         bool
+	viewMode               string
+	viewerMode             string
+	hideNotes              bool
+	configVisible          bool
+	configSelected         int
+	settings               []membox.SettingView
 	// Filter-options panel (ctrl+o while the input is focused): match
 	// semantics (contains ⇄ exact) and case sensitivity are orthogonal to the
 	// name ⇄ content scope, so they live on their own panel and show up on the
@@ -311,8 +315,45 @@ type pdfConvertedMsg struct {
 	result membox.ConvertPDFResult
 	err    error
 }
+type pdfConversionRun struct{ events chan tea.Msg }
+type pdfConversionProgressMsg struct {
+	run      *pdfConversionRun
+	sequence uint64
+	progress membox.PDFConversionProgress
+}
 type pdfProgressTickMsg struct{ sequence uint64 }
 type spaceTimeoutMsg struct{ sequence uint64 }
+
+func startPDFConversionCmd(ctx context.Context, app App, selector string, sequence uint64) tea.Cmd {
+	run := &pdfConversionRun{events: make(chan tea.Msg, 32)}
+	return func() tea.Msg {
+		go func() {
+			result, err := app.ConvertPDF(ctx, membox.ConvertPDFCommand{
+				Selector: selector,
+				OnProgress: func(progress membox.PDFConversionProgress) {
+					select {
+					case run.events <- pdfConversionProgressMsg{run: run, sequence: sequence, progress: progress}:
+					case <-ctx.Done():
+					}
+				},
+			})
+			select {
+			case run.events <- pdfConvertedMsg{result: result, err: err}:
+			case <-ctx.Done():
+			}
+			close(run.events)
+		}()
+		message, _ := <-run.events
+		return message
+	}
+}
+
+func waitPDFConversionCmd(run *pdfConversionRun) tea.Cmd {
+	return func() tea.Msg {
+		message, _ := <-run.events
+		return message
+	}
+}
 
 func pdfProgressTickCmd(sequence uint64) tea.Cmd {
 	return tea.Tick(120*time.Millisecond, func(time.Time) tea.Msg {
@@ -328,6 +369,10 @@ func (m *Model) beginPDFProgress(documentID string) tea.Cmd {
 	m.pdfConversionID = documentID
 	m.pdfConversionStarted = time.Now()
 	m.pdfProgressFrame = 0
+	m.pdfProgressStage = ""
+	m.pdfProgressDescription = "uploading PDF"
+	m.pdfProgressCompleted = 0
+	m.pdfProgressTotal = 0
 	m.pdfProgressSequence++
 	return pdfProgressTickCmd(m.pdfProgressSequence)
 }
@@ -740,6 +785,23 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			commands = append(commands, listDocumentsCmd(m.ctx, m.app, m.listSequence))
 		}
 		m.clearExecutedCommand()
+	case pdfConversionProgressMsg:
+		if m.pdfConversionActive && msg.sequence == m.pdfProgressSequence {
+			m.pdfProgressStage = msg.progress.Stage
+			m.pdfProgressDescription = msg.progress.Description
+			if msg.progress.TotalPages > 0 {
+				m.pdfProgressTotal = msg.progress.TotalPages
+			}
+			switch msg.progress.Stage {
+			case "chunk_start":
+				m.pdfProgressCompleted = max(0, msg.progress.PageFrom-1)
+			case "chunk_done":
+				m.pdfProgressCompleted = msg.progress.PageTo
+			case "merge", "publish":
+				m.pdfProgressCompleted = m.pdfProgressTotal
+			}
+		}
+		commands = append(commands, waitPDFConversionCmd(msg.run))
 	case pdfProgressTickMsg:
 		if m.pdfConversionActive && msg.sequence == m.pdfProgressSequence {
 			m.pdfProgressFrame++
