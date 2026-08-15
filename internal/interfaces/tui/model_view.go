@@ -236,11 +236,16 @@ func (m Model) treePreviewView() string {
 	// readStatusMark (○/◐/● + space) reserves two columns. The converted-PDF
 	// marker only consumes width on rows where it is present.
 	badgeWidth := 2
-	filenameWidth := max(12, listWidth-uuidWidth-badgeWidth-8)
+	pdfSizeColumns := 0
+	if m.mediaScope == mediaScopePDF && listWidth >= 32 {
+		// Two spaces plus a right-aligned ten-column human-readable size.
+		pdfSizeColumns = 12
+	}
+	filenameWidth := max(12, listWidth-uuidWidth-badgeWidth-8-pdfSizeColumns)
 	if listWidth >= 72 {
-		filenameWidth = max(16, listWidth-uuidWidth-badgeWidth-30)
+		filenameWidth = max(16, listWidth-uuidWidth-badgeWidth-30-pdfSizeColumns)
 	} else if listWidth >= 52 {
-		filenameWidth = max(14, listWidth-uuidWidth-badgeWidth-20)
+		filenameWidth = max(14, listWidth-uuidWidth-badgeWidth-20-pdfSizeColumns)
 	}
 	var lines []string
 	for _, i := range indices {
@@ -255,6 +260,11 @@ func (m Model) treePreviewView() string {
 			rowFilenameWidth = max(10, rowFilenameWidth-2)
 		}
 		filename := fitMiddle(treeItemLabel(candidate), rowFilenameWidth)
+		sizeColumn := ""
+		if pdfSizeColumns != 0 {
+			size := lipgloss.NewStyle().Width(10).Align(lipgloss.Right).Render(formatBytesTUI(candidate.document.Size))
+			sizeColumn = dimStyle.Render("  " + size)
+		}
 		dates := ""
 		if listWidth >= 72 {
 			created, updated := dateOnly(candidate.document.CreatedAt), dateOnly(candidate.document.UpdatedAt)
@@ -262,7 +272,7 @@ func (m Model) treePreviewView() string {
 		} else if listWidth >= 52 {
 			dates = dimStyle.Render("  " + dateOnly(candidate.document.UpdatedAt))
 		}
-		line := lipgloss.NewStyle().Width(listWidth - 2).MaxWidth(listWidth - 2).Inline(true).Render(pin + pdfConvertedMark(candidate) + readStatusMark(candidate.document.ReadStatus) + uuid + "  " + filename + dates)
+		line := lipgloss.NewStyle().Width(listWidth - 2).MaxWidth(listWidth - 2).Inline(true).Render(pin + pdfConvertedMark(candidate) + readStatusMark(candidate.document.ReadStatus) + uuid + "  " + filename + sizeColumn + dates)
 		if i == m.selected {
 			line = lipgloss.NewStyle().Foreground(colors.Accent).Background(colors.SelectedBG).Width(listWidth - 2).Inline(true).Render("> " + line)
 		} else {

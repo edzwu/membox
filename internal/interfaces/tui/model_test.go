@@ -91,6 +91,20 @@ func TestModel_DefaultShowsUUIDAndOriginalFilename(t *testing.T) {
 	}
 }
 
+func TestModel_PDFTreeShowsFileSize(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.width, model.height = 100, 24
+	model.mediaScope = mediaScopePDF
+	model.items = documentItems([]membox.DocumentView{{
+		ID: "019fbe56-64c3-7e3c-861d-4da66742dabf", Title: "Paper", Path: "/tmp/paper.pdf",
+		MediaType: "application/pdf", Size: 8 << 20,
+	}})
+	model.refreshFilter()
+	if view := model.treePreviewView(); !strings.Contains(view, "8.0 MiB") {
+		t.Fatalf("PDF tree does not show size column: %q", view)
+	}
+}
+
 func TestModel_TreeShowsDatesWhenSpaceAllows(t *testing.T) {
 	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
 	model.width, model.height = 180, 24
