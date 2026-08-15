@@ -26,6 +26,7 @@ import (
 	"membox/internal/application"
 	"membox/internal/domain/catalog"
 	"membox/internal/pdfasset"
+	"membox/internal/translation"
 )
 
 const integrationScript = `<script type="module" src="/membox/integration.js"></script>`
@@ -58,6 +59,9 @@ type Server struct {
 	// Agent control plane (Pi RPC workers). Optional; nil outside Companion.
 	agentMu sync.Mutex
 	agent   agent.Manager
+
+	// Paragraph translation is delegated to mmd, which owns Pi RPC.
+	translator translation.Streamer
 }
 
 // NewServer receives frontend files from the composition root rather than
@@ -69,6 +73,9 @@ func NewServer(service *application.Service, miruFS, integrationFS fs.FS) *Serve
 // SetToken enables bearer checks on extension-facing write endpoints.
 // Empty token keeps those endpoints open (local Miru / unit tests).
 func (s *Server) SetToken(token string) { s.token = strings.TrimSpace(token) }
+
+// SetTranslationStreamer wires the mmd-backed paragraph stream used by Miru.
+func (s *Server) SetTranslationStreamer(streamer translation.Streamer) { s.translator = streamer }
 
 // Token returns the configured bridge token, if any.
 func (s *Server) Token() string { return s.token }
@@ -106,6 +113,7 @@ func (s *Server) Start(ctx context.Context, port int) (string, error) {
 	mux.HandleFunc("/api/documents/candidates", s.handleDocumentCandidates)
 	mux.HandleFunc("/api/doc/", s.handleDocument)
 	mux.HandleFunc("/api/pdfs/import", s.handlePDFImport)
+	mux.HandleFunc("/api/translation/stream", s.handleTranslationStream)
 	mux.HandleFunc("/api/pdf-assets/", s.handlePDFAsset)
 	mux.HandleFunc("/api/save", s.handleSave)
 	mux.HandleFunc("/api/sync", s.handleSync)

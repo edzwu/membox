@@ -14,6 +14,7 @@ import (
 
 	"membox/internal/agent"
 	"membox/internal/bootstrap"
+	"membox/internal/translation"
 	"membox/internal/web"
 	"membox/internal/web/backend"
 )
@@ -75,6 +76,7 @@ func Run(ctx context.Context, options Options) error {
 	currentMode := lifecycle
 	server := web.NewServer(service)
 	server.SetToken(token)
+	server.SetTranslationStreamer(translation.MMDClient{SocketPath: translation.SocketPath(options.Home)})
 	server.ConfigureCompanion(lifecycle, stopOnce, func(mode string) {
 		modeMu.Lock()
 		currentMode = mode
