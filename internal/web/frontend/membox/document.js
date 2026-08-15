@@ -127,6 +127,10 @@ async function renameCurrentDocument(titleElement, previousTitle, nextTitle) {
 
 // Shorten chrome + body titles for generated PDF→MD chapters so Miru matches
 // the TUI tree ("just-for-fun ch.12") instead of the identity-laden stem.
+export function applyConversionDisplayLabelIfNeeded(filename, catalogTitle) {
+  return applyConversionDisplayLabel(filename, catalogTitle);
+}
+
 function applyConversionDisplayLabel(filename, catalogTitle) {
   const label = documentDisplayLabel({ filename, catalogTitle });
   state.docTitle = label;

@@ -148,6 +148,51 @@ export async function resolveDocumentByPath(name) {
   return response.json();
 }
 
+// Selection assist (ask/edit) — NDJSON stream from Companion → Pi → model.
+export async function streamAssist(documentID, payload, onEvent, signal) {
+  const response = await fetch(`/api/doc/${encodeURIComponent(documentID)}/assist`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    cache: 'no-store',
+    signal,
+  });
+  if (!response.ok) {
+    throw new Error((await response.text()).trim() || `HTTP ${response.status}`);
+  }
+  if (!response.body) throw new Error('Assist stream unavailable');
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  const consume = (line) => {
+    if (!line.trim()) return;
+    const event = JSON.parse(line);
+    onEvent(event);
+    if (event.type === 'error') throw new Error(event.error || 'Assist failed');
+  };
+  while (true) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+    let newline = buffer.indexOf('\n');
+    while (newline >= 0) {
+      const line = buffer.slice(0, newline).replace(/\r$/, '');
+      buffer = buffer.slice(newline + 1);
+      consume(line);
+      newline = buffer.indexOf('\n');
+    }
+    if (done) break;
+  }
+  if (buffer.trim()) consume(buffer.replace(/\r$/, ''));
+}
+
+export async function applyAssistEdit(documentID, payload) {
+  const response = await request(`/api/doc/${encodeURIComponent(documentID)}/assist/apply`, {
+    method: 'POST',
+    body: payload,
+  });
+  return response.json();
+}
+
 // Free Dictionary lookup — same source as ~/repo/lookup.
 export async function fetchLookup(word, { signal } = {}) {
   const response = await request(`/api/lookup?q=${encodeURIComponent(word)}`, { signal });

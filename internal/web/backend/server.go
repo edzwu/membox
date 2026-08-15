@@ -288,6 +288,14 @@ func (s *Server) handleDocument(writer http.ResponseWriter, request *http.Reques
 		s.handleConversionSeries(writer, request, strings.TrimSuffix(selector, "/series"))
 		return
 	}
+	if strings.HasSuffix(selector, "/assist/apply") {
+		s.handleAssistApply(writer, request, strings.TrimSuffix(selector, "/assist/apply"))
+		return
+	}
+	if strings.HasSuffix(selector, "/assist") {
+		s.handleDocumentAssist(writer, request, strings.TrimSuffix(selector, "/assist"))
+		return
+	}
 	if selector == "" {
 		http.Error(writer, "missing document selector", http.StatusBadRequest)
 		return

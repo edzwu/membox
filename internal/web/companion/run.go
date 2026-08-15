@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"membox/internal/agent"
+	"membox/internal/assist"
 	"membox/internal/bootstrap"
 	"membox/internal/translation"
 	"membox/internal/web"
@@ -81,6 +82,15 @@ func Run(ctx context.Context, options Options) error {
 		Ensure: func(ctx context.Context) error {
 			return translation.EnsureMMD(ctx, options.Home)
 		},
+	})
+	// Selection assist (ask/edit) uses Pi → deepseek-v4-flash one-shot RPC.
+	userHome, _ := os.UserHomeDir()
+	assistPiPath, _ := service.Store().GetSetting(runCtx, "agent.pi_path")
+	server.SetAssistRunner(&assist.Runner{
+		PiPath:   assistPiPath,
+		Home:     userHome,
+		Provider: assist.DefaultProvider,
+		Model:    assist.DefaultModel,
 	})
 	server.ConfigureCompanion(lifecycle, stopOnce, func(mode string) {
 		modeMu.Lock()

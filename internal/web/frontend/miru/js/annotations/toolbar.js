@@ -59,7 +59,7 @@ let currentSelectionText = '';
 export function hideAnnotToolbar() {
   if (annotToolbar) {
     annotToolbar.hidden = true;
-    annotToolbar.classList.remove('is-dict');
+    annotToolbar.classList.remove('is-dict', 'is-assist');
   }
   currentRange = null;
   currentAnnotEl = null;
@@ -106,7 +106,7 @@ function buildAnnotToolbar(mode, entry, text = '') {
   if (mode === 'edit') {
     html += `<button type="button" data-action="delete" class="annot-del" title="Delete annotation" aria-label="Delete annotation">${i.trash}</button>`;
   }
-  annotToolbar.classList.remove('is-dict');
+  annotToolbar.classList.remove('is-dict', 'is-assist');
   annotToolbar.innerHTML = html;
 }
 
