@@ -165,6 +165,31 @@ func TestTranslationSlotBusyReturns429(t *testing.T) {
 	}
 }
 
+type fakeCompleter struct{ text string }
+
+func (f fakeCompleter) Complete(context.Context, string) (string, error) { return f.text, nil }
+
+func TestLLMCompleteEndpointAndSlot(t *testing.T) {
+	d := &Daemon{completer: fakeCompleter{text: `{"chapters":[]}`}, translationSlot: make(chan struct{}, 1)}
+	body, _ := json.Marshal(map[string]string{"prompt": "plan"})
+	request := httptest.NewRequest(http.MethodPost, "/v1/llm/complete", bytes.NewReader(body))
+	response := httptest.NewRecorder()
+	d.handleLLMComplete(response, request)
+	var decoded struct {
+		Text string `json:"text"`
+	}
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &decoded) != nil || decoded.Text != `{"chapters":[]}` {
+		t.Fatalf("complete status=%d body=%q", response.Code, response.Body.String())
+	}
+
+	d.translationSlot <- struct{}{}
+	busy := httptest.NewRecorder()
+	d.handleLLMComplete(busy, httptest.NewRequest(http.MethodPost, "/v1/llm/complete", bytes.NewReader(body)))
+	if busy.Code != http.StatusTooManyRequests {
+		t.Fatalf("busy slot status=%d", busy.Code)
+	}
+}
+
 func TestScanAPIStoresBaselineAndChangedContentAsImmutableVersions(t *testing.T) {
 	home := shortTempDir(t)
 	workspace := t.TempDir()

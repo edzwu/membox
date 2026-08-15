@@ -132,6 +132,7 @@ type Daemon struct {
 	service          *application.Service
 	echoSummary      echoSummaryRunner
 	translator       translation.Streamer
+	completer        translation.Completer
 	translationCache *translation.Cache
 	translationSlot  chan struct{}
 	listener         net.Listener
@@ -203,6 +204,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 			Inner:    runner,
 			Provider: translation.DefaultProvider,
 			Model:    translation.DefaultModel,
+		}
+		if d.completer == nil {
+			d.completer = runner
 		}
 	}
 
@@ -294,6 +298,7 @@ func (d *Daemon) handler() http.Handler {
 		go d.shutdown()
 	})
 	mux.HandleFunc("POST /v1/translation/stream", d.handleTranslationStream)
+	mux.HandleFunc("POST /v1/llm/complete", d.handleLLMComplete)
 	mux.HandleFunc("POST /v1/video/summary", func(writer http.ResponseWriter, request *http.Request) {
 		request.Body = http.MaxBytesReader(writer, request.Body, 64<<10)
 		var input VideoSummaryRequest

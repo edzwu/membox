@@ -13,6 +13,7 @@ import (
 	"membox/internal/domain/catalog"
 	"membox/internal/pdfasset"
 	"membox/internal/pdfconvert"
+	"membox/internal/translation"
 )
 
 // ConvertPDFCommand runs the optional LAN PDF-to-Markdown feature. ServerURL
@@ -57,7 +58,13 @@ type PDFConverterConfigView struct {
 }
 
 func (b *Box) pdfConverterWorkflow() *pdfconvert.Workflow {
-	return pdfconvert.NewWorkflow(pdfconvert.NewHTTPClient(), pdfconvert.NewConfigStore(b.home))
+	workflow := pdfconvert.NewWorkflow(pdfconvert.NewHTTPClient(), pdfconvert.NewConfigStore(b.home))
+	// Optional LLM structure planning, served by mmd → Pi → qwen3:14b. When
+	// mmd is not running the planner call fails fast and postprocessing keeps
+	// the converted document whole.
+	client := translation.MMDClient{SocketPath: translation.SocketPath(b.home)}
+	workflow.SetStructurePlanner(pdfconvert.LLMStructurePlanner{Complete: client.Complete})
+	return workflow
 }
 
 // SetPDFConverterServer persists feature-owned configuration outside the core

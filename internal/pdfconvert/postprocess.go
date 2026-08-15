@@ -2,6 +2,7 @@ package pdfconvert
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"regexp"
 	"sort"
@@ -62,8 +63,22 @@ type topLevelHeading struct {
 // chapter documents. It is a pure transformation: publishing and catalog
 // links remain responsibilities of the workflow and host workspace.
 func PostprocessMarkdown(markdown, baseFilename string) PostprocessResult {
+	return PostprocessMarkdownWithPlanner(context.Background(), markdown, baseFilename, nil)
+}
+
+// PostprocessMarkdownWithPlanner first tries the deterministic AST/TOC split.
+// When that finds fewer than two chapters and a StructurePlanner is available,
+// it asks the local LLM for proposed boundaries, verifies every anchor against
+// real document lines, and only then splits. Any failure keeps the document
+// whole; the LLM can never rewrite or drop content silently.
+func PostprocessMarkdownWithPlanner(ctx context.Context, markdown, baseFilename string, planner StructurePlanner) PostprocessResult {
 	markdown = normalizeHTMLTables(markdown)
 	boundaries, chapterCount := markdownSections(markdown)
+	if chapterCount < 2 && planner != nil {
+		if planned := llmPlannedSections(ctx, markdown, planner); len(planned) >= 2 {
+			boundaries, chapterCount = planned, len(planned)
+		}
+	}
 	if chapterCount < 2 {
 		return PostprocessResult{IndexMarkdown: markdown}
 	}
@@ -114,6 +129,119 @@ func PostprocessMarkdown(markdown, baseFilename string) PostprocessResult {
 		fmt.Fprintf(&index, "%d. [%s](%s)\n", i+1, chapter.Title, chapter.Filename)
 	}
 	return PostprocessResult{IndexMarkdown: index.String(), Chapters: chapters}
+}
+
+func llmPlannedSections(ctx context.Context, markdown string, planner StructurePlanner) []sectionBoundary {
+	sketch := BuildStructureSketch(markdown)
+	if len(sketch) < 200 {
+		return nil
+	}
+	plans, err := planner.PlanChapters(ctx, sketch)
+	if err != nil {
+		return nil
+	}
+	return locatePlannedChapters(markdown, plans)
+}
+
+// locatePlannedChapters maps LLM-proposed anchors onto real document lines.
+// Table rows (TOC entries) are rejected, matches must be strictly ordered,
+// and at least two anchors must locate before any split happens.
+func locatePlannedChapters(markdown string, plans []ChapterPlan) []sectionBoundary {
+	type mdLine struct {
+		start, end int
+		text       string
+	}
+	raw := strings.Split(markdown, "\n")
+	lines := make([]mdLine, 0, len(raw))
+	offset := 0
+	for _, text := range raw {
+		lines = append(lines, mdLine{start: offset, end: offset + len(text) + 1, text: text})
+		offset += len(text) + 1
+	}
+
+	cursor := 0
+	boundaries := make([]sectionBoundary, 0, len(plans))
+	for _, plan := range plans {
+		anchor := normalizeTOCTitle(plan.Anchor)
+		if len(anchor) < 6 {
+			continue
+		}
+		for _, line := range lines {
+			if line.start < cursor {
+				continue
+			}
+			trimmed := strings.TrimSpace(line.text)
+			if trimmed == "" || strings.HasPrefix(trimmed, "|") || strings.HasPrefix(trimmed, "!") {
+				continue
+			}
+			text, heading := trimmed, false
+			if match := atxHeadingText(trimmed); match != "" {
+				text, heading = match, true
+			}
+			normalized := normalizeTOCTitle(text)
+			if normalized == "" || !anchorMatches(anchor, normalized) {
+				continue
+			}
+			start, bodyStart := line.start, line.start
+			if heading {
+				bodyStart = line.end
+			} else if line.end < len(markdown) {
+				// A Setext heading keeps its title line out of the body too.
+				next := strings.TrimSpace(markdown[line.end:min(line.end+128, len(markdown))])
+				if nl := strings.IndexByte(next, '\n'); nl >= 0 {
+					next = next[:nl]
+				}
+				if len(next) >= 3 && (strings.Trim(next, "=") == "" || strings.Trim(next, "-") == "") {
+					bodyStart = line.end
+				}
+			}
+			boundaries = append(boundaries, sectionBoundary{
+				start: start, bodyStart: bodyStart, title: plan.Title, chapter: true,
+			})
+			cursor = line.end
+			break
+		}
+	}
+	if len(boundaries) < 2 {
+		return nil
+	}
+
+	// Never silently drop substantial front matter: keep it as its own chapter.
+	if prefix := strings.TrimSpace(markdown[:boundaries[0].start]); len(prefix) > 800 {
+		boundaries = append([]sectionBoundary{{start: 0, bodyStart: 0, title: "Front Matter", chapter: true}}, boundaries...)
+	}
+	for index := range boundaries {
+		boundaries[index].chapterKey = fmt.Sprintf("chapter-%03d", index)
+	}
+	return boundaries
+}
+
+func atxHeadingText(line string) string {
+	level := 0
+	for level < len(line) && line[level] == '#' {
+		level++
+	}
+	if level == 0 || level > 6 || level >= len(line) || line[level] != ' ' {
+		return ""
+	}
+	return strings.TrimSpace(strings.TrimRight(strings.TrimSpace(line[level:]), "#"))
+}
+
+// anchorMatches compares NFKC-normalized, alphanumeric-only forms. Exact or
+// prefix equality is preferred; containment requires a long anchor so short
+// generic strings cannot pin a boundary.
+func anchorMatches(anchor, line string) bool {
+	if line == anchor {
+		return true
+	}
+	prefix := anchor
+	if len(prefix) > 32 {
+		prefix = prefix[:32]
+	}
+	if strings.HasPrefix(line, prefix) {
+		return true
+	}
+	return len(anchor) >= 16 && strings.Contains(line, anchor)
 }
 
 func markdownSections(markdown string) ([]sectionBoundary, int) {

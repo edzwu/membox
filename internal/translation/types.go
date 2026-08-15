@@ -39,3 +39,9 @@ type EmitFunc func(Event) error
 type Streamer interface {
 	Stream(ctx context.Context, request Request, emit EmitFunc) error
 }
+
+// Completer is a one-shot local-LLM prompt through Pi. The PDF structure
+// planner uses it; translation uses the streaming variant above.
+type Completer interface {
+	Complete(ctx context.Context, prompt string) (string, error)
+}

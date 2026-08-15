@@ -25,6 +25,22 @@ type PiRunner struct {
 	ExtensionPath string
 }
 
+func (r PiRunner) resolve() (piPath, provider, model string) {
+	piPath = strings.TrimSpace(r.PiPath)
+	if piPath == "" {
+		piPath = "pi"
+	}
+	provider = strings.TrimSpace(r.Provider)
+	if provider == "" {
+		provider = PiProvider
+	}
+	model = strings.TrimSpace(r.Model)
+	if model == "" {
+		model = DefaultModel
+	}
+	return piPath, provider, model
+}
+
 func (r PiRunner) Stream(ctx context.Context, request Request, emit EmitFunc) error {
 	request, err := validateRequest(request)
 	if err != nil {
@@ -33,18 +49,48 @@ func (r PiRunner) Stream(ctx context.Context, request Request, emit EmitFunc) er
 	if emit == nil {
 		return errors.New("translation event emitter is required")
 	}
-	piPath := strings.TrimSpace(r.PiPath)
-	if piPath == "" {
-		piPath = "pi"
+	_, _, model := r.resolve()
+
+	var translated strings.Builder
+	_, err = r.runPrompt(ctx, translationPrompt(request),
+		func() error {
+			return emit(Event{Type: "start", ID: request.ID, Provider: DefaultProvider, Model: model})
+		},
+		func(delta string) error {
+			translated.WriteString(delta)
+			return emit(Event{Type: "delta", ID: request.ID, Text: delta})
+		})
+	if err != nil {
+		return err
 	}
-	provider := strings.TrimSpace(r.Provider)
-	if provider == "" {
-		provider = PiProvider
+	if strings.TrimSpace(translated.String()) == "" {
+		return errors.New("Pi returned an empty translation")
 	}
-	model := strings.TrimSpace(r.Model)
-	if model == "" {
-		model = DefaultModel
+	return emit(Event{Type: "done", ID: request.ID})
+}
+
+// Complete performs one tool-free prompt and returns the full assistant text.
+// It powers non-streaming consumers such as the PDF structure planner.
+func (r PiRunner) Complete(ctx context.Context, prompt string) (string, error) {
+	if strings.TrimSpace(prompt) == "" {
+		return "", errors.New("prompt is empty")
 	}
+	text, err := r.runPrompt(ctx, prompt, nil, nil)
+	if err != nil {
+		return "", err
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return "", errors.New("Pi returned an empty completion")
+	}
+	return text, nil
+}
+
+// runPrompt owns the Pi RPC subprocess lifecycle for one prompt. onAccepted
+// fires after Pi accepts the prompt; onDelta fires per streamed text chunk
+// (or once with the full text when the provider does not stream).
+func (r PiRunner) runPrompt(ctx context.Context, prompt string, onAccepted func() error, onDelta func(string) error) (string, error) {
+	piPath, provider, model := r.resolve()
 
 	args := []string{
 		"--mode", "rpc", "--no-session",
@@ -64,17 +110,17 @@ func (r PiRunner) Stream(ctx context.Context, request Request, emit EmitFunc) er
 	cmd.Env = append(os.Environ(), "PI_OFFLINE=1")
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		return fmt.Errorf("open Pi stdin: %w", err)
+		return "", fmt.Errorf("open Pi stdin: %w", err)
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		_ = stdin.Close()
-		return fmt.Errorf("open Pi stdout: %w", err)
+		return "", fmt.Errorf("open Pi stdout: %w", err)
 	}
 	stderr := &boundedBuffer{limit: 32 << 10}
 	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("start Pi RPC: %w", err)
+		return "", fmt.Errorf("start Pi RPC: %w", err)
 	}
 	defer func() {
 		_ = stdin.Close()
@@ -84,26 +130,30 @@ func (r PiRunner) Stream(ctx context.Context, request Request, emit EmitFunc) er
 		_ = cmd.Wait()
 	}()
 
-	prompt := translationPrompt(request)
-	command, _ := json.Marshal(map[string]any{"id": "translation", "type": "prompt", "message": prompt})
+	command, _ := json.Marshal(map[string]any{"id": "request", "type": "prompt", "message": prompt})
 	if _, err := stdin.Write(append(command, '\n')); err != nil {
-		return fmt.Errorf("send Pi prompt: %w", err)
+		_ = stdin.Close()
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		_ = cmd.Wait()
+		return "", fmt.Errorf("send Pi prompt: %w", err)
 	}
 
 	reader := bufio.NewReaderSize(stdout, 64<<10)
-	accepted, started := false, false
-	var translated strings.Builder
+	accepted := false
+	var collected strings.Builder
 	for {
 		frame, readErr := readRPCFrame(reader)
 		if readErr != nil {
 			if errors.Is(readErr, io.EOF) {
-				return fmt.Errorf("Pi RPC exited before settling: %s", strings.TrimSpace(stderr.String()))
+				return "", fmt.Errorf("Pi RPC exited before settling: %s", strings.TrimSpace(stderr.String()))
 			}
-			return fmt.Errorf("read Pi RPC: %w", readErr)
+			return "", fmt.Errorf("read Pi RPC: %w", readErr)
 		}
 		var event map[string]json.RawMessage
 		if err := json.Unmarshal(frame, &event); err != nil {
-			return fmt.Errorf("decode Pi RPC event: %w", err)
+			return "", fmt.Errorf("decode Pi RPC event: %w", err)
 		}
 		var eventType string
 		_ = json.Unmarshal(event["type"], &eventType)
@@ -115,15 +165,16 @@ func (r PiRunner) Stream(ctx context.Context, request Request, emit EmitFunc) er
 				Error   string `json:"error"`
 			}
 			_ = json.Unmarshal(frame, &response)
-			if response.ID == "translation" {
+			if response.ID == "request" {
 				if !response.Success {
-					return fmt.Errorf("Pi rejected translation prompt: %s", response.Error)
+					return "", fmt.Errorf("Pi rejected prompt: %s", response.Error)
 				}
 				accepted = true
-				if err := emit(Event{Type: "start", ID: request.ID, Provider: DefaultProvider, Model: model}); err != nil {
-					return err
+				if onAccepted != nil {
+					if err := onAccepted(); err != nil {
+						return "", err
+					}
 				}
-				started = true
 			}
 		case "message_update":
 			var update struct {
@@ -135,27 +186,28 @@ func (r PiRunner) Stream(ctx context.Context, request Request, emit EmitFunc) er
 			_ = json.Unmarshal(frame, &update)
 			if update.AssistantMessageEvent.Type == "text_delta" && update.AssistantMessageEvent.Delta != "" {
 				delta := update.AssistantMessageEvent.Delta
-				translated.WriteString(delta)
-				if err := emit(Event{Type: "delta", ID: request.ID, Text: delta}); err != nil {
-					return err
+				collected.WriteString(delta)
+				if onDelta != nil {
+					if err := onDelta(delta); err != nil {
+						return "", err
+					}
 				}
 			}
 		case "message_end":
 			// message_end is authoritative when a provider does not stream text.
-			if text := assistantText(frame); text != "" && translated.Len() == 0 {
-				translated.WriteString(text)
-				if err := emit(Event{Type: "delta", ID: request.ID, Text: text}); err != nil {
-					return err
+			if text := assistantText(frame); text != "" && collected.Len() == 0 {
+				collected.WriteString(text)
+				if onDelta != nil {
+					if err := onDelta(text); err != nil {
+						return "", err
+					}
 				}
 			}
 		case "agent_settled":
-			if !accepted || !started {
-				return errors.New("Pi settled without accepting translation prompt")
+			if !accepted {
+				return "", errors.New("Pi settled without accepting the prompt")
 			}
-			if strings.TrimSpace(translated.String()) == "" {
-				return errors.New("Pi returned an empty translation")
-			}
-			return emit(Event{Type: "done", ID: request.ID})
+			return collected.String(), nil
 		}
 	}
 }

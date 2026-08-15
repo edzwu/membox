@@ -73,3 +73,38 @@ func (c MMDClient) Stream(ctx context.Context, input Request, emit EmitFunc) err
 		}
 	}
 }
+
+// Complete calls mmd's one-shot LLM endpoint (no streaming).
+func (c MMDClient) Complete(ctx context.Context, prompt string) (string, error) {
+	body, err := json.Marshal(map[string]string{"prompt": prompt})
+	if err != nil {
+		return "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://mmd/v1/llm/complete", bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	client := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", c.SocketPath)
+	}}}
+	response, err := client.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		return "", errors.New("mmd is not running; start it with `mmd run`")
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		message, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
+		return "", fmt.Errorf("mmd completion HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(message)))
+	}
+	var result struct {
+		Text string `json:"text"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("decode mmd completion: %w", err)
+	}
+	return result.Text, nil
+}

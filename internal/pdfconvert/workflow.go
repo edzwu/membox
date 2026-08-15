@@ -14,13 +14,18 @@ import (
 const pdfMediaType = "application/pdf"
 
 type Workflow struct {
-	client Client
-	config ConfigStore
+	client  Client
+	config  ConfigStore
+	planner StructurePlanner
 }
 
 func NewWorkflow(client Client, config ConfigStore) *Workflow {
 	return &Workflow{client: client, config: config}
 }
+
+// SetStructurePlanner installs the optional LLM fallback used when
+// deterministic chapter splitting finds fewer than two chapters.
+func (w *Workflow) SetStructurePlanner(planner StructurePlanner) { w.planner = planner }
 
 func (w *Workflow) ConfigPath() string { return w.config.Path() }
 
@@ -92,7 +97,11 @@ func (w *Workflow) ConvertWithProgress(ctx context.Context, workspace Workspace,
 		return Result{}, fmt.Errorf("resolving stable converted filename: %w", err)
 	}
 	remote.Markdown = rewriteAssetReferences(remote.Markdown, source.DocumentID, remote.Assets)
-	processed := PostprocessMarkdown(remote.Markdown, filename)
+	planner := w.planner
+	if planner != nil && onProgress != nil {
+		planner = progressStructurePlanner{inner: planner, onProgress: onProgress}
+	}
+	processed := PostprocessMarkdownWithPlanner(ctx, remote.Markdown, filename, planner)
 	if len(processed.Chapters) == 0 {
 		published, err := workspace.PublishBundle(ctx, source.DocumentID, filename, processed.IndexMarkdown, remote.Assets)
 		if err != nil {
@@ -149,6 +158,18 @@ func rewriteAssetReferences(markdown, sourceDocumentID string, assets []Asset) s
 		markdown = strings.ReplaceAll(markdown, asset.RelativePath, prefix+strings.Join(segments, "/"))
 	}
 	return markdown
+}
+
+// progressStructurePlanner surfaces the LLM analysis step in CLI/TUI
+// progress without changing planner semantics.
+type progressStructurePlanner struct {
+	inner      StructurePlanner
+	onProgress func(Progress)
+}
+
+func (p progressStructurePlanner) PlanChapters(ctx context.Context, sketch string) ([]ChapterPlan, error) {
+	p.onProgress(Progress{Stage: "structure", Detail: "analyzing document structure with local model"})
+	return p.inner.PlanChapters(ctx, sketch)
 }
 
 func conversionResult(source Source, filename, markdownSHA256 string, published PublishedMarkdown, chapters []PublishedChapter) Result {

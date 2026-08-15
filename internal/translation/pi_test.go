@@ -17,7 +17,7 @@ func TestPiRunnerStreamsIsolatedQwenTranslation(t *testing.T) {
 printf '%s\n' "$*" > "$FAKE_PI_ARGS"
 IFS= read -r prompt
 printf '%s\n' "$prompt" > "$FAKE_PI_PROMPT"
-printf '%s\n' '{"id":"translation","type":"response","command":"prompt","success":true}'
+printf '%s\n' '{"id":"request","type":"response","command":"prompt","success":true}'
 printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"你好"}}'
 printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"，世界。"}}'
 printf '%s\n' '{"type":"agent_settled"}'
