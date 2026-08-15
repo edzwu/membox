@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"membox"
@@ -28,6 +29,11 @@ const (
 	pidName  = "mmd.pid"
 	lockName = "mmd.lock"
 	logName  = "mmd.log"
+
+	// defaultIdleTimeout bounds how long an unused mmd stays resident. Combined
+	// with on-demand startup this makes the daemon fully self-managing: spawn
+	// when needed, exit when idle, respawn on the next request.
+	defaultIdleTimeout = 30 * time.Minute
 )
 
 var (
@@ -140,12 +146,15 @@ type Daemon struct {
 	instance         *system.OSMutex
 	log              *log.Logger
 	health           Health
+	idleTimeout      time.Duration
+	inFlight         atomic.Int64
+	lastActive       atomic.Int64
 
 	shutdownOnce sync.Once
 }
 
 func New(config Config) *Daemon {
-	return &Daemon{config: config, echoSummary: echoBPCommand{}, translationSlot: make(chan struct{}, 1)}
+	return &Daemon{config: config, echoSummary: echoBPCommand{}, translationSlot: make(chan struct{}, 1), idleTimeout: defaultIdleTimeout}
 }
 
 func (d *Daemon) Run(ctx context.Context) error {
@@ -236,11 +245,13 @@ func (d *Daemon) Run(ctx context.Context) error {
 		Started:             time.Now().UTC(),
 	}
 
-	d.server = &http.Server{Handler: d.handler()}
+	d.server = &http.Server{Handler: d.trackActivity(d.handler())}
 	go func() {
 		<-ctx.Done()
 		d.shutdown()
 	}()
+	go d.watchIdle(ctx)
+	d.lastActive.Store(time.Now().UnixNano())
 
 	d.log.Printf("ready")
 	err = d.server.Serve(listener)
@@ -284,6 +295,53 @@ func (d *Daemon) writePID(pid int) error {
 		return fmt.Errorf("write mmd pid: %w", err)
 	}
 	return nil
+}
+
+// trackActivity counts in-flight requests and records real work. Health
+// probes deliberately do not refresh the idle clock, so polling `mmd status`
+// can never keep an otherwise unused daemon alive forever.
+func (d *Daemon) trackActivity(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		d.inFlight.Add(1)
+		defer d.inFlight.Add(-1)
+		defer func() {
+			if request.URL.Path != "/health" {
+				d.lastActive.Store(time.Now().UnixNano())
+			}
+		}()
+		next.ServeHTTP(writer, request)
+	})
+}
+
+// watchIdle exits the daemon once it has served nothing for idleTimeout.
+// The next client request respawns it on demand, so nothing is lost and the
+// fresh process picks up the current binary.
+func (d *Daemon) watchIdle(ctx context.Context) {
+	interval := d.idleTimeout / 4
+	if interval > 30*time.Second {
+		interval = 30 * time.Second
+	}
+	if interval <= 0 {
+		interval = 10 * time.Millisecond
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if d.idleTimeout <= 0 || d.inFlight.Load() > 0 {
+				continue
+			}
+			last := time.Unix(0, d.lastActive.Load())
+			if time.Since(last) >= d.idleTimeout {
+				d.log.Printf("idle for %s, shutting down", time.Since(last).Round(time.Second))
+				d.shutdown()
+				return
+			}
+		}
+	}
 }
 
 func (d *Daemon) handler() http.Handler {

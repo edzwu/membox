@@ -190,6 +190,77 @@ func TestLLMCompleteEndpointAndSlot(t *testing.T) {
 	}
 }
 
+func TestDaemonSelfStopsWhenIdle(t *testing.T) {
+	config, err := DefaultConfig(shortTempDir(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	daemon := New(config)
+	daemon.idleTimeout = 800 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runErr := make(chan error, 1)
+	go func() { runErr <- daemon.Run(ctx) }()
+	waitFor(t, func() bool {
+		_, healthErr := Healthcheck(config)
+		return healthErr == nil
+	})
+	// Healthcheck polling itself must not extend the daemon's life.
+	waitFor(t, func() bool {
+		_, healthErr := Healthcheck(config)
+		return errors.Is(healthErr, ErrNotRunning)
+	})
+	select {
+	case err := <-runErr:
+		if err != nil {
+			t.Fatalf("run returned: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("daemon did not exit after idle shutdown")
+	}
+}
+
+func TestDaemonActivityDefersIdleShutdown(t *testing.T) {
+	config, err := DefaultConfig(shortTempDir(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	daemon := New(config)
+	daemon.idleTimeout = 800 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runErr := make(chan error, 1)
+	go func() { runErr <- daemon.Run(ctx) }()
+	waitFor(t, func() bool {
+		_, healthErr := Healthcheck(config)
+		return healthErr == nil
+	})
+	// Real work (scan requests) keeps the daemon alive past the idle window.
+	deadline := time.Now().Add(1600 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if _, scanErr := Scan(context.Background(), config, ScanRequest{}); scanErr != nil {
+			t.Fatalf("scan during keep-alive: %v", scanErr)
+		}
+		time.Sleep(350 * time.Millisecond)
+	}
+	if _, healthErr := Healthcheck(config); healthErr != nil {
+		t.Fatalf("daemon idled out despite activity: %v", healthErr)
+	}
+	// Once work stops, the idle window closes and the daemon exits.
+	waitFor(t, func() bool {
+		_, healthErr := Healthcheck(config)
+		return errors.Is(healthErr, ErrNotRunning)
+	})
+	select {
+	case err := <-runErr:
+		if err != nil {
+			t.Fatalf("run returned: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("daemon did not exit after activity stopped")
+	}
+}
+
 func TestScanAPIStoresBaselineAndChangedContentAsImmutableVersions(t *testing.T) {
 	home := shortTempDir(t)
 	workspace := t.TempDir()
