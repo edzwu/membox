@@ -140,7 +140,13 @@ func (w *Workflow) ConvertWithProgress(ctx context.Context, workspace Workspace,
 func rewriteAssetReferences(markdown, sourceDocumentID string, assets []Asset) string {
 	prefix := "/api/pdf-assets/" + url.PathEscape(sourceDocumentID) + "/"
 	for _, asset := range assets {
-		markdown = strings.ReplaceAll(markdown, asset.RelativePath, prefix+asset.RelativePath)
+		// Markdown link destinations cannot contain raw spaces, parentheses, or
+		// other URL-significant characters; percent-encode each path segment.
+		segments := strings.Split(asset.RelativePath, "/")
+		for index, segment := range segments {
+			segments[index] = url.PathEscape(segment)
+		}
+		markdown = strings.ReplaceAll(markdown, asset.RelativePath, prefix+strings.Join(segments, "/"))
 	}
 	return markdown
 }

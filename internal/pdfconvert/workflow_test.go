@@ -198,3 +198,23 @@ func TestConfigStorePersistsFeatureConfigOutsideCatalog(t *testing.T) {
 		t.Fatalf("feature config is not private: %o", info.Mode().Perm())
 	}
 }
+
+func TestRewriteAssetReferencesEscapesMarkdownUnsafeFilenames(t *testing.T) {
+	markdown := "# Chapter\n\n![](images/Fooled by randomness__part004__abc123.jpg)\n\n![](images/plain.png)\n"
+	assets := []Asset{
+		{RelativePath: "images/Fooled by randomness__part004__abc123.jpg", Body: []byte("jpg")},
+		{RelativePath: "images/plain.png", Body: []byte("png")},
+	}
+	rewritten := rewriteAssetReferences(markdown, "01a00110-6cb4-79db-952c-02e705f8c0ea", assets)
+	wantEscaped := "/api/pdf-assets/01a00110-6cb4-79db-952c-02e705f8c0ea/images/Fooled%20by%20randomness__part004__abc123.jpg"
+	wantPlain := "/api/pdf-assets/01a00110-6cb4-79db-952c-02e705f8c0ea/images/plain.png"
+	if !strings.Contains(rewritten, "![]("+wantEscaped+")") {
+		t.Fatalf("spaced filename was not percent-encoded: %q", rewritten)
+	}
+	if !strings.Contains(rewritten, "![]("+wantPlain+")") {
+		t.Fatalf("plain filename was mangled: %q", rewritten)
+	}
+	if strings.Contains(rewritten, "images/Fooled by randomness") {
+		t.Fatalf("raw spaced reference remained: %q", rewritten)
+	}
+}
