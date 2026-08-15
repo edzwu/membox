@@ -26,6 +26,10 @@ import { hideAnnotToolbar } from './annotations/toolbar.js';
 
 let md = null;
 
+function notifyDocumentChange(kind) {
+  window.dispatchEvent(new CustomEvent('miru-document-change', { detail: { kind } }));
+}
+
 export function initMarkdown() {
   if (typeof window.markdownit !== 'function') {
     console.error('markdown-it not loaded');
@@ -173,6 +177,7 @@ function loadSnippetDocument(code, lang) {
   const behavior = prefersReducedMotion() ? 'auto' : 'smooth';
   window.scrollTo({ top: 0, behavior });
   scheduleNoteLayout();
+  notifyDocumentChange('snippet');
 }
 
 export function loadDocument(text) {
@@ -218,6 +223,7 @@ export function loadDocument(text) {
   const behavior = prefersReducedMotion() ? 'auto' : 'smooth';
   window.scrollTo({ top: 0, behavior });
   scheduleNoteLayout();
+  notifyDocumentChange('markdown');
 }
 
 export function clearDocument() {
@@ -236,4 +242,5 @@ export function clearDocument() {
   setEmptyState();
   const behavior = prefersReducedMotion() ? 'auto' : 'smooth';
   window.scrollTo({ top: 0, behavior });
+  notifyDocumentChange('empty');
 }

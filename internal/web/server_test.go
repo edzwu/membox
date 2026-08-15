@@ -83,15 +83,16 @@ func TestServerServesReaderAndMarkdown(t *testing.T) {
 	}
 	adapterBody, _ := io.ReadAll(adapterResp.Body)
 	adapterResp.Body.Close()
-	if adapterResp.StatusCode != http.StatusOK || !strings.Contains(string(adapterBody), "./reading-state.js") || !strings.Contains(string(adapterBody), "./pdf-import.js") {
+	if adapterResp.StatusCode != http.StatusOK || !strings.Contains(string(adapterBody), "./reading-state.js") || !strings.Contains(string(adapterBody), "./pdf-import.js") || !strings.Contains(string(adapterBody), "./translation.js") {
 		t.Fatalf("membox adapter composition root unavailable: status=%d", adapterResp.StatusCode)
 	}
 	// The adapter is split into cohesive feature modules; each must be served.
 	featureModules := map[string][]string{
-		"connection.js": {"membox-connection"},
-		"document.js":   {"membox-document-switcher", "Switch document · Ctrl+O", "membox-document-navigation"},
-		"notes.js":      {"membox-browse-notes", "Notes in this document", "Open full note"},
-		"pdf-import.js": {"Drop one PDF at a time", "importPDF(file)"},
+		"connection.js":  {"membox-connection"},
+		"document.js":    {"membox-document-switcher", "Switch document · Ctrl+O", "membox-document-navigation"},
+		"notes.js":       {"membox-browse-notes", "Notes in this document", "Open full note"},
+		"pdf-import.js":  {"Drop one PDF at a time", "importPDF(file)"},
+		"translation.js": {"membox-translation-toggle", "streamTranslation", "qwen3:14b"},
 	}
 	for module, markers := range featureModules {
 		moduleResp, err := http.Get(baseURL + "/membox/" + module)

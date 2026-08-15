@@ -32,6 +32,7 @@ import { initNotes } from './notes.js';
 import { initRelated, handleOpenShortcut } from './related.js';
 import { initPresence } from './presence.js';
 import { initPDFImport } from './pdf-import.js';
+import { initTranslation } from './translation.js';
 import { initReadingState, isRestoring, scheduleReadingStateSave } from './reading-state.js';
 import { autoCreateForAnnotations, syncToMembox } from './sync.js';
 import { checkStatus } from './api.js';
@@ -52,6 +53,7 @@ initRelated();
 initReadingState();
 initPresence();
 initPDFImport();
+initTranslation();
 
 // User edits make the in-memory annotation set authoritative for deletions on
 // the next save. During a restore the model is incomplete; the restore flow

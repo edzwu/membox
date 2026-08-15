@@ -16,6 +16,44 @@ async function request(path, { method = 'GET', body, keepalive = false, signal }
   return response;
 }
 
+export async function streamTranslation(input, onEvent, { signal } = {}) {
+  const response = await fetch('/api/translation/stream', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Membox-Miru': '1',
+    },
+    body: JSON.stringify(input),
+    cache: 'no-store',
+    signal,
+  });
+  if (!response.ok) throw new Error((await response.text()).trim() || `HTTP ${response.status}`);
+  if (!response.body) throw new Error('Translation stream is unavailable');
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  const consume = (line) => {
+    if (!line.trim()) return;
+    const event = JSON.parse(line);
+    if (event.type === 'error') throw new Error(event.text || 'Translation failed');
+    onEvent(event);
+  };
+  while (true) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+    let newline = buffer.indexOf('\n');
+    while (newline >= 0) {
+      const line = buffer.slice(0, newline).replace(/\r$/, '');
+      buffer = buffer.slice(newline + 1);
+      consume(line);
+      newline = buffer.indexOf('\n');
+    }
+    if (done) break;
+  }
+  consume(buffer);
+}
+
 export async function importPDF(file) {
   const form = new FormData();
   form.append('file', file, file.name || 'document.pdf');

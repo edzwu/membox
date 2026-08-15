@@ -238,6 +238,89 @@
   cursor: wait;
 }
 
+/* Immersive translation joins the bottom-left pill as its last action. It
+   streams one paragraph at a time through mmd → Pi → qwen3:14b. */
+.membox-translate {
+  appearance: none;
+  min-width: 42px;
+  height: 34px;
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  border: 0;
+  border-left: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.membox-translate[hidden] { display: none; }
+
+.membox-translate:hover,
+.membox-translate:focus-visible {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent-soft) 62%, transparent);
+  outline: none;
+}
+
+.membox-translate[data-active="true"] {
+  color: var(--accent);
+}
+
+.membox-translate[data-running="true"] .membox-translate-glyph {
+  animation: membox-pulse 0.75s ease-in-out infinite alternate;
+}
+
+.membox-translate-progress {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.membox-translation {
+  margin: 0.38em 0 1em;
+  padding-left: 0.85em;
+  border-left: 2px solid color-mix(in srgb, var(--accent) 48%, var(--line));
+  color: color-mix(in srgb, var(--ink-soft) 84%, var(--accent));
+  font-family: var(--font-serif);
+  font-size: 0.96em;
+  font-weight: 400;
+  line-height: 1.75;
+  letter-spacing: 0.012em;
+  white-space: pre-wrap;
+}
+
+li > .membox-translation,
+td > .membox-translation,
+th > .membox-translation,
+dd > .membox-translation,
+dt > .membox-translation {
+  margin-bottom: 0.45em;
+}
+
+.membox-translation-spinner {
+  display: inline-block;
+  width: 0.72em;
+  height: 0.72em;
+  margin-left: 0.42em;
+  border: 1.5px solid color-mix(in srgb, var(--muted) 45%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: membox-translation-spin 0.8s linear infinite;
+}
+
+@keyframes membox-translation-spin {
+  to { transform: rotate(360deg); }
+}
+
 /* Bottom-left document status cluster: visible only while connected. A hollow
    circle saves pending changes; after persistence it fills and copies the
    document ID. Hovering a saved circle reveals only its five-character suffix.
@@ -253,6 +336,7 @@
   border-radius: 999px;
   background: var(--paper-raised);
   box-shadow: 0 4px 16px var(--shadow);
+  overflow: hidden;
 }
 
 .membox-status-cluster[hidden] {
@@ -441,7 +525,6 @@
   align-items: center;
   justify-content: center;
   border: 0;
-  border-radius: 0 999px 999px 0;
   background: transparent;
   color: var(--muted);
   font-family: var(--font-sans);
