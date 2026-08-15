@@ -66,6 +66,10 @@ func TestTOCFilenameOrderAndSeriesLess(t *testing.T) {
 	if order["book-pdf-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-chapter-002.md"] != 2 {
 		t.Fatalf("toc order=%v", order)
 	}
+	titles := tocTitleMap(index)
+	if titles["book-pdf-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-chapter-001.md"] != "Ch1" {
+		t.Fatalf("toc titles=%v", titles)
+	}
 	items := []conversionSeriesItem{
 		{Filename: "book-pdf-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-chapter-002.md", Kind: "chapter"},
 		{Filename: "book-pdf-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.md", Kind: "index"},

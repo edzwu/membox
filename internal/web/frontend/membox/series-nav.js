@@ -1,8 +1,11 @@
 /* Bottom navigator for PDF→MD conversion series: TOC · prev · next. */
 
 import { elements } from '../js/dom.js';
+import { assignHeadingIds, buildToc } from '../js/render/toc.js';
+import { state } from '../js/state.js';
 import { onRender } from './events.js';
 import { fetchConversionSeries } from './api.js';
+import { convertedDisplayLabel } from './labels.js';
 import { rewriteMarkdownHrefs } from './wiki-links.js';
 import { session } from './session.js';
 
@@ -84,6 +87,35 @@ function rewriteSeriesBodyLinks(series) {
   rewriteMarkdownHrefs(map);
 }
 
+// Use the real chapter title from the index TOC as the page heading, instead
+// of the raw -pdf-<uuid> filename stem.
+function applySeriesHeading(series) {
+  const current = series.current;
+  if (!current) return;
+  const title = String(current.toc_title || '').trim();
+  if (!title) return;
+  // Chrome title + document title.
+  const label = String(current.label || title).trim();
+  const live = document.getElementById('doc-title');
+  if (live) live.textContent = title;
+  if (typeof state !== 'undefined') state.docTitle = title;
+  document.title = `${title} — membox`;
+  // Body H1 (the biggest visible heading).
+  const h1 = elements.article?.querySelector('h1');
+  if (h1) {
+    const raw = (h1.textContent || '').replace(/\s+/g, ' ').trim();
+    const isConversion = Boolean(convertedDisplayLabel(`${raw}.md`));
+    const stemMatch = String(current.filename || '')
+      .replace(/\.md$/i, '')
+      .toLowerCase();
+    if (isConversion || (stemMatch && raw.toLowerCase() === stemMatch)) {
+      h1.textContent = title;
+      // Rebuild the side TOC so it matches the new heading.
+      buildToc(assignHeadingIds());
+    }
+  }
+}
+
 function renderSeries(series) {
   if (!nav) nav = createNav();
   if (!series || series.kind !== 'pdf-conversion' || !series.current) {
@@ -91,6 +123,7 @@ function renderSeries(series) {
     return;
   }
   rewriteSeriesBodyLinks(series);
+  applySeriesHeading(series);
   // Index page with no chapters: nothing to navigate.
   if (series.current.kind === 'index' && !series.next && !series.prev) {
     hideNav();

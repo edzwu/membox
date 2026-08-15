@@ -17,7 +17,7 @@ import (
 var (
 	conversionChapterRE = regexp.MustCompile(`(?i)-chapter-(\d+)\.md$`)
 	conversionPartRE    = regexp.MustCompile(`(?i)-part-([a-z]+)\.md$`)
-	tocLinkRE           = regexp.MustCompile(`\[[^\]]*\]\(([^)]+\.md)\)`)
+	tocLinkRE           = regexp.MustCompile(`\[([^\]]*)\]\(([^)]+\.md)\)`)
 	hex32RE             = regexp.MustCompile(`(?i)^[0-9a-f]{32}`)
 )
 
@@ -28,6 +28,9 @@ type conversionSeriesItem struct {
 	Title    string `json:"title"`
 	Label    string `json:"label"`
 	Kind     string `json:"kind"` // index | chapter | part | other
+	// TocTitle is the display name from the index TOC (e.g. a chapter's real
+	// heading), used as the page H1 when present.
+	TocTitle string `json:"toc_title,omitempty"`
 }
 
 type conversionSeriesResponse struct {
@@ -104,6 +107,12 @@ func (s *Server) buildConversionSeries(ctx context.Context, selector string) (co
 				indexBody = string(body)
 			}
 			break
+		}
+	}
+	tocTitles := tocTitleMap(indexBody)
+	for i := range siblings {
+		if title, ok := tocTitles[strings.ToLower(siblings[i].Filename)]; ok {
+			siblings[i].TocTitle = title
 		}
 	}
 	order := tocFilenameOrder(indexBody)
@@ -293,7 +302,7 @@ func tocFilenameOrder(indexMarkdown string) map[string]int {
 	}
 	rank := 0
 	for _, match := range tocLinkRE.FindAllStringSubmatch(indexMarkdown, -1) {
-		target := path.Base(strings.TrimSpace(match[1]))
+		target := path.Base(strings.TrimSpace(match[2]))
 		if target == "" || strings.Contains(target, "://") {
 			continue
 		}
@@ -305,6 +314,31 @@ func tocFilenameOrder(indexMarkdown string) map[string]int {
 		rank++
 	}
 	return order
+}
+
+// tocTitleMap maps a TOC link target filename to its display title, e.g.
+// "just-for-fun-pdf-…-chapter-014.md" -> "Chapter Fourteen: …".
+func tocTitleMap(indexMarkdown string) map[string]string {
+	titles := map[string]string{}
+	if strings.TrimSpace(indexMarkdown) == "" {
+		return titles
+	}
+	for _, match := range tocLinkRE.FindAllStringSubmatch(indexMarkdown, -1) {
+		target := path.Base(strings.TrimSpace(match[2]))
+		if target == "" || strings.Contains(target, "://") {
+			continue
+		}
+		title := strings.TrimSpace(match[1])
+		if title == "" {
+			continue
+		}
+		key := strings.ToLower(target)
+		if _, exists := titles[key]; exists {
+			continue
+		}
+		titles[key] = title
+	}
+	return titles
 }
 
 func seriesLess(a, b conversionSeriesItem, tocOrder map[string]int) bool {
