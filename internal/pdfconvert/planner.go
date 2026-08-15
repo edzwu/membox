@@ -55,7 +55,9 @@ func (p LLMStructurePlanner) PlanChapters(ctx context.Context, sketch string) ([
 	return nil, lastErr
 }
 
-const structureSketchBudget = 24 << 10
+// structureSketchBudget must fit the local model's context together with the
+// prompt and the JSON plan; 8KB stays safely inside num_ctx 8192.
+const structureSketchBudget = 8 << 10
 
 // BuildStructureSketch compresses a long document into a heading map plus
 // paragraph openings, sampled to fit the local model's context. Line numbers
@@ -155,7 +157,7 @@ func structurePrompt(sketch string) string {
 硬性规则：
 1. anchor 必须逐字复制草图中某一行 @行号 后面的文本开头（不超过 60 个字符），不得包含 H/P 标记、行号或竖线表格符。
 2. 2-30 个章节，按正文先后顺序排列。
-3. 跳过封面、版权页和目录；以 | 开头的表格行是目录，不是正文。
+3. 跳过封面、版权页和目录；以 | 开头的表格行是目录，不是正文；紧跟在 Contents/目录 标题之后的标题行也属于目录区，不要选为 anchor，正文从目录区之后开始。
 4. 序言/引言/正文各部分/后记都应成为章节；title 输出可读标题。
 5. 不确定时宁可选少的边界，也不要编造草图中不存在的文字。
 6. 不要输出 ` + "```" + `、解释、链接或任何 JSON 以外的字符。

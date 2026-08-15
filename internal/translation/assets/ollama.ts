@@ -60,6 +60,16 @@ function streamNativeOllama(
 
   (async () => {
     let textStarted = false;
+    // Guard against a stalled Ollama connection: abort after 5 minutes while
+    // still honoring the caller's own abort signal (e.g. the user toggling
+    // translation off mid-paragraph).
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new Error("Ollama request timed out after 300s")), 300_000);
+    const outer = options?.signal;
+    if (outer) {
+      if (outer.aborted) controller.abort(outer.reason);
+      else outer.addEventListener("abort", () => controller.abort(outer.reason), { once: true });
+    }
     try {
       const messages = nativeMessages(context);
       if (!messages.length) throw new Error("translation prompt is empty");
@@ -71,9 +81,9 @@ function streamNativeOllama(
           messages,
           stream: true,
           think: false,
-          options: { temperature: (options as any)?.temperature ?? 0.2 },
+          options: { temperature: (options as any)?.temperature ?? 0.2, num_ctx: 8192, num_predict: 2048 },
         }),
-        signal: options?.signal,
+        signal: controller.signal,
       });
       if (!response.ok || !response.body) {
         throw new Error(`Ollama HTTP ${response.status}: ${await response.text()}`);
@@ -134,6 +144,8 @@ function streamNativeOllama(
       output.errorMessage = error instanceof Error ? error.message : String(error);
       stream.push({ type: "error", reason: output.stopReason, error: output });
       stream.end();
+    } finally {
+      clearTimeout(timer);
     }
   })();
 

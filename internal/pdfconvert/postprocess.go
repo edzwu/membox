@@ -143,23 +143,27 @@ func llmPlannedSections(ctx context.Context, markdown string, planner StructureP
 	return locatePlannedChapters(markdown, plans)
 }
 
+// planLine is one Markdown line with byte offsets, used for LLM anchor
+// location.
+type planLine struct {
+	start, end int
+	text       string
+}
+
 // locatePlannedChapters maps LLM-proposed anchors onto real document lines.
 // Table rows (TOC entries) are rejected, matches must be strictly ordered,
 // and at least two anchors must locate before any split happens.
 func locatePlannedChapters(markdown string, plans []ChapterPlan) []sectionBoundary {
-	type mdLine struct {
-		start, end int
-		text       string
-	}
 	raw := strings.Split(markdown, "\n")
-	lines := make([]mdLine, 0, len(raw))
+	lines := make([]planLine, 0, len(raw))
 	offset := 0
 	for _, text := range raw {
-		lines = append(lines, mdLine{start: offset, end: offset + len(text) + 1, text: text})
+		lines = append(lines, planLine{start: offset, end: offset + len(text) + 1, text: text})
 		offset += len(text) + 1
 	}
 
 	cursor := 0
+	tocEnd := tocRegionEnd(lines)
 	boundaries := make([]sectionBoundary, 0, len(plans))
 	for _, plan := range plans {
 		anchor := normalizeTOCTitle(plan.Anchor)
@@ -168,6 +172,11 @@ func locatePlannedChapters(markdown string, plans []ChapterPlan) []sectionBounda
 		}
 		for _, line := range lines {
 			if line.start < cursor {
+				continue
+			}
+			// Matches inside the table-of-contents region are never real
+			// chapter starts; the body begins after it.
+			if tocEnd > 0 && line.start < tocEnd {
 				continue
 			}
 			trimmed := strings.TrimSpace(line.text)
@@ -214,6 +223,28 @@ func locatePlannedChapters(markdown string, plans []ChapterPlan) []sectionBounda
 		boundaries[index].chapterKey = fmt.Sprintf("chapter-%03d", index)
 	}
 	return boundaries
+}
+
+// tocRegionEnd returns the byte offset where the table-of-contents region
+// ends: from the first Contents/目录 heading until the next level-1 heading.
+// Returns 0 when no TOC heading or terminating H1 exists (nothing to reject).
+func tocRegionEnd(lines []planLine) int {
+	tocLine := -1
+	for index, line := range lines {
+		if title := atxHeadingText(strings.TrimSpace(line.text)); title != "" && isTOCHeading(title) {
+			tocLine = index
+			break
+		}
+	}
+	if tocLine < 0 {
+		return 0
+	}
+	for index := tocLine + 1; index < len(lines); index++ {
+		if strings.HasPrefix(strings.TrimSpace(lines[index].text), "# ") {
+			return lines[index].start
+		}
+	}
+	return 0
 }
 
 func atxHeadingText(line string) string {

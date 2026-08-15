@@ -84,6 +84,24 @@ func TestLLMPlannerKeepsSubstantialFrontMatter(t *testing.T) {
 	}
 }
 
+func TestLLMPlannerRejectsTOCRegionAnchors(t *testing.T) {
+	markdown := "# Book\n\n## Contents\n\n## Part One\n\n| I |\n| II |\n\n# Real Start\n\n" + strings.Repeat("The actual narrative begins here with real prose. ", 40) +
+		"\n\nA later scene opens the second movement of the story.\n\n" + strings.Repeat("More real narrative continues the tale. ", 40)
+	plan := `{"chapters":[
+		{"title":"Part One","anchor":"Part One"},
+		{"title":"Real Start","anchor":"Real Start"},
+		{"title":"Second movement","anchor":"A later scene opens the second movement"}
+	]}`
+	result := PostprocessMarkdownWithPlanner(context.Background(), markdown, "book.md", fakePlanner(plan, nil))
+	// The TOC-region "Part One" anchor must be rejected; the other two locate.
+	if len(result.Chapters) != 2 {
+		t.Fatalf("chapters=%d: %+v", len(result.Chapters), result.Chapters)
+	}
+	if result.Chapters[0].Title != "Real Start" || result.Chapters[1].Title != "Second movement" {
+		t.Fatalf("unexpected chapters: %+v", result.Chapters)
+	}
+}
+
 func TestLLMPlannerRejectsUnverifiableAnchors(t *testing.T) {
 	plan := `{"chapters":[
 		{"title":"Invented","anchor":"This sentence does not exist anywhere"},
