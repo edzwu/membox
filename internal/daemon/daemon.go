@@ -21,13 +21,13 @@ import (
 	"membox/internal/bootstrap"
 	"membox/internal/infrastructure/blobstore"
 	"membox/internal/infrastructure/system"
+	"membox/internal/translation"
 )
 
 const (
-	socketName = "mmd.sock"
-	pidName    = "mmd.pid"
-	lockName   = "mmd.lock"
-	logName    = "mmd.log"
+	pidName  = "mmd.pid"
+	lockName = "mmd.lock"
+	logName  = "mmd.log"
 )
 
 var (
@@ -69,7 +69,7 @@ func DefaultConfig(home string) (Config, error) {
 		DatabasePath: filepath.Join(absolute, "membox.db"),
 		ObjectRoot:   filepath.Join(absolute, "objects"),
 		RuntimeDir:   runtimeDir,
-		SocketPath:   filepath.Join(runtimeDir, socketName),
+		SocketPath:   translation.SocketPath(absolute),
 		PIDPath:      filepath.Join(runtimeDir, pidName),
 		LockPath:     filepath.Join(runtimeDir, lockName),
 		LogPath:      filepath.Join(runtimeDir, logName),
@@ -77,13 +77,15 @@ func DefaultConfig(home string) (Config, error) {
 }
 
 type Health struct {
-	Status   string    `json:"status"`
-	PID      int       `json:"pid"`
-	Version  string    `json:"version"`
-	Database string    `json:"database"`
-	Objects  string    `json:"objects"`
-	Socket   string    `json:"socket"`
-	Started  time.Time `json:"started_at"`
+	Status              string    `json:"status"`
+	PID                 int       `json:"pid"`
+	Version             string    `json:"version"`
+	Database            string    `json:"database"`
+	Objects             string    `json:"objects"`
+	Socket              string    `json:"socket"`
+	TranslationProvider string    `json:"translation_provider"`
+	TranslationModel    string    `json:"translation_model"`
+	Started             time.Time `json:"started_at"`
 }
 
 type ScanRequest struct {
@@ -126,20 +128,23 @@ func apiScanReport(report application.ScanReport) ScanReport {
 }
 
 type Daemon struct {
-	config      Config
-	service     *application.Service
-	echoSummary echoSummaryRunner
-	listener    net.Listener
-	server      *http.Server
-	instance    *system.OSMutex
-	log         *log.Logger
-	health      Health
+	config           Config
+	service          *application.Service
+	echoSummary      echoSummaryRunner
+	translator       translation.Streamer
+	translationCache *translation.Cache
+	translationSlot  chan struct{}
+	listener         net.Listener
+	server           *http.Server
+	instance         *system.OSMutex
+	log              *log.Logger
+	health           Health
 
 	shutdownOnce sync.Once
 }
 
 func New(config Config) *Daemon {
-	return &Daemon{config: config, echoSummary: echoBPCommand{}}
+	return &Daemon{config: config, echoSummary: echoBPCommand{}, translationSlot: make(chan struct{}, 1)}
 }
 
 func (d *Daemon) Run(ctx context.Context) error {
@@ -178,6 +183,29 @@ func (d *Daemon) Run(ctx context.Context) error {
 	d.log = log.New(logFile, "mmd ", log.LstdFlags|log.Lmicroseconds)
 	d.log.Printf("starting pid=%d database=%s socket=%s", os.Getpid(), d.config.DatabasePath, d.config.SocketPath)
 
+	if d.translator == nil {
+		piPath, _ := service.Store().GetSetting(ctx, "agent.pi_path")
+		extensionPath, materializeErr := translation.MaterializeProvider(d.config.Home)
+		if materializeErr != nil {
+			return fmt.Errorf("materialize translation provider: %w", materializeErr)
+		}
+		runner := translation.PiRunner{PiPath: piPath, Home: d.config.Home, ExtensionPath: extensionPath}
+		if d.translationCache == nil {
+			cache, cacheErr := translation.OpenCache(translation.CachePath(d.config.Home))
+			if cacheErr != nil {
+				d.log.Printf("translation cache disabled: %v", cacheErr)
+			} else {
+				d.translationCache = cache
+			}
+		}
+		d.translator = translation.CachedStreamer{
+			Cache:    d.translationCache,
+			Inner:    runner,
+			Provider: translation.DefaultProvider,
+			Model:    translation.DefaultModel,
+		}
+	}
+
 	// A stale socket is safe to remove only after probing it. A live daemon
 	// would have been rejected by acquireInstance above.
 	if err := removeStaleSocket(d.config.SocketPath); err != nil {
@@ -193,13 +221,15 @@ func (d *Daemon) Run(ctx context.Context) error {
 	}
 	d.listener = listener
 	d.health = Health{
-		Status:   "ok",
-		PID:      os.Getpid(),
-		Version:  membox.Version,
-		Database: d.config.DatabasePath,
-		Objects:  d.config.ObjectRoot,
-		Socket:   d.config.SocketPath,
-		Started:  time.Now().UTC(),
+		Status:              "ok",
+		PID:                 os.Getpid(),
+		Version:             membox.Version,
+		Database:            d.config.DatabasePath,
+		Objects:             d.config.ObjectRoot,
+		Socket:              d.config.SocketPath,
+		TranslationProvider: translation.DefaultProvider,
+		TranslationModel:    translation.DefaultModel,
+		Started:             time.Now().UTC(),
 	}
 
 	d.server = &http.Server{Handler: d.handler()}
@@ -263,6 +293,7 @@ func (d *Daemon) handler() http.Handler {
 		// active handlers during Shutdown.
 		go d.shutdown()
 	})
+	mux.HandleFunc("POST /v1/translation/stream", d.handleTranslationStream)
 	mux.HandleFunc("POST /v1/video/summary", func(writer http.ResponseWriter, request *http.Request) {
 		request.Body = http.MaxBytesReader(writer, request.Body, 64<<10)
 		var input VideoSummaryRequest
@@ -330,6 +361,10 @@ func (d *Daemon) cleanup() {
 	if d.service != nil {
 		_ = d.service.Close()
 		d.service = nil
+	}
+	if d.translationCache != nil {
+		_ = d.translationCache.Close()
+		d.translationCache = nil
 	}
 	if d.instance != nil {
 		_ = d.instance.Unlock()

@@ -1,0 +1,41 @@
+package translation
+
+import (
+	"context"
+	"path/filepath"
+)
+
+const (
+	DefaultProvider       = "ollama"
+	DefaultModel          = "qwen3:14b"
+	DefaultTargetLanguage = "Simplified Chinese (zh-CN)"
+	MaxSegmentBytes       = 32 << 10
+)
+
+// SocketPath is the single source of truth for the mmd translation socket
+// location, shared by the daemon listener and the Web Companion client.
+func SocketPath(home string) string {
+	return filepath.Join(home, "mmd", "mmd.sock")
+}
+
+type Request struct {
+	ID             string `json:"id"`
+	Title          string `json:"title,omitempty"`
+	TargetLanguage string `json:"target_language,omitempty"`
+	Text           string `json:"text"`
+}
+
+// Event is the NDJSON unit streamed mmd → Companion → Miru.
+type Event struct {
+	Type     string `json:"type"` // start | delta | done | error
+	ID       string `json:"id"`
+	Text     string `json:"text,omitempty"`
+	Provider string `json:"provider,omitempty"`
+	Model    string `json:"model,omitempty"`
+}
+
+type EmitFunc func(Event) error
+
+type Streamer interface {
+	Stream(ctx context.Context, request Request, emit EmitFunc) error
+}

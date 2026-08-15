@@ -1,18 +1,22 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"membox/internal/infrastructure/sqlite"
+	"membox/internal/translation"
 )
 
 func TestDefaultConfigMatchesMMHomeResolution(t *testing.T) {
@@ -28,7 +32,7 @@ func TestDefaultConfigMatchesMMHomeResolution(t *testing.T) {
 	if filepath.Base(config.DatabasePath) != "membox.db" {
 		t.Fatalf("database path = %q", config.DatabasePath)
 	}
-	if filepath.Base(config.SocketPath) != socketName {
+	if filepath.Base(config.SocketPath) != "mmd.sock" {
 		t.Fatalf("socket path = %q", config.SocketPath)
 	}
 }
@@ -88,6 +92,76 @@ func TestDaemonHealthAndGracefulStop(t *testing.T) {
 	}
 	if _, err := os.Stat(config.PIDPath); !os.IsNotExist(err) {
 		t.Fatalf("pid file still exists after stop: %v", err)
+	}
+}
+
+type fakeTranslationStreamer struct{}
+
+func (fakeTranslationStreamer) Stream(_ context.Context, request translation.Request, emit translation.EmitFunc) error {
+	for _, event := range []translation.Event{
+		{Type: "start", ID: request.ID, Provider: translation.DefaultProvider, Model: translation.DefaultModel},
+		{Type: "delta", ID: request.ID, Text: "逐段"},
+		{Type: "delta", ID: request.ID, Text: "翻译"},
+		{Type: "done", ID: request.ID},
+	} {
+		if err := emit(event); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func TestTranslationStreamsThroughDaemonUnixSocket(t *testing.T) {
+	config, err := DefaultConfig(shortTempDir(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	daemon := New(config)
+	daemon.translator = fakeTranslationStreamer{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runErr := make(chan error, 1)
+	go func() { runErr <- daemon.Run(ctx) }()
+	waitFor(t, func() bool {
+		_, healthErr := Healthcheck(config)
+		return healthErr == nil
+	})
+
+	var events []translation.Event
+	err = (translation.MMDClient{SocketPath: config.SocketPath}).Stream(context.Background(), translation.Request{
+		ID: "p-1", Title: "Long article", Text: "Translate this paragraph.",
+	}, func(event translation.Event) error {
+		events = append(events, event)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 4 || events[1].Text+events[2].Text != "逐段翻译" || events[3].Type != "done" {
+		t.Fatalf("events=%+v", events)
+	}
+	if err := Stop(context.Background(), config); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-runErr:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("daemon did not stop")
+	}
+}
+
+func TestTranslationSlotBusyReturns429(t *testing.T) {
+	d := &Daemon{translator: fakeTranslationStreamer{}, translationSlot: make(chan struct{}, 1)}
+	d.translationSlot <- struct{}{} // simulate an in-progress translation
+	body, _ := json.Marshal(translation.Request{ID: "p-2", Text: "Another paragraph."})
+	request := httptest.NewRequest(http.MethodPost, "/v1/translation/stream", bytes.NewReader(body))
+	response := httptest.NewRecorder()
+	d.handleTranslationStream(response, request)
+	if response.Code != http.StatusTooManyRequests {
+		t.Fatalf("busy slot status=%d body=%q", response.Code, response.Body.String())
 	}
 }
 

@@ -84,6 +84,7 @@ func newStatusCommand(home *string) *cobra.Command {
 			fmt.Fprintf(cmd.OutOrStdout(), "  Database: %s\n", health.Database)
 			fmt.Fprintf(cmd.OutOrStdout(), "  Objects:  %s\n", health.Objects)
 			fmt.Fprintf(cmd.OutOrStdout(), "  Socket:   %s\n", health.Socket)
+			fmt.Fprintf(cmd.OutOrStdout(), "  Translate: %s/%s\n", health.TranslationProvider, health.TranslationModel)
 			fmt.Fprintf(cmd.OutOrStdout(), "  Started:  %s\n", health.Started.Local().Format(time.RFC3339))
 			return nil
 		},
