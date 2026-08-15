@@ -39,13 +39,13 @@ func TestDocumentItemsMarksPDFWhenStableConvertedIndexExists(t *testing.T) {
 
 func TestConvertedTreeLabelStripsIdentityAndShortensSuffixes(t *testing.T) {
 	cases := map[string]string{
-		"fooled-by-randomness-pdf-01a001106cb479db952c02e705f8c0ea.md":            "fooled-by-randomness",
-		"fooled-by-randomness-pdf-01a001106cb479db952c02e705f8c0ea-chapter-014.md": "fooled-by-randomness ch.14",
+		"fooled-by-randomness-pdf-01a001106cb479db952c02e705f8c0ea.md":                   "fooled-by-randomness",
+		"fooled-by-randomness-pdf-01a001106cb479db952c02e705f8c0ea-chapter-014.md":       "fooled-by-randomness ch.14",
 		"fooled-by-randomness-pdf-01a001106cb479db952c02e705f8c0ea-part-introduction.md": "fooled-by-randomness intro",
 		"fooled-by-randomness-pdf-01a001106cb479db952c02e705f8c0ea-part-afterword.md":    "fooled-by-randomness afterword",
-		"just-for-fun--pdf-01a004095c0c70e687738be6b34259ce-chapter-000.md":     "just-for-fun ch.0",
-		"labuladong的算法小抄官方完整版-pdf-01a00084ee897c54b45fee07fa0a9119.md": "labuladong的算法小抄官方完整版",
-		"ordinary-note.md": "ordinary-note.md",
+		"just-for-fun--pdf-01a004095c0c70e687738be6b34259ce-chapter-000.md":              "just-for-fun ch.0",
+		"labuladong的算法小抄官方完整版-pdf-01a00084ee897c54b45fee07fa0a9119.md":                   "labuladong的算法小抄官方完整版",
+		"ordinary-note.md":                  "ordinary-note.md",
 		"my-notes-pdf-but-not-generated.md": "my-notes-pdf-but-not-generated.md",
 	}
 	for filename, want := range cases {

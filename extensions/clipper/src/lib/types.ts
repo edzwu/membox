@@ -27,10 +27,15 @@ export type IngestResult = {
   path: string;
   created: boolean;
   updated?: boolean;
+  /** True when an existing YouTube summary was opened without re-running echo-bp. */
+  reused?: boolean;
   view_url: string;
   body_length?: number;
   linked?: string;
   title?: string;
+  filename?: string;
+  video_id?: string;
+  course_code?: string;
 };
 
 /** Returned when a page clip for the URL already exists and overwrite was not set. */

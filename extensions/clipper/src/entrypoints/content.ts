@@ -1,7 +1,8 @@
 import { clipCurrentDocument, clipSelection, readSelection } from '../lib/clip';
 import { FloatNotesLayer, getNotesEnabled } from '../lib/float-notes';
 import { SelectionCard } from '../lib/selection-card';
-import { currentSourceURL, isMemboxReaderUrl } from '../lib/url';
+import { currentSourceURL, isMemboxReaderUrl, youTubeVideoID } from '../lib/url';
+import { extractYouTubeCaptions } from '../lib/youtube-captions';
 
 export default defineContentScript({
   matches: ['http://*/*', 'https://*/*'],
@@ -161,6 +162,25 @@ export default defineContentScript({
             ok: false as const,
             error: err instanceof Error ? err.message : String(err),
           }));
+      }
+
+      if (message?.type === 'membox.youtube-captions') {
+        // Browser-session caption fetch (echo-style). Always available on
+        // YouTube watch pages so yt-dlp is not required for video summary.
+        return (async () => {
+          try {
+            const href = currentSourceURL();
+            const id = String(message.videoId || youTubeVideoID(href) || '').trim();
+            if (!id) throw new Error('Not a YouTube video page');
+            const captions = await extractYouTubeCaptions(id, href);
+            return { ok: true as const, captions };
+          } catch (err) {
+            return {
+              ok: false as const,
+              error: err instanceof Error ? err.message : String(err),
+            };
+          }
+        })();
       }
 
       if (message?.type?.startsWith('membox.floats.')) {

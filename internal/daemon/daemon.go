@@ -358,16 +358,25 @@ func (d *Daemon) handler() http.Handler {
 	mux.HandleFunc("POST /v1/translation/stream", d.handleTranslationStream)
 	mux.HandleFunc("POST /v1/llm/complete", d.handleLLMComplete)
 	mux.HandleFunc("POST /v1/video/summary", func(writer http.ResponseWriter, request *http.Request) {
-		request.Body = http.MaxBytesReader(writer, request.Body, 64<<10)
+		// Metadata-only when transcript_path points at a membox Markdown file.
+		request.Body = http.MaxBytesReader(writer, request.Body, 1<<20)
 		var input VideoSummaryRequest
-		decoder := json.NewDecoder(request.Body)
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&input); err != nil {
+		// Allow additive keys from a newer companion (title, transcript_path, ...).
+		if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
 			writeJSON(writer, http.StatusBadRequest, videoSummaryResponse{Error: "invalid video summary request: " + err.Error()})
 			return
 		}
-		if strings.TrimSpace(input.URL) == "" || strings.TrimSpace(input.CourseCode) == "" || input.LectureNo < 0 {
-			writeJSON(writer, http.StatusBadRequest, videoSummaryResponse{Error: "url and course_code are required; lecture_no must be positive when provided"})
+		hasTranscriptFile := strings.TrimSpace(input.TranscriptPath) != ""
+		if strings.TrimSpace(input.CourseCode) == "" || input.LectureNo < 0 {
+			writeJSON(writer, http.StatusBadRequest, videoSummaryResponse{Error: "course_code is required; lecture_no must be positive when provided"})
+			return
+		}
+		if !hasTranscriptFile && strings.TrimSpace(input.URL) == "" {
+			writeJSON(writer, http.StatusBadRequest, videoSummaryResponse{Error: "url is required unless transcript_path is provided"})
+			return
+		}
+		if hasTranscriptFile && strings.TrimSpace(input.URL) == "" && strings.TrimSpace(input.VideoID) == "" {
+			writeJSON(writer, http.StatusBadRequest, videoSummaryResponse{Error: "video_id or url is required with transcript_path"})
 			return
 		}
 		artifact, err := d.echoSummary.Summarize(request.Context(), input)

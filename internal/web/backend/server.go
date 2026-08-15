@@ -38,6 +38,7 @@ type Server struct {
 	integrationFS fs.FS
 	httpServer    *http.Server
 	baseURL       string
+	home          string // MEMBOX_HOME; required for mmd-backed video summary
 	token         string // empty = auth disabled (same-origin Miru / tests)
 	// documentMu serializes source reads/mutations with annotation restore/save.
 	// The title is editable while restoreReadingState is still resolving paths,
@@ -77,6 +78,10 @@ func (s *Server) SetToken(token string) { s.token = strings.TrimSpace(token) }
 // SetTranslationStreamer wires the mmd-backed paragraph stream used by Miru.
 func (s *Server) SetTranslationStreamer(streamer translation.Streamer) { s.translator = streamer }
 
+// SetHome records MEMBOX_HOME so extension-facing routes can start mmd and
+// resolve daemon sockets for the same catalog the companion opened.
+func (s *Server) SetHome(home string) { s.home = strings.TrimSpace(home) }
+
 // Token returns the configured bridge token, if any.
 func (s *Server) Token() string { return s.token }
 
@@ -106,6 +111,7 @@ func (s *Server) Start(ctx context.Context, port int) (string, error) {
 	mux.HandleFunc("/api/bridge/status", s.handleBridgeStatus)
 	mux.HandleFunc("/api/bridge/clips", s.handleBridgeClips)
 	mux.HandleFunc("/api/ingest", s.handleIngest)
+	mux.HandleFunc("/api/video/summary", s.handleVideoSummary)
 	mux.HandleFunc("/api/resources", s.handleResources)
 	mux.HandleFunc("/api/resources/ingest", s.handleResourceIngest)
 	mux.HandleFunc("/api/resources/assess", s.handleResourceAssess)

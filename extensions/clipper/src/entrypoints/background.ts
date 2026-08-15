@@ -1,7 +1,13 @@
-import { fetchClipsBySource, ingestClip, IngestConflictError } from '../lib/membox-client';
+import {
+  fetchClipsBySource,
+  ingestClip,
+  IngestConflictError,
+  summarizeVideo,
+} from '../lib/membox-client';
 import { loadSettings } from '../lib/settings';
 import { getNotesEnabled } from '../lib/float-notes';
-import { normalizeSourceURL } from '../lib/url';
+import { isYouTubeVideoURL, normalizeSourceURL, youTubeVideoID } from '../lib/url';
+import { captionsToMarkdown, type YouTubeCaptionsResult } from '../lib/youtube-captions';
 import type { ClipPayload, IngestConflict, IngestResult, SourceClip } from '../lib/types';
 
 type IngestResponse =
@@ -127,6 +133,16 @@ async function ingestActiveTab(opts: { overwrite?: boolean } = {}): Promise<Inge
       return { ok: false, error: 'This page cannot be clipped' };
     }
 
+    // YouTube watch pages go through browser captions → echo-bp summary
+    // (idempotent open when the summary already exists in membox).
+    if (isYouTubeVideoURL(url)) {
+      return summarizeActiveYouTube(url, {
+        open: true,
+        force: opts.overwrite === true,
+        tabId: tab.id,
+      });
+    }
+
     const clip = await clipTab(tab.id);
     return ingestPayload(clip, { open: true, overwrite: opts.overwrite });
   } catch (err) {
@@ -134,6 +150,107 @@ async function ingestActiveTab(opts: { overwrite?: boolean } = {}): Promise<Inge
       return { ok: false, error: err.message, conflict: err.conflict };
     }
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+async function summarizeActiveYouTube(
+  url: string,
+  opts: { open: boolean; force?: boolean; tabId?: number },
+): Promise<IngestResponse> {
+  try {
+    const settings = await loadSettings();
+    const videoId = youTubeVideoID(url);
+
+    // Browser-session captions (echo-style) are required for the extension
+    // path so echo-bp never hits yt-dlp (which often times out). Existing
+    // membox summaries are still opened by the companion before captions matter
+    // when force is false — but we still fetch captions only when needed.
+    //
+    // Fast path: ask companion first without transcript; if reused, open it.
+    // Otherwise fetch captions and re-post with segments.
+    if (!opts.force) {
+      try {
+        const existing = await summarizeVideo(settings, {
+          url,
+          videoId: videoId || undefined,
+          lookupOnly: true,
+        });
+        if (existing.reused && existing.view_url) {
+          if (opts.open && settings.autoOpen) {
+            await browser.tabs.create({ url: existing.view_url });
+          }
+          return { ok: true, result: existing };
+        }
+      } catch {
+        /* 404 / offline — continue to caption fetch + summarize */
+      }
+    }
+
+    if (!opts.tabId || !videoId) {
+      return {
+        ok: false,
+        error: 'YouTube captions require an open video tab (reload the page and try again)',
+      };
+    }
+    const captions = await fetchYouTubeCaptions(opts.tabId, videoId);
+    const transcriptMarkdown = captionsToMarkdown(captions);
+
+    const result = await summarizeVideo(settings, {
+      url,
+      force: opts.force === true,
+      videoId: captions.videoId || videoId,
+      title: captions.title,
+      lang: captions.lang,
+      source: 'browser',
+      playlistId: captions.playlistId,
+      playlistIndex: captions.playlistIndex,
+      // Companion saves this Markdown into membox, then ebp summarizes:
+      // system prompt + markdown body (deepseek/deepseek-v4-flash).
+      transcriptMarkdown,
+    });
+    const shouldOpen = opts.open && settings.autoOpen && result.view_url;
+    if (shouldOpen) {
+      await browser.tabs.create({ url: result.view_url });
+    }
+    return { ok: true, result };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+type CaptionsResponse =
+  | { ok: true; captions: YouTubeCaptionsResult }
+  | { ok: false; error: string };
+
+async function fetchYouTubeCaptions(tabId: number, videoId: string): Promise<YouTubeCaptionsResult> {
+  let response = await requestYouTubeCaptions(tabId, videoId);
+  if (!response) {
+    await injectContentScript(tabId);
+    response = await requestYouTubeCaptions(tabId, videoId);
+  }
+  if (!response) {
+    throw new Error('Content script did not respond for captions (try reloading the page)');
+  }
+  if (!response.ok) {
+    throw new Error(response.error || 'Caption extraction failed');
+  }
+  if (!response.captions?.segments?.length) {
+    throw new Error('No caption segments extracted');
+  }
+  return response.captions;
+}
+
+async function requestYouTubeCaptions(
+  tabId: number,
+  videoId: string,
+): Promise<CaptionsResponse | null> {
+  try {
+    return (await browser.tabs.sendMessage(tabId, {
+      type: 'membox.youtube-captions',
+      videoId,
+    })) as CaptionsResponse;
+  } catch {
+    return null;
   }
 }
 

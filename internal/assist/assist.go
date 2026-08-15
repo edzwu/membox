@@ -44,13 +44,13 @@ type Request struct {
 
 // Event is one NDJSON stream frame for the browser.
 type Event struct {
-	Type         string `json:"type"` // start | delta | done | error
-	Mode         string `json:"mode,omitempty"`
-	Text         string `json:"text,omitempty"`
-	Replacement  string `json:"replacement,omitempty"`
-	Provider     string `json:"provider,omitempty"`
-	Model        string `json:"model,omitempty"`
-	Error        string `json:"error,omitempty"`
+	Type        string `json:"type"` // start | delta | done | error
+	Mode        string `json:"mode,omitempty"`
+	Text        string `json:"text,omitempty"`
+	Replacement string `json:"replacement,omitempty"`
+	Provider    string `json:"provider,omitempty"`
+	Model       string `json:"model,omitempty"`
+	Error       string `json:"error,omitempty"`
 }
 
 // EmitFunc receives stream events.

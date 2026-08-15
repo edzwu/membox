@@ -124,11 +124,11 @@ func TestRepairMisassignedNotes(t *testing.T) {
 
 	// Note documents: read body (file, or FTS when missing).
 	type noteDoc struct {
-		id       string
-		absPath  string
-		missing  bool
-		body     string
-		excerpt  string
+		id        string
+		absPath   string
+		missing   bool
+		body      string
+		excerpt   string
 		curTarget string
 	}
 	var notes []*noteDoc

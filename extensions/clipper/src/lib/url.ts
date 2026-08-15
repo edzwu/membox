@@ -15,10 +15,57 @@ export function currentSourceURL(href = globalThis.location?.href || ''): string
   return normalizeSourceURL(href) || href;
 }
 
+function youtubeHost(hostname: string): string {
+  return hostname.toLowerCase().replace(/^(www|m)\./, '');
+}
+
+/** True when the URL is a single-video YouTube watch/shorts/embed/live page. */
+export function isYouTubeVideoURL(raw: string): boolean {
+  return Boolean(youTubeVideoID(raw));
+}
+
+/** Extract the YouTube video id from common watch/share URL forms. */
+export function youTubeVideoID(raw: string): string {
+  const trimmed = (raw || '').trim();
+  if (!trimmed) return '';
+  try {
+    const u = new URL(trimmed);
+    const host = youtubeHost(u.hostname);
+    if (host === 'youtu.be') {
+      const id = u.pathname.split('/').filter(Boolean)[0] || '';
+      return sanitizeYouTubeID(id);
+    }
+    if (host === 'youtube.com' || host === 'youtube-nocookie.com') {
+      if (u.pathname === '/watch' || u.pathname.startsWith('/watch')) {
+        return sanitizeYouTubeID(u.searchParams.get('v') || '');
+      }
+      const m = u.pathname.match(/^\/(?:shorts|embed|live)\/([^/?#]+)/);
+      if (m) return sanitizeYouTubeID(m[1] || '');
+    }
+  } catch {
+    /* not a URL */
+  }
+  return '';
+}
+
+function sanitizeYouTubeID(id: string): string {
+  const trimmed = (id || '').trim();
+  if (!trimmed || /[/?&#]/.test(trimmed)) return '';
+  return trimmed;
+}
+
+/** Canonical watch URL used as the source identity for a YouTube video. */
+export function canonicalYouTubeURL(raw: string): string {
+  const id = youTubeVideoID(raw);
+  return id ? `https://www.youtube.com/watch?v=${id}` : '';
+}
+
 /** Normalize page URLs so WeChat share variants match the same article. */
 export function normalizeSourceURL(raw: string): string {
   const trimmed = (raw || '').trim();
   if (!trimmed) return '';
+  const yt = canonicalYouTubeURL(trimmed);
+  if (yt) return yt;
   try {
     const u = new URL(trimmed);
     u.hash = '';

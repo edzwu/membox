@@ -3,6 +3,18 @@
 WXT browser extension that clips the current page to Markdown, ingests it into
 membox (`POST /api/ingest`), and opens the new document in Miru.
 
+YouTube watch/shorts/embed pages take a different path:
+
+1. Content script extracts captions (echo-style: player / InnerTube /
+   textTracks / timedtext — browser session, no yt-dlp).
+2. Extension builds caption **Markdown** (`[HH:MM:SS] text` lines).
+3. Companion saves `yt-<video_id>-transcript.md` into membox.
+4. mmd → `ebp automation summary-local --transcript-file <that path>`:
+   LLM input = system prompt + that Markdown; model default
+   **deepseek/deepseek-v4-flash**. Summary published as `<course>-lecN.md`.
+5. If a managed summary for that `video_id` already exists, Miru opens it
+   immediately (idempotent; no caption fetch / no LLM).
+
 ## Two different “servers”
 
 | 进程 | 做什么 | 要不要 `npm run dev` |
@@ -57,8 +69,9 @@ extension. In the popup:
 1. Server URL: `http://127.0.0.1:8787`（与 TUI bridge 一致）
 2. Bridge token: `cat ~/.membox/bridge.json` 里的 `token`
 3. **Save settings** → status should show **connected**
-4. Open any http(s) page → **Save to membox** (full page)
-5. Or **select text** on a page → floating card (excerpt + note + Save)
+4. Open any http(s) page → **Save / summarize** (full page Markdown clip)
+5. Open a YouTube video → same button summarizes via echo-bp (or opens the existing summary)
+6. Or **select text** on a page → floating card (excerpt + note + Save)
 
 ### Selection card
 

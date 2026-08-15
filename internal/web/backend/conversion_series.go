@@ -34,13 +34,13 @@ type conversionSeriesItem struct {
 }
 
 type conversionSeriesResponse struct {
-	Kind     string                `json:"kind"` // pdf-conversion | none
-	Index    *conversionSeriesItem `json:"index,omitempty"`
-	Current  *conversionSeriesItem `json:"current,omitempty"`
-	Prev     *conversionSeriesItem `json:"prev,omitempty"`
-	Next     *conversionSeriesItem `json:"next,omitempty"`
-	Position int                   `json:"position,omitempty"` // 1-based among non-index items; 0 on index
-	Total    int                   `json:"total,omitempty"`    // non-index count
+	Kind     string                 `json:"kind"` // pdf-conversion | none
+	Index    *conversionSeriesItem  `json:"index,omitempty"`
+	Current  *conversionSeriesItem  `json:"current,omitempty"`
+	Prev     *conversionSeriesItem  `json:"prev,omitempty"`
+	Next     *conversionSeriesItem  `json:"next,omitempty"`
+	Position int                    `json:"position,omitempty"` // 1-based among non-index items; 0 on index
+	Total    int                    `json:"total,omitempty"`    // non-index count
 	Items    []conversionSeriesItem `json:"items,omitempty"`
 }
 
@@ -121,10 +121,10 @@ func (s *Server) buildConversionSeries(ctx context.Context, selector string) (co
 	})
 
 	var (
-		indexItem *conversionSeriesItem
-		current   *conversionSeriesItem
+		indexItem  *conversionSeriesItem
+		current    *conversionSeriesItem
 		currentIdx = -1
-		sections  []conversionSeriesItem
+		sections   []conversionSeriesItem
 	)
 	focusID := string(document.ID)
 	for i := range siblings {

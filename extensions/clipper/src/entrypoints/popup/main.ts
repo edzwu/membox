@@ -1,6 +1,7 @@
 import { fetchBridgeStatus } from '../../lib/membox-client';
 import { loadSettings, saveSettings } from '../../lib/settings';
 import { getNotesEnabled, setNotesEnabled } from '../../lib/float-notes';
+import { isYouTubeVideoURL } from '../../lib/url';
 import type { BridgeSettings } from '../../lib/types';
 
 const statusEl = document.getElementById('status') as HTMLDivElement;
@@ -107,7 +108,12 @@ saveSettingsBtn.addEventListener('click', async () => {
 
 clipBtn.addEventListener('click', async () => {
   clipBtn.disabled = true;
-  showMessage('Clipping…');
+  const youtube = await activeTabIsYouTube();
+  showMessage(
+    youtube
+      ? 'YouTube: captions → membox Markdown → deepseek flash summary…'
+      : 'Clipping…',
+  );
   try {
     const settings = readForm();
     if (!settings.token) {
@@ -120,6 +126,8 @@ clipBtn.addEventListener('click', async () => {
     }
     await saveSettings(settings);
     let response = await browser.runtime.sendMessage({ type: 'membox.ingest-active-tab' });
+    // HTML page clips may conflict; YouTube summaries are idempotent opens and
+    // never return clip_exists — force/regenerate is a separate intentional path.
     if (!response?.ok && response?.conflict?.code === 'clip_exists') {
       const existing = response.conflict.existing;
       const shortId = (existing?.id || '').slice(0, 8);
@@ -131,6 +139,9 @@ clipBtn.addEventListener('click', async () => {
           `Overwrite the note content and keep the same UUID?`,
       );
       if (!ok) {
+        if (existing?.view_url && settings.autoOpen) {
+          await browser.tabs.create({ url: existing.view_url });
+        }
         showMessage(
           `Kept existing clip ${shortId}…\n` +
             (existing?.path || '') +
@@ -148,12 +159,22 @@ clipBtn.addEventListener('click', async () => {
       showMessage(response?.error || 'Clip failed');
       return;
     }
-    const { id, path, view_url: viewUrl, created, updated } = response.result;
-    const action = updated ? 'Updated' : created === false ? 'Saved' : 'Created';
+    const { id, path, view_url: viewUrl, created, updated, reused } = response.result;
+    const action = reused
+      ? 'Opened existing summary'
+      : updated
+        ? 'Updated'
+        : created === false
+          ? 'Saved'
+          : youtube
+            ? 'Summarized'
+            : 'Created';
     // Body size helps spot extraction problems (a header-only clip is short).
     const bodyLen = response.result.body_length ?? 0;
+    const sizeBit = bodyLen > 0 ? ` · ${bodyLen.toLocaleString()} chars` : '';
+    const titleBit = response.result.title ? `\n${response.result.title}` : '';
     showMessage(
-      `${action} ${String(id).slice(0, 8)}… · ${bodyLen.toLocaleString()} chars\n${path}\n${viewUrl}`,
+      `${action} ${String(id).slice(0, 8)}…${sizeBit}${titleBit}\n${path}\n${viewUrl}`,
     );
     await refreshStatus();
   } catch (err) {
@@ -162,6 +183,15 @@ clipBtn.addEventListener('click', async () => {
     clipBtn.disabled = false;
   }
 });
+
+async function activeTabIsYouTube(): Promise<boolean> {
+  try {
+    const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+    return isYouTubeVideoURL(tab?.url || '');
+  } catch {
+    return false;
+  }
+}
 
 type FloatStatusResponse = {
   ok: boolean;

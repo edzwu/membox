@@ -44,7 +44,7 @@ func TestPublishVideoSummaryUsesReadableStableFilename(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Filename != "cs336-lec2.md" || !result.Created || result.DocumentID == "" {
+	if result.Filename != "cs336-lec2-tokenizer-design.md" || !result.Created || result.DocumentID == "" {
 		t.Fatalf("first result = %+v", result)
 	}
 	body, err := os.ReadFile(filepath.Join(notes, result.Filename))
@@ -52,7 +52,7 @@ func TestPublishVideoSummaryUsesReadableStableFilename(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(body)
-	for _, want := range []string{"managed_by: echo-bp", `course_code: "cs336"`, `course_id: "PL336"`, "lecture_no: 2", `lecture_no_source: "title"`, "playlist_index: 13", `video_id: "video-two"`, "# Tokenizer Design", "Summary."} {
+	for _, want := range []string{"managed_by: echo-bp", `course_code: "cs336"`, `course_id: "PL336"`, "lecture_no: 2", `lecture_no_source: "title"`, "playlist_index: 13", `video_id: "video-two"`, `transcript_file: "yt-video-two-transcript.md"`, "# Tokenizer Design", "Summary."} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("published body missing %q:\n%s", want, text)
 		}
@@ -83,7 +83,8 @@ func TestPublishVideoSummaryRejectsOccupiedReadableSlot(t *testing.T) {
 	if _, err := service.AddPath(context.Background(), notes); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.UpsertMarkdown(context.Background(), application.UpsertMarkdownOptions{Filename: "cs336-lec2.md", Body: "# Personal note\n"}); err != nil {
+	// Occupy the semantic filename the summary would claim.
+	if _, err := service.UpsertMarkdown(context.Background(), application.UpsertMarkdownOptions{Filename: "cs336-lec2-l.md", Body: "# Personal note\n"}); err != nil {
 		t.Fatal(err)
 	}
 	artifact := echoSummaryArtifact{CourseCode: "cs336", CourseID: "PL336", LectureNo: 2, VideoID: "v", LectureTitle: "L", SourceURL: "u", Summary: "# L\n"}
@@ -109,16 +110,94 @@ func TestPublishVideoSummaryRenamesWhenLectureOrderChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if first.Filename != "cs336-lec2-l.md" {
+		t.Fatalf("first filename = %s", first.Filename)
+	}
 	artifact.LectureNo = 3
 	second, err := publishVideoSummary(context.Background(), service, artifact)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.DocumentID != second.DocumentID || second.Filename != "cs336-lec3.md" {
+	if first.DocumentID != second.DocumentID || second.Filename != "cs336-lec3-l.md" {
 		t.Fatalf("rename result first=%+v second=%+v", first, second)
 	}
-	if _, err := os.Stat(filepath.Join(notes, "cs336-lec2.md")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(notes, "cs336-lec2-l.md")); !os.IsNotExist(err) {
 		t.Fatalf("old lecture path remains: %v", err)
+	}
+}
+
+func TestYouTubeVideoID(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+		ok   bool
+	}{
+		{"https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PLxx&index=3", "dQw4w9WgXcQ", true},
+		{"https://youtu.be/dQw4w9WgXcQ?t=12", "dQw4w9WgXcQ", true},
+		{"https://m.youtube.com/shorts/dQw4w9WgXcQ", "dQw4w9WgXcQ", true},
+		{"https://www.youtube.com/embed/dQw4w9WgXcQ", "dQw4w9WgXcQ", true},
+		{"https://www.youtube.com/playlist?list=PLxx", "", false},
+		{"https://example.com/watch?v=x", "", false},
+	}
+	for _, tc := range cases {
+		got, err := YouTubeVideoID(tc.in)
+		if tc.ok {
+			if err != nil || got != tc.want {
+				t.Fatalf("%s → %q %v, want %q", tc.in, got, err, tc.want)
+			}
+			continue
+		}
+		if err == nil {
+			t.Fatalf("%s unexpectedly parsed as %q", tc.in, got)
+		}
+	}
+}
+
+func TestFindVideoSummaryByVideoIDReusesExisting(t *testing.T) {
+	home := shortTempDir(t)
+	notes := t.TempDir()
+	config, err := DefaultConfig(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := bootstrap.Open(config.DatabasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+	if _, err := service.AddPath(context.Background(), notes); err != nil {
+		t.Fatal(err)
+	}
+	artifact := echoSummaryArtifact{
+		CourseCode: "cs336", CourseID: "PL336", CourseTitle: "CS336",
+		LectureNo: 7, LectureNoSource: "title", PlaylistIndex: 7,
+		VideoID: "videoSeven", LectureTitle: "Attention",
+		SourceURL: "https://www.youtube.com/watch?v=videoSeven",
+		Summary:   "# Attention\n\nBody.",
+	}
+	published, err := publishVideoSummary(context.Background(), service, artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Loose lookup (browser path): no course filter.
+	found, ok, err := FindVideoSummaryByVideoID(context.Background(), service, "videoSeven", "")
+	if err != nil || !ok {
+		t.Fatalf("find = %+v ok=%v err=%v", found, ok, err)
+	}
+	if found.DocumentID != published.DocumentID || !found.Reused || found.LectureNo != 7 {
+		t.Fatalf("found = %+v published = %+v", found, published)
+	}
+	// Course filter misses a different course.
+	if _, ok, err := FindVideoSummaryByVideoID(context.Background(), service, "videoSeven", "other"); err != nil || ok {
+		t.Fatalf("expected miss for other course, ok=%v err=%v", ok, err)
+	}
+	next, err := NextCourseLectureNo(context.Background(), service, "cs336")
+	if err != nil || next != 8 {
+		t.Fatalf("next lecture = %d err=%v", next, err)
+	}
+	nextYT, err := NextCourseLectureNo(context.Background(), service, DefaultBrowserCourseCode)
+	if err != nil || nextYT != 1 {
+		t.Fatalf("youtube next = %d err=%v", nextYT, err)
 	}
 }
 
@@ -149,7 +228,7 @@ func TestVideoSummaryAPIProcessesAndPublishes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Filename != "cs336-lec1.md" || result.DocumentID == "" {
+	if result.Filename != "cs336-lec1-intro.md" || result.DocumentID == "" {
 		t.Fatalf("result = %+v", result)
 	}
 	if err := Stop(context.Background(), config); err != nil {

@@ -76,6 +76,7 @@ func Run(ctx context.Context, options Options) error {
 	var modeMu sync.Mutex
 	currentMode := lifecycle
 	server := web.NewServer(service)
+	server.SetHome(options.Home)
 	server.SetToken(token)
 	server.SetTranslationStreamer(translation.MMDClient{
 		SocketPath: translation.SocketPath(options.Home),

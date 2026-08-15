@@ -61,7 +61,7 @@ type lookupDefinition struct {
 	Definition string   `json:"definition"`
 	Example    string   `json:"example,omitempty"`
 	Synonyms   []string `json:"synonyms,omitempty"`
-	Antonyms []string `json:"antonyms,omitempty"`
+	Antonyms   []string `json:"antonyms,omitempty"`
 }
 
 type lookupMeaning struct {
@@ -382,7 +382,7 @@ func parseGdictSenses(raw string) []lookupDefinition {
 			Definition: def,
 			Example:    example,
 			Synonyms:   syns,
-			Antonyms: ants,
+			Antonyms:   ants,
 		})
 	}
 	return out
