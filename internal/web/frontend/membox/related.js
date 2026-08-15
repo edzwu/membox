@@ -9,6 +9,7 @@ import { showToast } from '../js/ui/feedback.js';
 import { session } from './session.js';
 import { registerModal, closeOtherModals } from './modals.js';
 import { fetchRelated, postRelated, searchCandidates } from './api.js';
+import { documentDisplayLabel } from './labels.js';
 import { syncToMembox } from './sync.js';
 
 let relatedPanel = null;
@@ -84,7 +85,10 @@ function renderRelatedGrid(items) {
   relatedPanel.hidden = false;
   for (const item of items) {
     const filename = String(item.path || '').split(/[\\/]/).pop();
-    const label = String(item.title || filename || item.id).trim() || filename;
+    const label = documentDisplayLabel({
+      filename,
+      catalogTitle: item.title || '',
+    }) || String(item.id);
     const tile = document.createElement('a');
     tile.className = 'membox-related-tile';
     const targetURL = new URL('/', window.location.origin);
@@ -211,7 +215,10 @@ function renderRelatedOptions(items, message = '') {
     option.setAttribute('aria-selected', String(selectedRelatedCandidate?.id === item.id));
     const title = document.createElement('span');
     title.className = 'membox-related-option-title';
-    title.textContent = item.title || item.path || item.id;
+    title.textContent = documentDisplayLabel({
+      filename: item.path || '',
+      catalogTitle: item.title || '',
+    }) || item.id;
     const id = document.createElement('code');
     id.className = 'membox-related-option-id';
     id.textContent = item.id;

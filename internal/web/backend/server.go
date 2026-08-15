@@ -111,6 +111,7 @@ func (s *Server) Start(ctx context.Context, port int) (string, error) {
 	mux.HandleFunc("/api/resources/assess", s.handleResourceAssess)
 	mux.HandleFunc("/api/resources/scan", s.handleResourceScan)
 	mux.HandleFunc("/api/documents/candidates", s.handleDocumentCandidates)
+	mux.HandleFunc("/api/documents/by-path", s.handleDocumentByPath)
 	mux.HandleFunc("/api/doc/", s.handleDocument)
 	mux.HandleFunc("/api/pdfs/import", s.handlePDFImport)
 	mux.HandleFunc("/api/translation/stream", s.handleTranslationStream)
@@ -163,6 +164,15 @@ func (h noStore) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 // index response receives the membox adapter script; all other files are
 // served byte-for-byte from frontend/miru.
 func (s *Server) handleFrontend(writer http.ResponseWriter, request *http.Request) {
+	// Relative Markdown links from PDF→MD TOC pages land here as
+	// /just-for-fun-pdf-…-chapter-014.md. Resolve them to the stable document
+	// id so Miru can open the chapter instead of 404ing on a static path.
+	if request.Method == http.MethodGet || request.Method == http.MethodHead {
+		if target, ok := s.markdownPathRedirect(request); ok {
+			http.Redirect(writer, request, target, http.StatusFound)
+			return
+		}
+	}
 	if request.URL.Path != "/" && request.URL.Path != "/index.html" {
 		writer.Header().Set("Cache-Control", "no-store")
 		http.FileServer(http.FS(s.miruFS)).ServeHTTP(writer, request)
@@ -196,6 +206,62 @@ func (s *Server) handleStatus(writer http.ResponseWriter, request *http.Request)
 	_, _ = writer.Write([]byte(`{"connected":true}`))
 }
 
+// markdownPathRedirect maps /name.md (and nested */name.md) browser requests
+// onto /?id=<uuid> when the basename is an active catalog document.
+func (s *Server) markdownPathRedirect(request *http.Request) (string, bool) {
+	raw := strings.TrimSpace(request.URL.Path)
+	if raw == "" || raw == "/" {
+		return "", false
+	}
+	if !strings.HasSuffix(strings.ToLower(raw), ".md") {
+		return "", false
+	}
+	// Static Miru assets never end in .md; only document links do.
+	name := path.Base(raw)
+	if name == "." || name == ".." || name != filepath.Base(name) {
+		return "", false
+	}
+	document, _, err := s.service.ResolveDocumentByRelativePath(request.Context(), name)
+	if err != nil {
+		return "", false
+	}
+	return "/?id=" + url.QueryEscape(string(document.ID)), true
+}
+
+// handleDocumentByPath resolves a flat Markdown filename in the main path to
+// its stable UUID so the reader can rewrite relative TOC links without a full
+// page navigation round-trip.
+func (s *Server) handleDocumentByPath(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	name := strings.TrimSpace(request.URL.Query().Get("name"))
+	if name == "" {
+		name = strings.TrimSpace(request.URL.Query().Get("path"))
+	}
+	name = path.Base(strings.ReplaceAll(name, "\\", "/"))
+	document, absolute, err := s.service.ResolveDocumentByRelativePath(request.Context(), name)
+	if err != nil {
+		http.Error(writer, err.Error(), http.StatusNotFound)
+		return
+	}
+	title := strings.TrimSpace(document.Index.Title)
+	if title == "" {
+		title = strings.TrimSuffix(name, filepath.Ext(name))
+	}
+	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+	writer.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(writer).Encode(map[string]any{
+		"id":       string(document.ID),
+		"title":    title,
+		"path":     document.Location.RelativePath,
+		"filename": filepath.Base(document.Location.RelativePath),
+		"absolute": absolute,
+		"view_url": s.ViewURL(string(document.ID)),
+	})
+}
+
 func (s *Server) handleDocument(writer http.ResponseWriter, request *http.Request) {
 	selector := strings.Trim(strings.TrimPrefix(request.URL.Path, "/api/doc/"), "/")
 	if strings.HasSuffix(selector, "/related/candidates") {
@@ -216,6 +282,10 @@ func (s *Server) handleDocument(writer http.ResponseWriter, request *http.Reques
 	}
 	if strings.HasSuffix(selector, "/related") {
 		s.handleRelated(writer, request, strings.TrimSuffix(selector, "/related"))
+		return
+	}
+	if strings.HasSuffix(selector, "/series") {
+		s.handleConversionSeries(writer, request, strings.TrimSuffix(selector, "/series"))
 		return
 	}
 	if selector == "" {
@@ -520,6 +590,8 @@ func (s *Server) handleRelated(writer http.ResponseWriter, request *http.Request
 			return
 		}
 		related := make([]relatedView, 0, len(graph.Outgoing)+len(graph.Incoming))
+		seenRelated := map[string]bool{}
+		focusIdentity, focusIsConversion := conversionIdentity(path.Base(focus.Location.RelativePath))
 		appendLink := func(link catalog.DocumentLink, direction string) {
 			if link.Document == nil {
 				return
@@ -529,12 +601,25 @@ func (s *Server) handleRelated(writer http.ResponseWriter, request *http.Request
 			if strings.HasSuffix(link.Document.Location.RelativePath, "-note.md") {
 				return
 			}
+			// PDF→MD index/chapter edges are navigated by the series footer
+			// (TOC / prev / next). Showing them here duplicates the same book
+			// once per direction (index↔chapter is linked both ways).
+			if focusIsConversion {
+				if id, ok := conversionIdentity(path.Base(link.Document.Location.RelativePath)); ok && id == focusIdentity {
+					return
+				}
+			}
+			id := string(link.Document.ID)
+			if seenRelated[id] {
+				return
+			}
+			seenRelated[id] = true
 			title := link.Document.Index.Title
 			if strings.TrimSpace(title) == "" {
 				title = path.Base(link.Document.Location.RelativePath)
 			}
 			item := relatedView{
-				ID:        string(link.Document.ID),
+				ID:        id,
 				Title:     title,
 				Path:      link.Document.Location.RelativePath,
 				Direction: direction,

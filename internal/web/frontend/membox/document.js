@@ -7,10 +7,13 @@ import { state } from '../js/state.js';
 import { loadDocument } from '../js/document.js';
 import { sanitizeFilename } from '../js/utils.js';
 import { showToast } from '../js/ui/feedback.js';
+import { assignHeadingIds, buildToc } from '../js/render/toc.js';
 import { session } from './session.js';
 import { emitRender } from './events.js';
 import { fetchDocument, renameDocument } from './api.js';
+import { convertedDisplayLabel, documentDisplayLabel } from './labels.js';
 import { cancelPendingSaves, resetReadingSession, restoreReadingState } from './reading-state.js';
+import { hideSeriesNav, loadSeriesNav } from './series-nav.js';
 
 let documentNavigation = null;
 let documentSwitcher = null;
@@ -67,6 +70,7 @@ export function unbindDocument() {
   session.annotationsMutated = false;
   session.annotationsDirty = false;
   resetReadingSession();
+  hideSeriesNav();
 }
 
 async function renameCurrentDocument(titleElement, previousTitle, nextTitle) {
@@ -121,6 +125,34 @@ async function renameCurrentDocument(titleElement, previousTitle, nextTitle) {
   }
 }
 
+// Shorten chrome + body titles for generated PDF→MD chapters so Miru matches
+// the TUI tree ("just-for-fun ch.12") instead of the identity-laden stem.
+function applyConversionDisplayLabel(filename, catalogTitle) {
+  const label = documentDisplayLabel({ filename, catalogTitle });
+  state.docTitle = label;
+  const live = document.getElementById('doc-title');
+  if (live) live.textContent = label;
+  document.title = `${label} — membox`;
+
+  const stem = String(filename || '')
+    .split(/[\\/]/)
+    .pop()
+    .replace(/\.md$/i, '');
+  const h1 = elements.article.querySelector('h1');
+  if (h1) {
+    const raw = (h1.textContent || '').replace(/\s+/g, ' ').trim();
+    const h1IsConversion = Boolean(convertedDisplayLabel(`${raw}.md`));
+    const h1MatchesFile = stem && raw.toLowerCase() === stem.toLowerCase();
+    if (h1IsConversion || h1MatchesFile) {
+      h1.textContent = label;
+      // TOC was built before the rewrite; rebuild so nav labels stay in sync.
+      buildToc(assignHeadingIds());
+    }
+  }
+  renderDocumentSwitcher();
+  return label;
+}
+
 export async function loadFromMembox() {
   if (!session.documentID) return;
   try {
@@ -130,19 +162,14 @@ export async function loadFromMembox() {
     }
     session.loadedMarkdown = markdown;
     loadDocument(markdown);
-    // Prefer the catalog display title (front matter / H1 after rename) over
-    // the raw basename so reopen matches what the user typed.
-    if (catalogTitle) {
-      state.docTitle = catalogTitle;
-      const live = document.getElementById('doc-title');
-      if (live) live.textContent = catalogTitle;
-      document.title = `${catalogTitle} — membox`;
-    } else if (filename) {
-      document.title = `${filename.replace(/\.[^.]+$/, '')} — membox`;
-    }
     // Notes before progress: note cards change the layout, so the saved
     // scroll position only means something once they are in place.
     await restoreReadingState(session.documentID, markdown);
+    // Apply AFTER restore: the annotation sidecar can rewrite .doc-title with
+    // a previously saved long conversion stem. Also shorten a body H1 that is
+    // just the raw -pdf-<uuid> filename so the page matches the TUI tree.
+    applyConversionDisplayLabel(filename, catalogTitle);
+    void loadSeriesNav();
     if (session.pendingSourceNoteRef) {
       session.pendingSourceNoteRef = '';
       showToast('The note is saved, but its passage could not be located in this document');

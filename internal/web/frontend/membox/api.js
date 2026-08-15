@@ -136,6 +136,18 @@ export async function fetchRelated(id) {
   return response.json();
 }
 
+// PDF→MD chapter series: TOC / prev / next for conversion products.
+export async function fetchConversionSeries(id) {
+  const response = await request(`/api/doc/${encodeURIComponent(id)}/series`);
+  return response.json();
+}
+
+// Resolve a flat Markdown filename in the main path to its stable UUID.
+export async function resolveDocumentByPath(name) {
+  const response = await request(`/api/documents/by-path?name=${encodeURIComponent(name)}`);
+  return response.json();
+}
+
 // Free Dictionary lookup — same source as ~/repo/lookup.
 export async function fetchLookup(word, { signal } = {}) {
   const response = await request(`/api/lookup?q=${encodeURIComponent(word)}`, { signal });

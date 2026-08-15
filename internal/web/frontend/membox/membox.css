@@ -871,6 +871,99 @@ dt > .membox-translation {
   cursor: default;
 }
 
+/* PDF→MD chapter series: balanced prev | TOC+pos | next under the article.
+   Match the prose column: on wide screens .main is wider (note-rail reserve)
+   and body content is left-flush at --article-max — not centered in .main. */
+.membox-series-nav {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  column-gap: 16px;
+  row-gap: 8px;
+  width: 100%;
+  max-width: var(--article-max, 860px);
+  box-sizing: border-box;
+  margin: 2.4em 0 3.5em;
+  margin-left: 0;
+  margin-right: auto;
+  padding: 16px 0 0;
+  border-top: 1px solid var(--line);
+  font-family: var(--font-sans);
+  font-size: 13px;
+}
+
+.membox-series-nav[hidden] {
+  display: none;
+}
+
+.membox-series-side {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+
+.membox-series-side-prev {
+  justify-content: flex-start;
+}
+
+.membox-series-side-next {
+  justify-content: flex-end;
+}
+
+.membox-series-mid {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  text-align: center;
+}
+
+.membox-series-link {
+  color: var(--accent);
+  text-decoration: none;
+  border-radius: 6px;
+  padding: 4px 2px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.membox-series-side-prev .membox-series-link {
+  text-align: left;
+}
+
+.membox-series-side-next .membox-series-link {
+  text-align: right;
+}
+
+.membox-series-link:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.membox-series-position {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  white-space: nowrap;
+  line-height: 1.2;
+}
+
+@media (max-width: 640px) {
+  .membox-series-nav {
+    grid-template-columns: 1fr 1fr;
+    grid-template-areas:
+      "mid mid"
+      "prev next";
+  }
+
+  .membox-series-mid { grid-area: mid; }
+  .membox-series-side-prev { grid-area: prev; }
+  .membox-series-side-next { grid-area: next; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .membox-connection.is-connecting::after,
   .download-all.is-syncing svg {
