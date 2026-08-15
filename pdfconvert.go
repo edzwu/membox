@@ -62,7 +62,12 @@ func (b *Box) pdfConverterWorkflow() *pdfconvert.Workflow {
 	// Optional LLM structure planning, served by mmd → Pi → qwen3:14b. When
 	// mmd is not running the planner call fails fast and postprocessing keeps
 	// the converted document whole.
-	client := translation.MMDClient{SocketPath: translation.SocketPath(b.home)}
+	client := translation.MMDClient{
+		SocketPath: translation.SocketPath(b.home),
+		Ensure: func(ctx context.Context) error {
+			return translation.EnsureMMD(ctx, b.home)
+		},
+	}
 	workflow.SetStructurePlanner(pdfconvert.LLMStructurePlanner{Complete: client.Complete})
 	return workflow
 }

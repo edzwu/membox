@@ -14,27 +14,53 @@ import (
 )
 
 // MMDClient streams translation events over mmd's owner-only Unix socket.
-type MMDClient struct{ SocketPath string }
+// When Ensure is set, a failed connection triggers on-demand startup of mmd
+// and one retry, so callers never have to manage the daemon themselves.
+type MMDClient struct {
+	SocketPath string
+	Ensure     func(ctx context.Context) error
+}
+
+// post issues one JSON request to mmd. On a connection-level failure it runs
+// the optional Ensure hook and retries once (the request body is rebuilt so a
+// partially consumed stream is never replayed).
+func (c MMDClient) post(ctx context.Context, path string, body []byte) (*http.Response, error) {
+	attempt := func() (*http.Response, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://mmd"+path, bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		client := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "unix", c.SocketPath)
+		}}}
+		return client.Do(req)
+	}
+	response, err := attempt()
+	if err == nil {
+		return response, nil
+	}
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if c.Ensure != nil {
+		if ensureErr := c.Ensure(ctx); ensureErr == nil {
+			if retried, retryErr := attempt(); retryErr == nil {
+				return retried, nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("mmd is unreachable at %s: %w", c.SocketPath, err)
+}
 
 func (c MMDClient) Stream(ctx context.Context, input Request, emit EmitFunc) error {
 	body, err := json.Marshal(input)
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://mmd/v1/translation/stream", bytes.NewReader(body))
+	response, err := c.post(ctx, "/v1/translation/stream", body)
 	if err != nil {
 		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-		return (&net.Dialer{}).DialContext(ctx, "unix", c.SocketPath)
-	}}}
-	response, err := client.Do(req)
-	if err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		return errors.New("mmd is not running; start it with `mmd run`")
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
@@ -80,20 +106,9 @@ func (c MMDClient) Complete(ctx context.Context, prompt string) (string, error) 
 	if err != nil {
 		return "", err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://mmd/v1/llm/complete", bytes.NewReader(body))
+	response, err := c.post(ctx, "/v1/llm/complete", body)
 	if err != nil {
 		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-		return (&net.Dialer{}).DialContext(ctx, "unix", c.SocketPath)
-	}}}
-	response, err := client.Do(req)
-	if err != nil {
-		if ctx.Err() != nil {
-			return "", ctx.Err()
-		}
-		return "", errors.New("mmd is not running; start it with `mmd run`")
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {

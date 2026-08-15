@@ -142,7 +142,7 @@ func TestRestartStopsThenSpawns(t *testing.T) {
 	if !spawned || !status.Running || !status.Started || status.PID != 11 {
 		t.Fatalf("restart result=%+v spawned=%v", status, spawned)
 	}
-	_ = statusHits
+	_ = statusHits.Load()
 }
 
 func TestEnsureConnectsToRunningWithoutSpawning(t *testing.T) {

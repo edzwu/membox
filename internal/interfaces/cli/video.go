@@ -7,6 +7,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"membox/internal/daemon"
+	"membox/internal/translation"
 )
 
 func newVideoCommand(runtime *runtime) *cobra.Command {
@@ -33,6 +34,9 @@ func newVideoSummarizeCommand(runtime *runtime) *cobra.Command {
 		config, err := daemon.DefaultConfig(runtime.home)
 		if err != nil {
 			return err
+		}
+		if ensureErr := translation.EnsureMMD(cmd.Context(), config.Home); ensureErr != nil {
+			return fmt.Errorf("starting mmd on demand: %w", ensureErr)
 		}
 		result, summarizeErr := daemon.VideoSummary(cmd.Context(), config, daemon.VideoSummaryRequest{
 			URL: args[0], CourseCode: courseCode, LectureNo: lectureNo, Force: force,

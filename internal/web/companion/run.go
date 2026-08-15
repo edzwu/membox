@@ -76,7 +76,12 @@ func Run(ctx context.Context, options Options) error {
 	currentMode := lifecycle
 	server := web.NewServer(service)
 	server.SetToken(token)
-	server.SetTranslationStreamer(translation.MMDClient{SocketPath: translation.SocketPath(options.Home)})
+	server.SetTranslationStreamer(translation.MMDClient{
+		SocketPath: translation.SocketPath(options.Home),
+		Ensure: func(ctx context.Context) error {
+			return translation.EnsureMMD(ctx, options.Home)
+		},
+	})
 	server.ConfigureCompanion(lifecycle, stopOnce, func(mode string) {
 		modeMu.Lock()
 		currentMode = mode
