@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -997,8 +999,11 @@ func convertedPDFID(filename string) (string, bool) {
 	compact := ""
 	if len(stem) == len("pdf-")+32 && strings.HasPrefix(stem, "pdf-") {
 		compact = strings.TrimPrefix(stem, "pdf-") // legacy UUID-only name
-	} else if marker := strings.LastIndex(stem, "--pdf-"); marker >= 0 {
-		compact = stem[marker+len("--pdf-"):]
+	} else if marker := strings.LastIndex(stem, "-pdf-"); marker >= 0 {
+		// Readable conversion names use a single dash; LastIndex also covers
+		// legacy double-dash files. The 32-hex length check below still
+		// rejects chapter suffixes.
+		compact = stem[marker+len("-pdf-"):]
 	}
 	if len(compact) != 32 {
 		return "", false // also rejects chapter suffixes
@@ -1024,7 +1029,8 @@ func documentFilename(document membox.DocumentView) string {
 }
 
 // treeItemLabel keeps Markdown filesystem-authoritative while letting PDFs use
-// their catalog title as a virtual, user-editable name.
+// their catalog title as a virtual, user-editable name. Generated conversion
+// Markdown gets a short label with the frozen -pdf-<uuid> segment stripped.
 func treeItemLabel(candidate item) string {
 	isPDF := candidate.document.MediaType == "application/pdf" || strings.EqualFold(filepath.Ext(candidate.filename), ".pdf")
 	if isPDF {
@@ -1032,8 +1038,65 @@ func treeItemLabel(candidate item) string {
 			return title
 		}
 	}
+	if label := convertedTreeLabel(candidate.filename); label != candidate.filename {
+		return label
+	}
 	return candidate.filename
 }
+
+// convertedTreeLabel strips the -pdf-<uuid> segment from generated conversion
+// filenames so the tree shows an explicit, short label like
+// "fooled-by-randomness ch.1" or "fooled-by-randomness intro" instead of the
+// full identity-laden path.
+func convertedTreeLabel(filename string) string {
+	base := strings.ToLower(filepath.Base(strings.TrimSpace(filename)))
+	stem := strings.TrimSuffix(base, ".md")
+	marker := strings.LastIndex(stem, "-pdf-")
+	if marker < 0 {
+		return filename
+	}
+	prefix := strings.TrimRight(stem[:marker], "-")
+	rest := stem[marker+len("-pdf-"):]
+	if len(rest) < 32 {
+		return filename // no 32-hex identity: not a generated conversion
+	}
+	rest = rest[32:] // drop the document identity, keep -chapter-NNN / -part-xxx
+	if rest == "" {
+		return prefix
+	}
+	return prefix + compactConversionSuffix(rest)
+}
+
+// compactConversionSuffix shortens common generated suffixes to what fits a
+// tree row: -chapter-014 -> " ch.14", -part-introduction -> " intro".
+func compactConversionSuffix(rest string) string {
+	if m := conversionChapterRE.FindStringSubmatch(rest); m != nil {
+		if number, err := strconv.Atoi(m[1]); err == nil {
+			return fmt.Sprintf(" ch.%d", number)
+		}
+	}
+	if m := conversionPartRE.FindStringSubmatch(rest); m != nil {
+		if short, ok := conversionPartNames[m[1]]; ok {
+			return " " + short
+		}
+		return " " + m[1]
+	}
+	return " " + strings.TrimPrefix(rest, "-")
+}
+
+var (
+	conversionChapterRE = regexp.MustCompile(`^-chapter-(\d+)$`)
+	conversionPartRE    = regexp.MustCompile(`^-part-([a-z]+)$`)
+	conversionPartNames = map[string]string{
+		"introduction": "intro",
+		"prologue":     "prologue",
+		"preface":      "preface",
+		"epilogue":     "epilogue",
+		"afterword":    "afterword",
+		"appendix":     "appendix",
+		"conclusion":   "conclusion",
+	}
+)
 
 func displayTitle(title, path string) string {
 	if title != "" {

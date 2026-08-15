@@ -194,11 +194,13 @@ func convertedFilename(source Source) string {
 	// The readable prefix is frozen by Workspace.ResolveBundleFilename after
 	// first publication. The full source UUID remains in the suffix so legacy
 	// files can be migrated and reconversion can always recover stable identity.
+	// The marker is a single dash; the suffix is what generatedPDFSuffix and
+	// the TUI's converted mark both rely on.
 	identity := strings.ToLower(strings.ReplaceAll(source.DocumentID, "-", ""))
 	if identity == "" {
 		identity = "document"
 	}
-	return readablePDFStem(source.Filename) + "--pdf-" + identity + ".md"
+	return readablePDFStem(source.Filename) + "-pdf-" + identity + ".md"
 }
 
 func readablePDFStem(filename string) string {

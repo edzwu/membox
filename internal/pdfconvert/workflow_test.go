@@ -102,7 +102,7 @@ func TestWorkflowKeepsProtocolAndWorkspaceSeparated(t *testing.T) {
 	if client.serverURL != "http://converter.test:8000" || client.filename != "book.pdf" || client.body != "%PDF-source" {
 		t.Fatalf("unexpected client request: %+v", client)
 	}
-	if workspace.publishedFilename != "book--pdf-019ffe58b0af7b65baf12b7d9c066b19.md" || workspace.publishedBody != "# Converted\n\n![](/api/pdf-assets/019ffe58-b0af-7b65-baf1-2b7d9c066b19/images/chart.jpg)\n" {
+	if workspace.publishedFilename != "book-pdf-019ffe58b0af7b65baf12b7d9c066b19.md" || workspace.publishedBody != "# Converted\n\n![](/api/pdf-assets/019ffe58-b0af-7b65-baf1-2b7d9c066b19/images/chart.jpg)\n" {
 		t.Fatalf("unexpected publication: %q %q", workspace.publishedFilename, workspace.publishedBody)
 	}
 	if workspace.publications[0].owner != workspace.source.DocumentID {
@@ -142,7 +142,7 @@ func TestWorkflowPublishesStructuredBookAsLinkedChapterDocuments(t *testing.T) {
 		t.Fatalf("unexpected split publication: result=%+v publications=%+v", result, workspace.publications)
 	}
 	index := workspace.publications[3]
-	if index.filename != "book--pdf-019ffe58b0af7b65baf12b7d9c066b19.md" || strings.Contains(index.body, "intro\n") || !strings.Contains(index.body, "chapter-001.md") {
+	if index.filename != "book-pdf-019ffe58b0af7b65baf12b7d9c066b19.md" || strings.Contains(index.body, "intro\n") || !strings.Contains(index.body, "chapter-001.md") {
 		t.Fatalf("unexpected index publication: %+v", index)
 	}
 	if len(workspace.publications[0].assets) != 1 {
@@ -167,7 +167,7 @@ func TestWorkflowPublishesStructuredBookAsLinkedChapterDocuments(t *testing.T) {
 func TestConvertedFilenameKeepsReadablePDFStemAndStableIdentity(t *testing.T) {
 	source := Source{DocumentID: "019ffe58-b0af-7b65-baf1-2b7d9c066b19", Filename: "labuladong 的算法小抄（官方完整版）.pdf"}
 	got := convertedFilename(source)
-	want := "labuladong-的算法小抄-官方完整版--pdf-019ffe58b0af7b65baf12b7d9c066b19.md"
+	want := "labuladong-的算法小抄-官方完整版-pdf-019ffe58b0af7b65baf12b7d9c066b19.md"
 	if got != want {
 		t.Fatalf("converted filename=%q want=%q", got, want)
 	}

@@ -37,12 +37,40 @@ func TestDocumentItemsMarksPDFWhenStableConvertedIndexExists(t *testing.T) {
 	}
 }
 
+func TestConvertedTreeLabelStripsIdentityAndShortensSuffixes(t *testing.T) {
+	cases := map[string]string{
+		"fooled-by-randomness-pdf-01a001106cb479db952c02e705f8c0ea.md":            "fooled-by-randomness",
+		"fooled-by-randomness-pdf-01a001106cb479db952c02e705f8c0ea-chapter-014.md": "fooled-by-randomness ch.14",
+		"fooled-by-randomness-pdf-01a001106cb479db952c02e705f8c0ea-part-introduction.md": "fooled-by-randomness intro",
+		"fooled-by-randomness-pdf-01a001106cb479db952c02e705f8c0ea-part-afterword.md":    "fooled-by-randomness afterword",
+		"just-for-fun--pdf-01a004095c0c70e687738be6b34259ce-chapter-000.md":     "just-for-fun ch.0",
+		"labuladong的算法小抄官方完整版-pdf-01a00084ee897c54b45fee07fa0a9119.md": "labuladong的算法小抄官方完整版",
+		"ordinary-note.md": "ordinary-note.md",
+		"my-notes-pdf-but-not-generated.md": "my-notes-pdf-but-not-generated.md",
+	}
+	for filename, want := range cases {
+		if got := convertedTreeLabel(filename); got != want {
+			t.Fatalf("convertedTreeLabel(%q)=%q, want %q", filename, got, want)
+		}
+	}
+}
+
 func TestConvertedPDFIDRejectsChapterAndMalformedNames(t *testing.T) {
-	if id, ok := convertedPDFID("AI-Agents中文版--pdf-019ffe54a5137da8bfac0ae403223ccf.md"); !ok || id != "019ffe54-a513-7da8-bfac-0ae403223ccf" {
+	if id, ok := convertedPDFID("AI-Agents中文版-pdf-019ffe54a5137da8bfac0ae403223ccf.md"); !ok || id != "019ffe54-a513-7da8-bfac-0ae403223ccf" {
 		t.Fatalf("readable converted filename resolved as (%q,%v)", id, ok)
 	}
+	// Legacy double-dash names are still recognized; LastIndex lands on the
+	// dash pair right before the identity.
+	if id, ok := convertedPDFID("AI-Agents中文版--pdf-019ffe54a5137da8bfac0ae403223ccf.md"); !ok || id != "019ffe54-a513-7da8-bfac-0ae403223ccf" {
+		t.Fatalf("double-dash converted filename resolved as (%q,%v)", id, ok)
+	}
+	if id, ok := convertedPDFID("fooled-by-randomness-pdf-01a001106cb479db952c02e705f8c0ea.md"); !ok || id != "01a00110-6cb4-79db-952c-02e705f8c0ea" {
+		t.Fatalf("single-dash readable converted filename resolved as (%q,%v)", id, ok)
+	}
 	for _, filename := range []string{
+		"AI-Agents-pdf-019ffe54a5137da8bfac0ae403223ccf-chapter-001.md",
 		"AI-Agents--pdf-019ffe54a5137da8bfac0ae403223ccf-chapter-001.md",
+		"fooled-by-randomness-pdf-01a001106cb479db952c02e705f8c0ea-chapter-001.md",
 		"pdf-019ffe54a5137da8bfac0ae403223ccf-chapter-001.md",
 		"pdf-not-a-uuid.md",
 		"ordinary.md",

@@ -31,7 +31,7 @@ func TestUpsertMarkdownCreatesExactGeneratedFilenameWithoutReslugifying(t *testi
 		t.Fatal(err)
 	}
 
-	const filename = "Fooled-by-randomness--pdf-01a001106cb479db952c02e705f8c0ea.md"
+	const filename = "Fooled-by-randomness-pdf-01a001106cb479db952c02e705f8c0ea.md"
 	first, err := service.UpsertMarkdown(ctx, application.UpsertMarkdownOptions{Filename: filename, Body: "# Fooled by randomness\n\nbody\n"})
 	if err != nil {
 		t.Fatal(err)
@@ -39,8 +39,15 @@ func TestUpsertMarkdownCreatesExactGeneratedFilenameWithoutReslugifying(t *testi
 	if !first.Created || filepath.Base(first.Path) != filename {
 		t.Fatalf("exact generated filename was changed: %+v", first)
 	}
-	if _, err := os.Stat(filepath.Join(notesDir, "fooled-by-randomness-pdf-01a001106cb479db952c02e705f8c0ea.md")); !os.IsNotExist(err) {
-		t.Fatalf("secondary slugified file was created: %v", err)
+	// Exactly one file must exist: the exact generated name, never a secondary
+	// slugified copy. ReadDir keeps this deterministic even on case-insensitive
+	// filesystems where the slug and the exact name differ only by case.
+	entries, readErr := os.ReadDir(notesDir)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if len(entries) != 1 || entries[0].Name() != filename {
+		t.Fatalf("secondary slugified file was created: %v", entries)
 	}
 	second, err := service.UpsertMarkdown(ctx, application.UpsertMarkdownOptions{Filename: filename, Body: "# Fooled by randomness\n\nupdated\n"})
 	if err != nil {

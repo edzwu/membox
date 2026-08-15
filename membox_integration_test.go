@@ -582,7 +582,7 @@ func TestPDFConverterPublishesIndexedMarkdownAndLinksSource(t *testing.T) {
 	if len(progress) != 3 || progress[0].Stage != "split" || progress[1].Stage != "chunk_done" || progress[2].Stage != "publish" {
 		t.Fatalf("conversion progress=%+v", progress)
 	}
-	wantFilename := "fixture--pdf-" + compactPDFID + ".md"
+	wantFilename := "fixture-pdf-" + compactPDFID + ".md"
 	if converted.Created || converted.MarkdownDocument.ID != legacy.Document.ID || converted.MarkdownDocument.MediaType != "text/markdown" || filepath.Base(converted.MarkdownPath) != wantFilename {
 		t.Fatalf("legacy conversion was not migrated readably with stable identity: legacy=%+v converted=%+v", legacy, converted)
 	}
