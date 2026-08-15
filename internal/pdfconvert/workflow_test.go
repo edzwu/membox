@@ -224,7 +224,7 @@ type spyPlanner struct {
 	plans  []ChapterPlan
 }
 
-func (p *spyPlanner) PlanChapters(context.Context, string) ([]ChapterPlan, error) {
+func (p *spyPlanner) PlanChapters(context.Context, PlanRequest) ([]ChapterPlan, error) {
 	p.called = true
 	return p.plans, nil
 }
@@ -269,8 +269,8 @@ func TestWorkflowRunsPlannerForLargeUnstructuredMarkdown(t *testing.T) {
 	}}
 	client := &fakeClient{result: RemoteResult{Filename: "big.pdf", Markdown: markdown, MarkdownSHA256: "sha"}}
 	spy := &spyPlanner{plans: []ChapterPlan{
-		{Title: "Opening", Anchor: "Opening movement of the tale"},
-		{Title: "Closing", Anchor: "Closing movement finishes"},
+		{Title: "Opening", Line: 3},
+		{Title: "Closing", Line: 5},
 	}}
 	workflow := NewWorkflow(client, config)
 	workflow.SetStructurePlanner(spy)

@@ -177,9 +177,9 @@ type progressStructurePlanner struct {
 	onProgress func(Progress)
 }
 
-func (p progressStructurePlanner) PlanChapters(ctx context.Context, sketch string) ([]ChapterPlan, error) {
+func (p progressStructurePlanner) PlanChapters(ctx context.Context, request PlanRequest) ([]ChapterPlan, error) {
 	p.onProgress(Progress{Stage: "structure", Detail: "analyzing document structure with local model"})
-	return p.inner.PlanChapters(ctx, sketch)
+	return p.inner.PlanChapters(ctx, request)
 }
 
 func conversionResult(source Source, filename, markdownSHA256 string, published PublishedMarkdown, chapters []PublishedChapter) Result {

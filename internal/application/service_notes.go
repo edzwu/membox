@@ -110,7 +110,12 @@ func (s *Service) FindMarkdownByFilenameSuffix(ctx context.Context, suffix strin
 	var match *catalog.Document
 	var absolute string
 	for _, document := range documents {
-		filename := filepath.Base(filepath.FromSlash(document.Location.RelativePath))
+		relative := filepath.ToSlash(document.Location.RelativePath)
+		// Trashed projections must never shadow a regenerated bundle.
+		if strings.HasPrefix(relative, catalog.TrashDir+"/") {
+			continue
+		}
+		filename := filepath.Base(filepath.FromSlash(relative))
 		if document.Index.MediaType != "text/markdown" || !strings.HasSuffix(filename, suffix) {
 			continue
 		}

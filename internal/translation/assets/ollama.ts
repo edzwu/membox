@@ -81,7 +81,7 @@ function streamNativeOllama(
           messages,
           stream: true,
           think: false,
-          options: { temperature: (options as any)?.temperature ?? 0.2, num_ctx: 8192, num_predict: 2048 },
+          options: { temperature: (options as any)?.temperature ?? 0.2, num_ctx: 16384, num_predict: 2048 },
         }),
         signal: controller.signal,
       });

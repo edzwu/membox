@@ -132,85 +132,66 @@ func PostprocessMarkdownWithPlanner(ctx context.Context, markdown, baseFilename 
 }
 
 func llmPlannedSections(ctx context.Context, markdown string, planner StructurePlanner) []sectionBoundary {
-	sketch := BuildStructureSketch(markdown)
+	tocStart, tocEnd := tocRegionBounds(markdown)
+	var entries []string
+	if tocStart >= 0 && tocEnd > 0 {
+		entries = parseBookTOC(markdown, tocStart, tocEnd)
+	}
+	sketch, sketchLines := BuildStructureSketch(markdown, tocEnd)
 	if len(sketch) < 200 {
 		return nil
 	}
-	plans, err := planner.PlanChapters(ctx, sketch)
+	plans, err := planner.PlanChapters(ctx, PlanRequest{Entries: entries, Sketch: sketch})
 	if err != nil {
 		return nil
 	}
-	return locatePlannedChapters(markdown, plans)
+	return boundariesFromPlans(markdown, plans, sketchLines, tocEnd)
 }
 
-// planLine is one Markdown line with byte offsets, used for LLM anchor
-// location.
-type planLine struct {
-	start, end int
-	text       string
-}
-
-// locatePlannedChapters maps LLM-proposed anchors onto real document lines.
-// Table rows (TOC entries) are rejected, matches must be strictly ordered,
-// and at least two anchors must locate before any split happens.
-func locatePlannedChapters(markdown string, plans []ChapterPlan) []sectionBoundary {
-	raw := strings.Split(markdown, "\n")
-	lines := make([]planLine, 0, len(raw))
-	offset := 0
-	for _, text := range raw {
-		lines = append(lines, planLine{start: offset, end: offset + len(text) + 1, text: text})
-		offset += len(text) + 1
-	}
-
-	cursor := 0
-	tocEnd := tocRegionEnd(lines)
+// boundariesFromPlans maps the model's sketch line numbers onto byte offsets.
+// Lines must exist in the sketch, lie outside the TOC region, and be strictly
+// increasing; at least two located boundaries are required before splitting.
+func boundariesFromPlans(markdown string, plans []ChapterPlan, sketchLines map[int]sketchLine, bodyStart int) []sectionBoundary {
+	cursor := bodyStart
 	boundaries := make([]sectionBoundary, 0, len(plans))
 	for _, plan := range plans {
-		anchor := normalizeTOCTitle(plan.Anchor)
-		if len(anchor) < 6 {
+		line, ok := sketchLines[plan.Line]
+		if !ok || line.offset < cursor {
 			continue
 		}
-		for _, line := range lines {
-			if line.start < cursor {
-				continue
+		bodyOffset := line.offset
+		if line.heading {
+			// The generated chapter supplies its own H1; skip the source heading.
+			if nl := strings.IndexByte(markdown[line.offset:], '\n'); nl >= 0 {
+				bodyOffset = line.offset + nl + 1
+			} else {
+				bodyOffset = len(markdown)
 			}
-			// Matches inside the table-of-contents region are never real
-			// chapter starts; the body begins after it.
-			if tocEnd > 0 && line.start < tocEnd {
-				continue
-			}
-			trimmed := strings.TrimSpace(line.text)
-			if trimmed == "" || strings.HasPrefix(trimmed, "|") || strings.HasPrefix(trimmed, "!") {
-				continue
-			}
-			text, heading := trimmed, false
-			if match := atxHeadingText(trimmed); match != "" {
-				text, heading = match, true
-			}
-			normalized := normalizeTOCTitle(text)
-			if normalized == "" || !anchorMatches(anchor, normalized) {
-				continue
-			}
-			start, bodyStart := line.start, line.start
-			if heading {
-				bodyStart = line.end
-			} else if line.end < len(markdown) {
-				// A Setext heading keeps its title line out of the body too.
-				next := strings.TrimSpace(markdown[line.end:min(line.end+128, len(markdown))])
-				if nl := strings.IndexByte(next, '\n'); nl >= 0 {
-					next = next[:nl]
-				}
-				if len(next) >= 3 && (strings.Trim(next, "=") == "" || strings.Trim(next, "-") == "") {
-					bodyStart = line.end
-				}
-			}
-			boundaries = append(boundaries, sectionBoundary{
-				start: start, bodyStart: bodyStart, title: plan.Title, chapter: true,
-			})
-			cursor = line.end
-			break
 		}
+		boundaries = append(boundaries, sectionBoundary{
+			start: line.offset, bodyStart: bodyOffset, title: plan.Title, chapter: true,
+		})
+		cursor = line.offset + 1
 	}
+	if len(boundaries) < 2 {
+		return nil
+	}
+	// A boundary that produces a sliver section (a heading line immediately
+	// followed by the next boundary) means the model placed two boundaries on
+	// top of each other; drop it and let the content join the previous chapter.
+	const minPlannedSectionBytes = 500
+	merged := boundaries[:0]
+	for index, boundary := range boundaries {
+		end := len(markdown)
+		if index+1 < len(boundaries) {
+			end = boundaries[index+1].start
+		}
+		if end-boundary.start < minPlannedSectionBytes && index+1 < len(boundaries) {
+			continue
+		}
+		merged = append(merged, boundary)
+	}
+	boundaries = merged
 	if len(boundaries) < 2 {
 		return nil
 	}
@@ -225,28 +206,6 @@ func locatePlannedChapters(markdown string, plans []ChapterPlan) []sectionBounda
 	return boundaries
 }
 
-// tocRegionEnd returns the byte offset where the table-of-contents region
-// ends: from the first Contents/目录 heading until the next level-1 heading.
-// Returns 0 when no TOC heading or terminating H1 exists (nothing to reject).
-func tocRegionEnd(lines []planLine) int {
-	tocLine := -1
-	for index, line := range lines {
-		if title := atxHeadingText(strings.TrimSpace(line.text)); title != "" && isTOCHeading(title) {
-			tocLine = index
-			break
-		}
-	}
-	if tocLine < 0 {
-		return 0
-	}
-	for index := tocLine + 1; index < len(lines); index++ {
-		if strings.HasPrefix(strings.TrimSpace(lines[index].text), "# ") {
-			return lines[index].start
-		}
-	}
-	return 0
-}
-
 func atxHeadingText(line string) string {
 	level := 0
 	for level < len(line) && line[level] == '#' {
@@ -256,23 +215,6 @@ func atxHeadingText(line string) string {
 		return ""
 	}
 	return strings.TrimSpace(strings.TrimRight(strings.TrimSpace(line[level:]), "#"))
-}
-
-// anchorMatches compares NFKC-normalized, alphanumeric-only forms. Exact or
-// prefix equality is preferred; containment requires a long anchor so short
-// generic strings cannot pin a boundary.
-func anchorMatches(anchor, line string) bool {
-	if line == anchor {
-		return true
-	}
-	prefix := anchor
-	if len(prefix) > 32 {
-		prefix = prefix[:32]
-	}
-	if strings.HasPrefix(line, prefix) {
-		return true
-	}
-	return len(anchor) >= 16 && strings.Contains(line, anchor)
 }
 
 func markdownSections(markdown string) ([]sectionBoundary, int) {

@@ -3,6 +3,8 @@ package pdfconvert
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -29,93 +31,100 @@ Years later the operating system chapters open with a frustrating Minix terminal
 
 ` + strings.Repeat("Linux grows from a hobby into a revolution. ", 30) + `
 
-# Epilogue: The Amusement Ride Ahead
+# Notes
 
 ` + strings.Repeat("Closing reflections on fame and open source. ", 30)
 
-func fakePlanner(response string, err error) StructurePlanner {
-	return LLMStructurePlanner{Complete: func(context.Context, string) (string, error) {
-		return response, err
-	}}
+// sketchLineFor finds the sketch line number containing prefix, so tests never
+// hardcode line numbers.
+func sketchLineFor(t *testing.T, sketch, prefix string) int {
+	t.Helper()
+	for _, line := range strings.Split(sketch, "\n") {
+		if !strings.Contains(line, prefix) {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && strings.HasPrefix(fields[1], "@") {
+			if number, err := strconv.Atoi(fields[1][1:]); err == nil {
+				return number
+			}
+		}
+	}
+	t.Fatalf("prefix %q not in sketch:\n%s", prefix, sketch)
+	return 0
 }
 
-func TestLLMPlannerSplitsUnstructuredBook(t *testing.T) {
-	plan := `{"chapters":[
-		{"title":"Preface: The Meaning of Life I","anchor":"Preface: The Meaning of Life I"},
-		{"title":"Part 1: Birth of a NERD","anchor":"SETTING: This book has its origins"},
-		{"title":"Part 2: Birth of an Operating System","anchor":"Years later the operating system chapters open"},
-		{"title":"Epilogue: The Amusement Ride Ahead","anchor":"Epilogue: The Amusement Ride Ahead"}
-	]}`
-	result := PostprocessMarkdownWithPlanner(context.Background(), unstructuredBook, "book.md", fakePlanner(plan, nil))
-	if len(result.Chapters) != 4 {
+func TestLLMPlannerSplitsByBookTOC(t *testing.T) {
+	tocStart, tocEnd := tocRegionBounds(unstructuredBook)
+	sketch, _ := BuildStructureSketch(unstructuredBook, tocEnd)
+	entries := parseBookTOC(unstructuredBook, tocStart, tocEnd)
+	if len(entries) != 3 || entries[0] != "Preface: The Meaning of Life I" || entries[1] != "Birth of a NERD · I" || entries[2] != "Birth of a NERD · II" {
+		t.Fatalf("TOC entries=%v", entries)
+	}
+
+	planJSON := fmt.Sprintf(`{"chapters":[
+		{"chapter":1,"line":%d},
+		{"chapter":2,"line":%d},
+		{"chapter":3,"line":%d}
+	]}`,
+		sketchLineFor(t, sketch, "Preface: The Meaning of Life I"),
+		sketchLineFor(t, sketch, "SETTING: This book has its origins"),
+		sketchLineFor(t, sketch, "Years later the operating system"))
+
+	planner := LLMStructurePlanner{Complete: func(context.Context, string) (string, error) { return planJSON, nil }}
+	result := PostprocessMarkdownWithPlanner(context.Background(), unstructuredBook, "book.md", planner)
+	if len(result.Chapters) != 3 {
 		t.Fatalf("chapters=%d: %+v", len(result.Chapters), result.Chapters)
 	}
-	if result.Chapters[0].Title != "Preface: The Meaning of Life I" || strings.Count(result.Chapters[0].Markdown, "Preface: The Meaning of Life I") != 1 {
-		t.Fatalf("preface boundary wrong (heading must appear only as generated title): %q", result.Chapters[0].Markdown[:200])
+	if result.Chapters[0].Title != "Preface: The Meaning of Life I" {
+		t.Fatalf("chapter 0 title=%q", result.Chapters[0].Title)
 	}
-	if !strings.Contains(result.Chapters[1].Markdown, "SETTING: This book") {
-		t.Fatalf("paragraph anchor content was dropped: %q", result.Chapters[1].Markdown[:200])
+	if result.Chapters[1].Title != "Birth of a NERD · I" || !strings.Contains(result.Chapters[1].Markdown, "SETTING: This book") || !strings.Contains(result.Chapters[1].Markdown, "The nerd story begins") {
+		t.Fatalf("part 1 chapter I wrong: %q", result.Chapters[1].Markdown[:160])
 	}
 	if !strings.Contains(result.Chapters[2].Markdown, "Linux grows from a hobby") {
-		t.Fatalf("part 2 content missing: %q", result.Chapters[2].Markdown[:200])
+		t.Fatalf("part 1 chapter II content missing: %q", result.Chapters[2].Markdown[:160])
 	}
-	if result.Chapters[3].Filename != "book-chapter-003.md" {
-		t.Fatalf("unexpected filename: %s", result.Chapters[3].Filename)
-	}
-	if !strings.Contains(result.IndexMarkdown, "Part 2: Birth of an Operating System") {
-		t.Fatalf("index missing planned titles: %q", result.IndexMarkdown)
+	if !strings.Contains(result.IndexMarkdown, "Birth of a NERD · II") {
+		t.Fatalf("index missing TOC titles: %q", result.IndexMarkdown)
 	}
 }
 
-func TestLLMPlannerKeepsSubstantialFrontMatter(t *testing.T) {
-	markdown := "# Big Book\n\n## Contents\n\n" + strings.Repeat("A long publishing history and TOC block. ", 40) +
-		"\n\nChapter One opens with a vivid scene on the road.\n\n" + strings.Repeat("First chapter body. ", 60) +
-		"\n\nChapter Two continues the journey north.\n\n" + strings.Repeat("Second chapter body. ", 60)
-	plan := `{"chapters":[
-		{"title":"Chapter One","anchor":"Chapter One opens with a vivid scene"},
-		{"title":"Chapter Two","anchor":"Chapter Two continues the journey"}
-	]}`
-	result := PostprocessMarkdownWithPlanner(context.Background(), markdown, "book.md", fakePlanner(plan, nil))
-	if len(result.Chapters) != 3 || result.Chapters[0].Title != "Front Matter" {
-		t.Fatalf("front matter not preserved: %+v", result.Chapters)
+func TestLLMPlannerRejectsUnknownAndUnorderedLines(t *testing.T) {
+	_, tocEnd := tocRegionBounds(unstructuredBook)
+	sketch, _ := BuildStructureSketch(unstructuredBook, tocEnd)
+	good := sketchLineFor(t, sketch, "SETTING: This book has its origins")
+	cases := []string{
+		`{"chapters":[{"chapter":1,"line":99999},{"chapter":2,"line":3}]}`,                 // unknown line
+		fmt.Sprintf(`{"chapters":[{"chapter":1,"line":%d},{"chapter":2,"line":1}]}`, good), // out of order / TOC region
 	}
-	if !strings.Contains(result.Chapters[0].Markdown, "publishing history") {
-		t.Fatalf("front matter content dropped: %q", result.Chapters[0].Markdown[:160])
-	}
-}
-
-func TestLLMPlannerRejectsTOCRegionAnchors(t *testing.T) {
-	markdown := "# Book\n\n## Contents\n\n## Part One\n\n| I |\n| II |\n\n# Real Start\n\n" + strings.Repeat("The actual narrative begins here with real prose. ", 40) +
-		"\n\nA later scene opens the second movement of the story.\n\n" + strings.Repeat("More real narrative continues the tale. ", 40)
-	plan := `{"chapters":[
-		{"title":"Part One","anchor":"Part One"},
-		{"title":"Real Start","anchor":"Real Start"},
-		{"title":"Second movement","anchor":"A later scene opens the second movement"}
-	]}`
-	result := PostprocessMarkdownWithPlanner(context.Background(), markdown, "book.md", fakePlanner(plan, nil))
-	// The TOC-region "Part One" anchor must be rejected; the other two locate.
-	if len(result.Chapters) != 2 {
-		t.Fatalf("chapters=%d: %+v", len(result.Chapters), result.Chapters)
-	}
-	if result.Chapters[0].Title != "Real Start" || result.Chapters[1].Title != "Second movement" {
-		t.Fatalf("unexpected chapters: %+v", result.Chapters)
+	for _, planJSON := range cases {
+		planner := LLMStructurePlanner{Complete: func(context.Context, string) (string, error) { return planJSON, nil }}
+		result := PostprocessMarkdownWithPlanner(context.Background(), unstructuredBook, "book.md", planner)
+		if len(result.Chapters) != 0 || result.IndexMarkdown != unstructuredBook {
+			t.Fatalf("invalid plan must keep the document whole: %s", planJSON)
+		}
 	}
 }
 
-func TestLLMPlannerRejectsUnverifiableAnchors(t *testing.T) {
-	plan := `{"chapters":[
-		{"title":"Invented","anchor":"This sentence does not exist anywhere"},
-		{"title":"Table row","anchor":"| I |"}
-	]}`
-	result := PostprocessMarkdownWithPlanner(context.Background(), unstructuredBook, "book.md", fakePlanner(plan, nil))
-	if len(result.Chapters) != 0 || result.IndexMarkdown != unstructuredBook {
-		t.Fatal("unverifiable plan must keep the document whole")
+func TestLLMPlannerWithoutTOCInventsTitles(t *testing.T) {
+	markdown := "# Freeform\n\n" + strings.Repeat("Alpha narrative opens the document here. ", 40) +
+		"\n\n" + strings.Repeat("Beta narrative takes over with a scene change. ", 40)
+	sketch, _ := BuildStructureSketch(markdown, 0)
+	planJSON := fmt.Sprintf(`{"chapters":[{"title":"Alpha","line":%d},{"title":"Beta","line":%d}]}`,
+		sketchLineFor(t, sketch, "Alpha narrative opens"), sketchLineFor(t, sketch, "Beta narrative takes over"))
+	planner := LLMStructurePlanner{Complete: func(context.Context, string) (string, error) { return planJSON, nil }}
+	result := PostprocessMarkdownWithPlanner(context.Background(), markdown, "book.md", planner)
+	if len(result.Chapters) != 2 || result.Chapters[0].Title != "Alpha" || result.Chapters[1].Title != "Beta" {
+		t.Fatalf("chapters=%+v", result.Chapters)
 	}
 }
 
 func TestLLMPlannerErrorKeepsDocumentWhole(t *testing.T) {
-	result := PostprocessMarkdownWithPlanner(context.Background(), unstructuredBook, "book.md",
-		fakePlanner("", errors.New("mmd is not running")))
+	planner := LLMStructurePlanner{Complete: func(context.Context, string) (string, error) {
+		return "", errors.New("mmd is not running")
+	}}
+	result := PostprocessMarkdownWithPlanner(context.Background(), unstructuredBook, "book.md", planner)
 	if len(result.Chapters) != 0 || result.IndexMarkdown != unstructuredBook {
 		t.Fatal("planner failure must fall back to the whole document")
 	}
@@ -145,25 +154,30 @@ func TestBuildStructureSketchCoversWholeDocument(t *testing.T) {
 		doc.WriteString("\n\n")
 	}
 	doc.WriteString("Final chapter opens here with a distinctive sentence.\n")
-	sketch := BuildStructureSketch(doc.String())
+	sketch, lines := BuildStructureSketch(doc.String(), 0)
 	if len(sketch) > structureSketchBudget {
 		t.Fatalf("sketch exceeds budget: %d", len(sketch))
 	}
 	if !strings.Contains(sketch, "H1 @1 Title") {
 		t.Fatalf("heading missing from sketch: %q", sketch[:120])
 	}
-	if !strings.Contains(sketch, "Final chapter opens here") {
-		t.Fatal("sampling dropped the end of the document")
+	last := sketchLineFor(t, sketch, "Final chapter opens here")
+	if _, ok := lines[last]; !ok {
+		t.Fatal("last sketch line missing from lookup map")
 	}
 }
 
 func TestParseChapterPlans(t *testing.T) {
-	plans, err := parseChapterPlans("```json\n{\"chapters\":[{\"title\":\" 一 \",\"anchor\":\"Anchor text here\"}]}\n```")
-	if err == nil || plans != nil {
-		t.Fatalf("single chapter must be rejected: %+v err=%v", plans, err)
-	}
-	plans, err = parseChapterPlans(`{"chapters":[{"title":"One","anchor":"First anchor"},{"anchor":"Second anchor"}]}`)
-	if err != nil || len(plans) != 2 || plans[1].Title != "Second anchor" {
+	entries := []string{"One", "Two"}
+	plans, err := parseChapterPlans("```json\n{\"chapters\":[{\"chapter\":1,\"line\":10},{\"chapter\":2,\"line\":20}]}\n```", entries)
+	if err != nil || len(plans) != 2 || plans[0].Title != "One" || plans[1].Line != 20 {
 		t.Fatalf("plans=%+v err=%v", plans, err)
+	}
+	if _, err := parseChapterPlans(`{"chapters":[{"chapter":9,"line":10},{"chapter":2,"line":20}]}`, entries); err == nil {
+		t.Fatal("out-of-range chapter index must fail when fewer than 2 usable remain")
+	}
+	plans, err = parseChapterPlans(`{"chapters":[{"title":"Alpha","line":5},{"title":"Beta","line":9}]}`, nil)
+	if err != nil || plans[1].Title != "Beta" {
+		t.Fatalf("freeform plans=%+v err=%v", plans, err)
 	}
 }
