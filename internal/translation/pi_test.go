@@ -65,7 +65,10 @@ func TestMaterializeProviderPinsNativeOllamaStreaming(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, marker := range []string{`registerProvider("membox-ollama"`, `/api/chat`, `think: false`, `qwen3:14b`} {
+	for _, marker := range []string{
+		`registerProvider("membox-ollama"`, `/api/chat`, `think: false`, `qwen3:14b`,
+		`keep_alive`, `KEEP_ALIVE`, `num_ctx: 8192`,
+	} {
 		if !strings.Contains(string(body), marker) {
 			t.Fatalf("provider extension missing %q", marker)
 		}

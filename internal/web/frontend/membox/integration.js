@@ -18,6 +18,7 @@
      sync.js           explicit sync + silent auto-create of pasted content
      related.js        related-documents panel + link/create/open picker
      notes.js          browse-notes button + picker, long-note rail previews
+     dictionary.js     single-word Free Dictionary lookup → related note
      presence.js       tab heartbeat for the companion/TUI census */
 
 import { elements } from '../js/dom.js';
@@ -33,6 +34,7 @@ import { initRelated, handleOpenShortcut } from './related.js';
 import { initPresence } from './presence.js';
 import { initPDFImport } from './pdf-import.js';
 import { initTranslation } from './translation.js';
+import { initDictionary } from './dictionary.js';
 import { initReadingState, isRestoring, scheduleReadingStateSave } from './reading-state.js';
 import { autoCreateForAnnotations, syncToMembox } from './sync.js';
 import { checkStatus } from './api.js';
@@ -54,6 +56,7 @@ initReadingState();
 initPresence();
 initPDFImport();
 initTranslation();
+initDictionary();
 
 // User edits make the in-memory annotation set authoritative for deletions on
 // the next save. During a restore the model is incomplete; the restore flow

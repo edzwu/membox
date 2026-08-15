@@ -417,6 +417,10 @@ func (d *Daemon) shutdown() {
 }
 
 func (d *Daemon) cleanup() {
+	// Drop the local 14B weights as soon as mmd exits (idle self-stop or
+	// explicit shutdown). keep_alive on each request already bounds residency,
+	// but an explicit unload frees RAM immediately when the daemon goes away.
+	unloadOllamaModel(translation.DefaultModel)
 	if d.listener != nil {
 		_ = d.listener.Close()
 		d.listener = nil
@@ -436,6 +440,30 @@ func (d *Daemon) cleanup() {
 	}
 	_ = os.Remove(d.config.SocketPath)
 	_ = os.Remove(d.config.PIDPath)
+}
+
+// unloadOllamaModel asks the local Ollama daemon to drop model weights now
+// (keep_alive=0). Failures are ignored: Ollama may not be running, or the
+// model may already be cold. Best-effort only — never blocks mmd exit.
+func unloadOllamaModel(model string) {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	body := fmt.Sprintf(`{"model":%q,"keep_alive":0}`, model)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://127.0.0.1:11434/api/generate", strings.NewReader(body))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
 }
 
 func removeStaleSocket(path string) error {

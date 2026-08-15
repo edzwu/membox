@@ -918,6 +918,170 @@ body.is-snippet .toc {
   color: #b3402f;
 }
 
+/* Dictionary panel — single-word lookup (membox adapter / Free Dictionary). */
+.annot-toolbar.is-dict {
+  align-items: stretch;
+  padding: 0;
+  max-width: min(360px, calc(100vw - 24px));
+}
+
+.annot-dict-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 240px;
+  max-width: 360px;
+  padding: 10px 12px 10px;
+}
+
+.annot-dict-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 10px;
+}
+
+.annot-dict-head strong {
+  font-family: var(--font-serif, Georgia, serif);
+  font-size: 16px;
+  font-weight: 650;
+  color: var(--ink);
+  letter-spacing: 0.01em;
+}
+
+.annot-dict-phonetic {
+  color: var(--ink-soft);
+  font-size: 12.5px;
+  font-style: italic;
+}
+
+.annot-dict-status {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 13px;
+}
+
+.annot-dict-status.is-error {
+  color: #b3402f;
+}
+
+.annot-dict-body {
+  max-height: 240px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-right: 2px;
+}
+
+.annot-dict-meaning h4 {
+  margin: 0 0 4px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.annot-dict-meaning ol {
+  margin: 0;
+  padding-left: 1.2em;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.annot-dict-meaning li {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--ink);
+}
+
+.annot-dict-example {
+  margin-top: 2px;
+  color: var(--ink-soft);
+  font-size: 12.5px;
+  font-style: italic;
+}
+
+.annot-dict-meta {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+.annot-dict-meta span {
+  font-weight: 650;
+  color: color-mix(in srgb, var(--ink-soft) 80%, var(--accent));
+  margin-right: 4px;
+}
+
+.annot-dict-empty {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 13px;
+}
+
+.annot-dict-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
+}
+
+.annot-dict-source {
+  font-size: 11px;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.annot-dict-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+/* Icon-only copy/save — same footprint as the selection toolbar buttons. */
+.annot-dict-copy,
+.annot-dict-save {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--ink-soft);
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  cursor: pointer;
+  flex: 0 0 auto;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+
+.annot-dict-copy:hover,
+.annot-dict-save:hover:not(:disabled) {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.annot-dict-copy.is-copied {
+  color: var(--accent);
+}
+
+.annot-dict-save:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.annot-dict-save.is-busy {
+  opacity: 0.55;
+  color: var(--accent);
+}
+
 .annot-note-input {
   appearance: none;
   border: 1px solid transparent;

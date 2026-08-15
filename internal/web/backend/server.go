@@ -114,6 +114,7 @@ func (s *Server) Start(ctx context.Context, port int) (string, error) {
 	mux.HandleFunc("/api/doc/", s.handleDocument)
 	mux.HandleFunc("/api/pdfs/import", s.handlePDFImport)
 	mux.HandleFunc("/api/translation/stream", s.handleTranslationStream)
+	mux.HandleFunc("/api/lookup", s.handleLookup)
 	mux.HandleFunc("/api/pdf-assets/", s.handlePDFAsset)
 	mux.HandleFunc("/api/save", s.handleSave)
 	mux.HandleFunc("/api/sync", s.handleSync)

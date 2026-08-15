@@ -136,6 +136,12 @@ export async function fetchRelated(id) {
   return response.json();
 }
 
+// Free Dictionary lookup — same source as ~/repo/lookup.
+export async function fetchLookup(word, { signal } = {}) {
+  const response = await request(`/api/lookup?q=${encodeURIComponent(word)}`, { signal });
+  return response.json();
+}
+
 // body is either { target_id } (link existing) or { title, body } (create).
 export async function postRelated(id, body) {
   const response = await request(`/api/doc/${encodeURIComponent(id)}/related`, {

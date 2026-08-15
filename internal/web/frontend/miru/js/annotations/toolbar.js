@@ -30,15 +30,43 @@ const ANNOT_ICONS = {
   trash: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M3 6h18M8 6V4h8v2m1 0v14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2V6h10z"/></svg>',
 };
 
+// Host adapters (membox) may register extra toolbar actions without coupling
+// Miru's annotation model to product-specific features like dictionary lookup.
+// Each action: { id, icon, title, when({mode,text,entry}), run(ctx) }.
+const extraAnnotActions = [];
+
+export function registerAnnotAction(action) {
+  if (!action || !action.id || typeof action.run !== 'function') {
+    throw new Error('registerAnnotAction requires { id, run }');
+  }
+  const index = extraAnnotActions.findIndex((item) => item.id === action.id);
+  if (index >= 0) extraAnnotActions[index] = action;
+  else extraAnnotActions.push(action);
+}
+
+const annotToolbarHideListeners = [];
+
+export function onAnnotToolbarHide(listener) {
+  if (typeof listener === 'function') annotToolbarHideListeners.push(listener);
+}
+
 let annotToolbar = null;
 let currentRange = null;
 let currentAnnotEl = null;
 let noteResizeObserver = null;
+let currentSelectionText = '';
 
 export function hideAnnotToolbar() {
-  if (annotToolbar) annotToolbar.hidden = true;
+  if (annotToolbar) {
+    annotToolbar.hidden = true;
+    annotToolbar.classList.remove('is-dict');
+  }
   currentRange = null;
   currentAnnotEl = null;
+  currentSelectionText = '';
+  for (const listener of annotToolbarHideListeners) {
+    try { listener(); } catch (err) { console.warn(err); }
+  }
 }
 
 function positionAnnotToolbar(target) {
@@ -60,17 +88,46 @@ const MARK_FLAGS = {
 
 // Build the toolbar for create mode (fresh selection) or edit mode (an
 // existing annotated passage, given its entry to reflect toggle states).
-function buildAnnotToolbar(mode, entry) {
+function buildAnnotToolbar(mode, entry, text = '') {
   const i = ANNOT_ICONS;
   let html =
     `<button type="button" data-action="highlight" class="${entry && entry.hl ? 'active' : ''}" title="Highlight" aria-label="Highlight">${i.highlight}</button>` +
     `<button type="button" data-action="underline" class="${entry && entry.ul ? 'active' : ''}" title="Underline" aria-label="Underline">${i.underline}</button>` +
     `<button type="button" data-action="strikethrough" class="${entry && entry.sl ? 'active' : ''}" title="Strikethrough" aria-label="Strikethrough">${i.strikethrough}</button>` +
     `<button type="button" data-action="note" title="${entry && entry.note ? 'Edit note' : 'Add note'}" aria-label="Note">${i.note}</button>`;
+  for (const action of extraAnnotActions) {
+    const visible = typeof action.when === 'function'
+      ? action.when({ mode, text, entry })
+      : mode === 'create';
+    if (!visible) continue;
+    const title = action.title || action.id;
+    html += `<button type="button" data-action="ext:${action.id}" title="${escapeAttr(title)}" aria-label="${escapeAttr(title)}">${action.icon || title}</button>`;
+  }
   if (mode === 'edit') {
     html += `<button type="button" data-action="delete" class="annot-del" title="Delete annotation" aria-label="Delete annotation">${i.trash}</button>`;
   }
+  annotToolbar.classList.remove('is-dict');
   annotToolbar.innerHTML = html;
+}
+
+function escapeAttr(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;');
+}
+
+function extensionContext() {
+  return {
+    mode: currentAnnotEl ? 'edit' : 'create',
+    text: currentSelectionText,
+    range: currentRange,
+    annotEl: currentAnnotEl,
+    toolbar: annotToolbar,
+    position: (target) => positionAnnotToolbar(target || currentAnnotEl || currentRange),
+    finish: finishAnnotation,
+    hide: hideAnnotToolbar,
+  };
 }
 
 function finishAnnotation() {
@@ -158,6 +215,12 @@ function onAnnotToolbarClick(e) {
   if (!btn) return;
   const action = btn.dataset.action;
 
+  if (action.startsWith('ext:')) {
+    const ext = extraAnnotActions.find((item) => item.id === action.slice(4));
+    if (ext) ext.run(extensionContext());
+    return;
+  }
+
   if (currentAnnotEl) {
     const entry = findAnnot(currentAnnotEl.dataset.annotId);
     if (!entry) {
@@ -223,7 +286,8 @@ function onAnnotMouseUp(e) {
     }
     currentRange = range.cloneRange();
     currentAnnotEl = null;
-    buildAnnotToolbar('create', null);
+    currentSelectionText = annotationTextFromRange(range) || '';
+    buildAnnotToolbar('create', null, currentSelectionText);
     positionAnnotToolbar(range);
   }, 0);
 }
@@ -261,7 +325,9 @@ function onAnnotPassageClick(e) {
 
   currentAnnotEl = annotEl;
   currentRange = null;
-  buildAnnotToolbar('edit', findAnnot(annotEl.dataset.annotId));
+  const entry = findAnnot(annotEl.dataset.annotId);
+  currentSelectionText = (annotEl.textContent || '').trim();
+  buildAnnotToolbar('edit', entry, currentSelectionText);
   positionAnnotToolbar(annotEl);
 }
 

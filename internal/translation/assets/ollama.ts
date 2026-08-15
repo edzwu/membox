@@ -11,6 +11,12 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const API = "membox-ollama-native" as any;
 
+// How long Ollama keeps qwen3:14b resident after the last request. A short
+// window frees ~10GB on 16GB Macs once translation / PDF planning go quiet;
+// each new request refreshes the timer, so multi-paragraph runs stay warm.
+// Override with MEMBOX_OLLAMA_KEEP_ALIVE (e.g. "5m", "0", "-1").
+const KEEP_ALIVE = (typeof process !== "undefined" && process.env?.MEMBOX_OLLAMA_KEEP_ALIVE) || "2m";
+
 function messageText(content: unknown): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
@@ -81,7 +87,11 @@ function streamNativeOllama(
           messages,
           stream: true,
           think: false,
-          options: { temperature: (options as any)?.temperature ?? 0.2, num_ctx: 16384, num_predict: 2048 },
+          // Unload after idle instead of Ollama's long default residency.
+          keep_alive: KEEP_ALIVE,
+          // 8k is enough for paragraph translation and PDF chapter planning;
+          // 16k roughly doubles KV-cache pressure on a 16GB machine.
+          options: { temperature: (options as any)?.temperature ?? 0.2, num_ctx: 8192, num_predict: 2048 },
         }),
         signal: controller.signal,
       });
