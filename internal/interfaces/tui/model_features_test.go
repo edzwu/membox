@@ -207,6 +207,46 @@ func TestModel_CtrlRStartsScanAndReloadsTree(t *testing.T) {
 	}
 }
 
+func TestModel_CtrlRImmediatelyFocusesPDFImportedByCompanion(t *testing.T) {
+	oldPDF := membox.DocumentView{
+		ID: "019-old-pdf", Title: "Old PDF", Path: "/pdfs/old.pdf", MediaType: "application/pdf",
+		UpdatedAt: time.Date(2026, 8, 14, 10, 0, 0, 0, time.Local),
+	}
+	newPDF := membox.DocumentView{
+		ID: "01a-new-pdf", Title: "Newly Imported", Path: "/pdfs/new.pdf", MediaType: "application/pdf", Size: 8 << 20,
+		UpdatedAt: time.Date(2026, 8, 15, 10, 0, 0, 0, time.Local),
+	}
+	app := &fakeApp{documents: []membox.DocumentView{oldPDF, newPDF}}
+	model := New(context.Background(), app, fakeLauncher{})
+	model.width, model.height = 100, 20
+	model.mediaScope = mediaScopePDF
+	model.items = documentItems([]membox.DocumentView{oldPDF})
+	model.refreshFilter()
+
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+	model = updated.(Model)
+	if command == nil || model.scanRefreshSequence == 0 {
+		t.Fatal("ctrl+r did not schedule immediate catalog refresh")
+	}
+	updated, _ = model.Update(documentsMsg{sequence: model.scanRefreshSequence, documents: app.documents})
+	model = updated.(Model)
+	selected, ok := model.selectedDocument()
+	if !ok || selected.ID != newPDF.ID {
+		t.Fatalf("refresh selected=%+v, want imported PDF", selected)
+	}
+	if !model.scanning || !strings.Contains(model.statusMessage, "1 new") || !strings.Contains(model.statusMessage, "focused") {
+		t.Fatalf("refresh state: scanning=%v status=%q", model.scanning, model.statusMessage)
+	}
+	updated, _ = model.Update(scanMsg{report: membox.ScanReport{Files: 2}})
+	model = updated.(Model)
+	updated, _ = model.Update(documentsMsg{sequence: model.scanRefreshSequence, documents: app.documents})
+	model = updated.(Model)
+	selected, _ = model.selectedDocument()
+	if selected.ID != newPDF.ID || !strings.Contains(model.statusMessage, "1 new") {
+		t.Fatalf("post-scan refresh lost imported PDF focus/status: selected=%+v status=%q", selected, model.statusMessage)
+	}
+}
+
 func TestModel_ConfigPanelSelectAndConfirm(t *testing.T) {
 	app := &fakeApp{}
 	model := New(context.Background(), app, fakeLauncher{})

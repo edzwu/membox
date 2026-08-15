@@ -30,6 +30,7 @@ type fakeApp struct {
 	scanCount          int
 	graph              membox.DocumentGraphView
 	searchResults      []membox.SearchResult
+	documents          []membox.DocumentView
 	renamedTo          string
 	previewPath        string
 	readBody           []byte
@@ -64,6 +65,9 @@ func (f *fakeApp) SearchDocuments(context.Context, membox.SearchDocumentsQuery) 
 	return f.searchResults, nil
 }
 func (f *fakeApp) ListDocuments(context.Context, membox.ListDocumentsQuery) ([]membox.DocumentView, error) {
+	if f.documents != nil {
+		return append([]membox.DocumentView(nil), f.documents...), nil
+	}
 	return []membox.DocumentView{
 		{ID: "019-alpha", Title: "Alpha", Path: "/tmp/alpha.md", Status: "active"},
 		{ID: "019-beta", Title: "Beta", Path: "/tmp/beta.md", Status: "active"},

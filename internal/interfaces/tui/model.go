@@ -169,6 +169,12 @@ type Model struct {
 	pdfProgressTotal       int
 	width, height          int
 	listSequence           uint64
+	scanning               bool
+	scanRefreshSequence    uint64
+	scanKnownDocuments     map[string]bool
+	scanNewDocuments       int
+	scanFocusedDocumentID  string
+	scanStatusBase         string
 	spaceSequence          uint64
 	lastKeyAt              time.Time
 	searchMode             string
@@ -563,15 +569,23 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case documentsMsg:
 		if msg.sequence == m.listSequence {
-			m.loading, m.err = false, msg.err
+			m.loading, m.err = m.scanning, msg.err
 			if msg.err == nil {
 				previousID := ""
 				if current, ok := m.selectedDocument(); ok {
 					previousID = current.ID
 				}
+				isScanRefresh := msg.sequence == m.scanRefreshSequence
+				knownDocuments := m.scanKnownDocuments
 				m.items = documentItems(msg.documents)
 				m.refreshFilter()
-				m.restoreSelection(previousID)
+				if !isScanRefresh || !m.focusNewScanDocument(knownDocuments) {
+					m.restoreSelection(previousID)
+				}
+				if isScanRefresh {
+					m.scanRefreshSequence = 0
+					m.scanKnownDocuments = nil
+				}
 				if query, exact := m.fullTextFilter(); query != "" {
 					m.loading = true
 					commands = append(commands, m.spinner.Tick, searchDocumentsCmd(m.ctx, m.app, query, exact))
@@ -597,11 +611,15 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.applyPreviewContent()
 		}
 	case scanMsg:
+		m.scanning = false
 		m.loading, m.err = false, msg.err
 		if msg.err == nil {
+			m.captureScanRefresh()
 			m.listSequence++
+			m.scanRefreshSequence = m.listSequence
 			m.loading = true
-			m.statusMessage = formatScanStatus(msg.report)
+			m.scanStatusBase = formatScanStatus(msg.report)
+			m.statusMessage = m.scanStatus(m.scanStatusBase)
 			commands = append(commands, m.spinner.Tick, listDocumentsCmd(m.ctx, m.app, m.listSequence))
 		}
 	case editReadyMsg:

@@ -740,13 +740,81 @@ func (m *Model) refreshFilter() {
 	}
 }
 
-// startScan runs path scan then reloads the document tree (ctrl+r).
+// startScan refreshes the catalog view immediately, then scans filesystem
+// paths and refreshes once more. Web imports are already cataloged by the
+// Companion, so they should not wait behind a potentially long full scan.
 func (m *Model) startScan() tea.Cmd {
 	m.loading = true
+	m.scanning = true
 	m.err = nil
-	m.statusMessage = "scanning…"
+	m.scanNewDocuments = 0
+	m.scanFocusedDocumentID = ""
+	m.scanStatusBase = "scanning…"
+	m.statusMessage = m.scanStatusBase
 	m.deleteConfirm = false
-	return tea.Batch(m.spinner.Tick, scanCmd(m.ctx, m.app))
+	m.captureScanRefresh()
+	m.listSequence++
+	m.scanRefreshSequence = m.listSequence
+	return tea.Batch(
+		m.spinner.Tick,
+		listDocumentsCmd(m.ctx, m.app, m.listSequence),
+		scanCmd(m.ctx, m.app),
+	)
+}
+
+func (m *Model) captureScanRefresh() {
+	if len(m.items) == 0 {
+		m.scanKnownDocuments = nil
+		return
+	}
+	m.scanKnownDocuments = make(map[string]bool, len(m.items))
+	for _, candidate := range m.items {
+		m.scanKnownDocuments[candidate.document.ID] = true
+	}
+}
+
+// focusNewScanDocument selects the newest newly visible row after ctrl+r.
+// This makes a PDF imported by Miru appear immediately instead of preserving
+// an old selection and leaving the new row above the viewport.
+func (m *Model) focusNewScanDocument(known map[string]bool) bool {
+	if len(known) == 0 {
+		return false
+	}
+	newIDs := make(map[string]bool)
+	for _, candidate := range m.items {
+		if !known[candidate.document.ID] {
+			newIDs[candidate.document.ID] = true
+		}
+	}
+	if len(newIDs) == 0 {
+		return false
+	}
+	m.scanNewDocuments += len(newIDs)
+	for index, candidate := range m.filtered {
+		if !newIDs[candidate.document.ID] {
+			continue
+		}
+		m.selected = index
+		m.scanFocusedDocumentID = candidate.document.ID
+		m.keepSelectionVisible()
+		m.statusMessage = m.scanStatus(m.scanStatusBase)
+		return true
+	}
+	m.statusMessage = m.scanStatus(m.scanStatusBase)
+	return false
+}
+
+func (m Model) scanStatus(base string) string {
+	if m.scanNewDocuments == 0 {
+		return base
+	}
+	status := fmt.Sprintf("%s · %d new", base, m.scanNewDocuments)
+	if m.scanFocusedDocumentID != "" {
+		status += " · focused " + shortID(m.scanFocusedDocumentID)
+	} else {
+		status += " hidden by filters"
+	}
+	return status
 }
 
 // removeDeletedDocument updates the local tree immediately after a successful
