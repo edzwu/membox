@@ -122,7 +122,7 @@ function renderPanel({ state, word, result, error, canSave }) {
       '</header>' +
       `<div class="annot-dict-body">${renderMeanings(result)}</div>` +
       '<footer class="annot-dict-foot">' +
-        '<span class="annot-dict-source">lookup · dictionaryapi.dev</span>' +
+        '<span class="annot-dict-source">gdict · offline</span>' +
         '<div class="annot-dict-actions">' +
           '<button type="button" class="annot-dict-copy" title="Copy definition" aria-label="Copy definition">' +
             COPY_ICON +

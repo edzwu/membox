@@ -2,13 +2,15 @@ package backend
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
-	"time"
+
+	_ "modernc.org/sqlite"
 )
 
 func TestNormalizeLookupWord(t *testing.T) {
@@ -30,56 +32,111 @@ func TestNormalizeLookupWord(t *testing.T) {
 	}
 }
 
-func TestShapeLookupResultMarkdown(t *testing.T) {
-	raw := []byte(`[
-	  {
-	    "word": "hello",
-	    "phonetics": [
-	      {"text": "/həˈloʊ/", "audio": "https://example.com/a.mp3"},
-	      {"text": "/həˈloʊ/", "audio": ""}
-	    ],
-	    "meanings": [
-	      {
-	        "partOfSpeech": "noun",
-	        "definitions": [
-	          {
-	            "definition": "A greeting.",
-	            "example": "Hello there!",
-	            "synonyms": ["hi", "hey"]
-	          }
-	        ]
-	      }
-	    ]
-	  }
-	]`)
-	var entries []freeDictEntry
-	if err := json.Unmarshal(raw, &entries); err != nil {
+func setupTestGdict(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "dictionary.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
 		t.Fatal(err)
 	}
-	result := shapeLookupResult(entries[0])
-	if result.Word != "hello" || len(result.Meanings) != 1 || len(result.Phonetics) != 2 {
-		t.Fatalf("unexpected shape: %+v", result)
+	defer db.Close()
+	_, err = db.Exec(`
+CREATE TABLE en (
+  word TEXT,
+  pos TEXT,
+  sounds TEXT,
+  etymology_text TEXT,
+  senses TEXT
+);
+CREATE INDEX idx_en_word ON en(word);
+INSERT INTO en(word, pos, sounds, senses) VALUES
+(
+  'serendipity',
+  'noun',
+  '[{"ipa":"/ˌser.ənˈdɪp.ə.ti/","tags":["UK"]}]',
+  '[{"glosses":["noun","A happy accident."],"examples":[{"text":"What serendipity!"}],"synonyms":[{"word":"fluke"}],"antonyms":[]}]'
+),
+(
+  'hello',
+  'intj',
+  '[{"ipa":"/həˈloʊ/"}]',
+  '[{"glosses":["A greeting."],"examples":[{"text":"Hello there!"}]}]'
+);
+`)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, needle := range []string{
-		"# hello",
-		"## noun",
-		"A greeting.",
-		"syn: hi, hey",
-		"source: api.dictionaryapi.dev",
-	} {
-		if !strings.Contains(result.Markdown, needle) {
-			t.Fatalf("markdown missing %q:\n%s", needle, result.Markdown)
-		}
+	return path
+}
+
+func TestFetchDictionaryLocal(t *testing.T) {
+	path := setupTestGdict(t)
+	old := gdictDBPath
+	gdictDBPath = func() string { return path }
+	t.Cleanup(func() {
+		gdictDBPath = old
+		closeGdictDB()
+		lookupCacheReset()
+	})
+	closeGdictDB()
+	lookupCacheReset()
+
+	result, status, err := fetchDictionary(context.Background(), "serendipity", "en")
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("status=%d err=%v", status, err)
+	}
+	if result.Word != "serendipity" || len(result.Meanings) == 0 {
+		t.Fatalf("%+v", result)
+	}
+	if !strings.Contains(result.Markdown, "A happy accident") {
+		t.Fatalf("markdown=%s", result.Markdown)
+	}
+	if result.Source != "gdict (wiktionary offline)" {
+		t.Fatalf("source=%q", result.Source)
+	}
+	// cache hit
+	result2, _, err := fetchDictionary(context.Background(), "serendipity", "en")
+	if err != nil || result2.Word != "serendipity" {
+		t.Fatalf("cache: %+v err=%v", result2, err)
+	}
+
+	_, status, err = fetchDictionary(context.Background(), "xyzzynotaword", "en")
+	if status != http.StatusNotFound || err == nil {
+		t.Fatalf("want 404, status=%d err=%v", status, err)
 	}
 }
 
-func TestHandleLookupRejectsInvalidWord(t *testing.T) {
+func TestHandleLookupLocal(t *testing.T) {
+	path := setupTestGdict(t)
+	old := gdictDBPath
+	gdictDBPath = func() string { return path }
+	t.Cleanup(func() {
+		gdictDBPath = old
+		closeGdictDB()
+		lookupCacheReset()
+	})
+	closeGdictDB()
+	lookupCacheReset()
+
 	server := &Server{}
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/api/lookup?q=two+words", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/lookup?q=Hello!", nil)
 	server.handleLookup(response, request)
-	if response.Code != http.StatusBadRequest {
+	if response.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%q", response.Code, response.Body.String())
+	}
+	var result lookupResult
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Word != "hello" || !strings.Contains(result.Markdown, "greeting") {
+		t.Fatalf("%+v", result)
+	}
+
+	bad := httptest.NewRecorder()
+	server.handleLookup(bad, httptest.NewRequest(http.MethodGet, "/api/lookup?q=two+words", nil))
+	if bad.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d", bad.Code)
 	}
 }
 
@@ -93,126 +150,10 @@ func TestHandleLookupMethodNotAllowed(t *testing.T) {
 	}
 }
 
-func TestHandleLookupSuccessWithFakeTransport(t *testing.T) {
-	original := dictionaryHTTPClient
-	originalSleep := dictionarySleep
-	lookupCacheReset()
-	t.Cleanup(func() {
-		dictionaryHTTPClient = original
-		dictionarySleep = originalSleep
-		lookupCacheReset()
-	})
-	dictionarySleep = func(time.Duration) {}
-
-	payload := `[
-	  {
-	    "word": "serendipity",
-	    "phonetics": [{"text": "/ˌser.ənˈdɪp.ə.ti/"}],
-	    "meanings": [
-	      {
-	        "partOfSpeech": "noun",
-	        "definitions": [{"definition": "A happy accident."}]
-	      }
-	    ]
-	  }
-	]`
-	dictionaryHTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		if !strings.Contains(req.URL.Path, "/serendipity") {
-			t.Fatalf("unexpected path: %s", req.URL.Path)
-		}
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(strings.NewReader(payload)),
-			Header:     make(http.Header),
-		}, nil
-	})}
-
-	server := &Server{}
-	response := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/api/lookup?q=Serendipity!", nil)
-	server.handleLookup(response, request)
-	if response.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%q", response.Code, response.Body.String())
-	}
-	var result lookupResult
-	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
-		t.Fatal(err)
-	}
-	if result.Word != "serendipity" || !strings.Contains(result.Markdown, "A happy accident.") {
-		t.Fatalf("unexpected result: %+v", result)
+func TestParseGdictSensesSkipsHeaderGloss(t *testing.T) {
+	raw := `[{"glosses":["noun","A happy accident."],"examples":[{"text":"x"}]}]`
+	defs := parseGdictSenses(raw)
+	if len(defs) != 1 || defs[0].Definition != "A happy accident." || defs[0].Example != "x" {
+		t.Fatalf("%+v", defs)
 	}
 }
-
-func TestFetchDictionaryRetriesTransientUpstreamErrors(t *testing.T) {
-	original := dictionaryHTTPClient
-	originalSleep := dictionarySleep
-	lookupCacheReset()
-	t.Cleanup(func() {
-		dictionaryHTTPClient = original
-		dictionarySleep = originalSleep
-		lookupCacheReset()
-	})
-	dictionarySleep = func(time.Duration) {}
-
-	payload := `[{"word":"hello","meanings":[{"partOfSpeech":"noun","definitions":[{"definition":"A greeting."}]}]}]`
-	attempts := 0
-	dictionaryHTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		attempts++
-		if attempts < 3 {
-			return &http.Response{
-				StatusCode: http.StatusBadGateway,
-				Body:       io.NopCloser(strings.NewReader("bad gateway")),
-				Header:     make(http.Header),
-			}, nil
-		}
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(strings.NewReader(payload)),
-			Header:     make(http.Header),
-		}, nil
-	})}
-
-	result, status, err := fetchDictionary(context.Background(), "hello")
-	if err != nil || status != http.StatusOK || result.Word != "hello" {
-		t.Fatalf("result=%+v status=%d err=%v attempts=%d", result, status, err, attempts)
-	}
-	if attempts != 3 {
-		t.Fatalf("attempts=%d, want 3", attempts)
-	}
-
-	// Cache should satisfy a second call without another upstream hit.
-	result, status, err = fetchDictionary(context.Background(), "hello")
-	if err != nil || status != http.StatusOK || result.Word != "hello" || attempts != 3 {
-		t.Fatalf("cached call failed: result=%+v status=%d err=%v attempts=%d", result, status, err, attempts)
-	}
-}
-
-func TestFetchDictionaryDoesNotRetryNotFound(t *testing.T) {
-	original := dictionaryHTTPClient
-	originalSleep := dictionarySleep
-	lookupCacheReset()
-	t.Cleanup(func() {
-		dictionaryHTTPClient = original
-		dictionarySleep = originalSleep
-		lookupCacheReset()
-	})
-	dictionarySleep = func(time.Duration) {}
-	attempts := 0
-	dictionaryHTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		attempts++
-		return &http.Response{
-			StatusCode: http.StatusNotFound,
-			Body:       io.NopCloser(strings.NewReader(`{"title":"No Definitions Found"}`)),
-			Header:     make(http.Header),
-		}, nil
-	})}
-
-	_, status, err := fetchDictionary(context.Background(), "xyzzynotaword")
-	if status != http.StatusNotFound || err == nil || attempts != 1 {
-		t.Fatalf("status=%d err=%v attempts=%d", status, err, attempts)
-	}
-}
-
-type roundTripFunc func(*http.Request) (*http.Response, error)
-
-func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
