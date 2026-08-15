@@ -28,6 +28,10 @@ func (s *Service) ResolveTopicSelector(ctx context.Context, selector string) (*c
 type CreateNoteOptions struct {
 	Title string
 	Body  string
+	// Filename is an internal exact-path override for generated projections.
+	// Unlike Title-derived note names, it is already validated by the caller
+	// and must not be slugified or collision-suffixed.
+	Filename string
 	// AlignBodyTitle makes Title authoritative for an existing front matter
 	// title and first H1 in Body. Browser-created related documents use this so
 	// pasted Markdown cannot replace the title that also generated the filename.
@@ -160,7 +164,7 @@ func (s *Service) UpsertMarkdown(ctx context.Context, opts UpsertMarkdownOptions
 		return UpsertMarkdownResult{Document: document, Path: updated.Path}, nil
 	}
 	stem := strings.TrimSuffix(filename, filepath.Ext(filename))
-	created, err := s.CreateNote(ctx, CreateNoteOptions{Title: stem, Body: opts.Body})
+	created, err := s.CreateNote(ctx, CreateNoteOptions{Title: stem, Body: opts.Body, Filename: filename})
 	if err != nil {
 		return UpsertMarkdownResult{}, err
 	}
@@ -192,25 +196,36 @@ func (s *Service) CreateNote(ctx context.Context, opts CreateNoteOptions) (Creat
 	if err != nil {
 		return CreateNoteResult{}, err
 	}
-	slug := noteSlug(title)
-	if slug == "" {
-		return CreateNoteResult{}, errors.New("note title does not produce a filename")
-	}
-	filename := slug + ".md"
-	if opts.Topic {
-		filename = "topic-" + slug + ".md"
-		if existing, absolute, err := s.store.ResolveTopic(ctx, title); err == nil {
-			return CreateNoteResult{Document: existing, Path: absolute}, nil
+	filename := strings.TrimSpace(opts.Filename)
+	exactFilename := filename != ""
+	if exactFilename {
+		if !validFlatMarkdownFilename(filename) || strings.HasPrefix(filename, ".") {
+			return CreateNoteResult{}, fmt.Errorf("invalid exact note filename %q", filename)
 		}
-	} else if strings.EqualFold(strings.TrimSpace(opts.ClipMode), "selection") {
-		// Selection excerpts always use the *-note.md convention. A content
-		// hash keeps names unique when two excerpts share the same slug
-		// prefix, so the -2 collision suffix effectively never triggers.
-		slug = strings.TrimSuffix(slug, "-note")
+		if opts.Topic || strings.EqualFold(strings.TrimSpace(opts.ClipMode), "selection") {
+			return CreateNoteResult{}, errors.New("exact note filename cannot be combined with topic or selection-note naming")
+		}
+	} else {
+		slug := noteSlug(title)
 		if slug == "" {
-			slug = "selection"
+			return CreateNoteResult{}, errors.New("note title does not produce a filename")
 		}
-		filename = slug + "-" + contentNameFragment(opts.Body, 10) + "-note.md"
+		filename = slug + ".md"
+		if opts.Topic {
+			filename = "topic-" + slug + ".md"
+			if existing, absolute, err := s.store.ResolveTopic(ctx, title); err == nil {
+				return CreateNoteResult{Document: existing, Path: absolute}, nil
+			}
+		} else if strings.EqualFold(strings.TrimSpace(opts.ClipMode), "selection") {
+			// Selection excerpts always use the *-note.md convention. A content
+			// hash keeps names unique when two excerpts share the same slug
+			// prefix, so the -2 collision suffix effectively never triggers.
+			slug = strings.TrimSuffix(slug, "-note")
+			if slug == "" {
+				slug = "selection"
+			}
+			filename = slug + "-" + contentNameFragment(opts.Body, 10) + "-note.md"
+		}
 	}
 	// Never reuse a catalog-tracked path: a new note must not clobber an
 	// existing document's file (active, missing, or trashed all count).
@@ -220,9 +235,23 @@ func (s *Service) CreateNote(ctx context.Context, opts CreateNoteOptions) (Creat
 			tracked[filepath.ToSlash(d.Location.RelativePath)] = true
 		}
 	}
-	absolute, err := s.availableNotePath(indexedPath.Root, filename, tracked)
-	if err != nil {
-		return CreateNoteResult{}, err
+	var absolute string
+	if exactFilename {
+		if tracked[filepath.ToSlash(filename)] {
+			return CreateNoteResult{}, fmt.Errorf("exact note filename %q is already cataloged", filename)
+		}
+		absolute = filepath.Join(indexedPath.Root, filename)
+		if _, err := os.Lstat(absolute); err == nil {
+			return CreateNoteResult{}, fmt.Errorf("exact note filename %q already exists", filename)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return CreateNoteResult{}, err
+		}
+	} else {
+		var err error
+		absolute, err = s.availableNotePath(indexedPath.Root, filename, tracked)
+		if err != nil {
+			return CreateNoteResult{}, err
+		}
 	}
 	body := []byte(opts.Body)
 	if len(body) == 0 {
