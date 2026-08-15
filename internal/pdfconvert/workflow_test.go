@@ -218,3 +218,69 @@ func TestRewriteAssetReferencesEscapesMarkdownUnsafeFilenames(t *testing.T) {
 		t.Fatalf("raw spaced reference remained: %q", rewritten)
 	}
 }
+
+type spyPlanner struct {
+	called bool
+	plans  []ChapterPlan
+}
+
+func (p *spyPlanner) PlanChapters(context.Context, string) ([]ChapterPlan, error) {
+	p.called = true
+	return p.plans, nil
+}
+
+func TestWorkflowSkipsPlannerForSmallMarkdown(t *testing.T) {
+	home := t.TempDir()
+	config := NewConfigStore(home)
+	if _, err := config.SaveServerURL("http://converter.test:8000/"); err != nil {
+		t.Fatal(err)
+	}
+	workspace := &fakeWorkspace{source: Source{
+		DocumentID: "019ffe58-b0af-7b65-baf1-2b7d9c066b19", Filename: "small.pdf",
+		MediaType: "application/pdf", Body: io.NopCloser(strings.NewReader("%PDF-small")),
+	}}
+	client := &fakeClient{result: RemoteResult{Filename: "small.pdf", Markdown: "# Small\n\nshort body", MarkdownSHA256: "sha"}}
+	spy := &spyPlanner{}
+	workflow := NewWorkflow(client, config)
+	workflow.SetStructurePlanner(spy)
+	if _, err := workflow.Convert(context.Background(), workspace, "x", ""); err != nil {
+		t.Fatal(err)
+	}
+	if spy.called {
+		t.Fatal("planner must not run for small converted documents")
+	}
+	if len(workspace.publications) != 1 || strings.Contains(workspace.publications[0].body, "## 目录") {
+		t.Fatalf("small document must stay whole: %+v", workspace.publications)
+	}
+}
+
+func TestWorkflowRunsPlannerForLargeUnstructuredMarkdown(t *testing.T) {
+	home := t.TempDir()
+	config := NewConfigStore(home)
+	if _, err := config.SaveServerURL("http://converter.test:8000/"); err != nil {
+		t.Fatal(err)
+	}
+	markdown := "# Big Book\n\n" +
+		strings.Repeat("Opening movement of the tale with plenty of words. ", 900) + "\n\n" +
+		strings.Repeat("Closing movement finishes the tale with final words. ", 900)
+	workspace := &fakeWorkspace{source: Source{
+		DocumentID: "019ffe58-b0af-7b65-baf1-2b7d9c066b19", Filename: "big.pdf",
+		MediaType: "application/pdf", Body: io.NopCloser(strings.NewReader("%PDF-big")),
+	}}
+	client := &fakeClient{result: RemoteResult{Filename: "big.pdf", Markdown: markdown, MarkdownSHA256: "sha"}}
+	spy := &spyPlanner{plans: []ChapterPlan{
+		{Title: "Opening", Anchor: "Opening movement of the tale"},
+		{Title: "Closing", Anchor: "Closing movement finishes"},
+	}}
+	workflow := NewWorkflow(client, config)
+	workflow.SetStructurePlanner(spy)
+	if _, err := workflow.Convert(context.Background(), workspace, "x", ""); err != nil {
+		t.Fatal(err)
+	}
+	if !spy.called {
+		t.Fatal("planner must run for large unstructured documents")
+	}
+	if len(workspace.publications) != 3 { // index + 2 chapters
+		t.Fatalf("expected index plus two chapters: %+v", workspace.publications)
+	}
+}

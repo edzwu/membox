@@ -13,6 +13,10 @@ import (
 
 const pdfMediaType = "application/pdf"
 
+// minPlannerMarkdownBytes gates the LLM structure planner: below this size a
+// converted document is already readable whole.
+const minPlannerMarkdownBytes = 40 << 10
+
 type Workflow struct {
 	client  Client
 	config  ConfigStore
@@ -98,6 +102,12 @@ func (w *Workflow) ConvertWithProgress(ctx context.Context, workspace Workspace,
 	}
 	remote.Markdown = rewriteAssetReferences(remote.Markdown, source.DocumentID, remote.Assets)
 	planner := w.planner
+	// LLM planning is only worth a local-model turn for documents large
+	// enough to benefit from splitting; small PDFs stay on the deterministic
+	// path (or whole) without spending a minute of model time.
+	if planner != nil && len(remote.Markdown) < minPlannerMarkdownBytes {
+		planner = nil
+	}
 	if planner != nil && onProgress != nil {
 		planner = progressStructurePlanner{inner: planner, onProgress: onProgress}
 	}
