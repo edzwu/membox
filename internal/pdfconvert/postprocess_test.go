@@ -108,6 +108,88 @@ linux body
 	}
 }
 
+func TestPostprocessMarkdownSplitsRepeatedEnglishContentsAndSkipsChapterSummaries(t *testing.T) {
+	markdown := `# FOOLED BY RANDOMNESS
+
+## CONTENTS
+
+Preface and Acknowledgments xiii
+One: First Chance 11
+Two: Alternative History 26
+
+## CONTENTS
+
+Three: Meditation on History 40
+Four: Scientific Intellectual 60
+Epilogue: Solon Told You So 196
+
+# PREFACE AND ACKNOWLEDGMENTS
+
+preface body
+
+# CHAPTER SUMMARIES
+
+## First Chance
+
+summary one
+
+## Alternative History
+
+summary two
+
+# MOSQUES IN THE CLOUDS
+
+prologue body
+
+# FIRST CHANCE
+
+chapter one body
+
+# ALTERNATIVE HISTORY
+
+chapter two body
+
+## MEDITATION ON HISTORY
+
+chapter three body
+
+# SCIENTIFIC INTELLECTUAL
+
+chapter four body
+
+# EPILOGUE: SOLON TOLD YOU SO
+
+epilogue body
+`
+	result := PostprocessMarkdown(markdown, "fooled.md")
+	if len(result.Chapters) != 6 {
+		t.Fatalf("English TOC chapters=%d: %+v", len(result.Chapters), result.Chapters)
+	}
+	wantTitles := []string{
+		"PREFACE AND ACKNOWLEDGMENTS",
+		"Chapter One: First Chance",
+		"Chapter Two: Alternative History",
+		"Chapter Three: Meditation on History",
+		"Chapter Four: Scientific Intellectual",
+		"EPILOGUE: SOLON TOLD YOU SO",
+	}
+	wantFiles := []string{
+		"fooled-part-introduction.md", "fooled-chapter-001.md", "fooled-chapter-002.md",
+		"fooled-chapter-003.md", "fooled-chapter-004.md", "fooled-part-afterword.md",
+	}
+	for index := range wantTitles {
+		if result.Chapters[index].Title != wantTitles[index] || result.Chapters[index].Filename != wantFiles[index] {
+			t.Fatalf("English chapter %d=%+v", index, result.Chapters[index])
+		}
+	}
+	if strings.Contains(result.Chapters[1].Markdown, "summary one") || !strings.Contains(result.Chapters[1].Markdown, "chapter one body") {
+		t.Fatalf("chapter summary was selected instead of body: %s", result.Chapters[1].Markdown)
+	}
+	if !strings.Contains(result.Chapters[0].Markdown, "summary one") || !strings.Contains(result.Chapters[0].Markdown, "prologue body") {
+		t.Fatalf("front matter before Chapter One was dropped: %s", result.Chapters[0].Markdown)
+	}
+}
+
 func TestPostprocessMarkdownRequiresTwoMatchedTOCChapters(t *testing.T) {
 	cases := []string{
 		"## Table of Contents\n\n第一章、Only One 1.1\n第二章、Missing 2.1\n\n## Only One\n\nbody\n",
@@ -144,7 +226,7 @@ func TestPostprocessMarkdownUsesMarkdownAST(t *testing.T) {
 }
 
 func TestParseChapterNumber(t *testing.T) {
-	for input, want := range map[string]int{"12": 12, "１２": 12, "十二": 12, "二十一": 21, "一百零二": 102, "IV": 4} {
+	for input, want := range map[string]int{"12": 12, "１２": 12, "十二": 12, "二十一": 21, "一百零二": 102, "IV": 4, "Fourteen": 14} {
 		got, ok := parseChapterNumber(input)
 		if !ok || got != want {
 			t.Fatalf("parseChapterNumber(%q)=(%d,%v), want %d", input, got, ok, want)
