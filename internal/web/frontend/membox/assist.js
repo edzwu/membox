@@ -289,15 +289,19 @@ function openAssist(ctx) {
         canApply: canApplyNow(),
       });
     } catch (err) {
-      if (err.name === 'AbortError') return;
+      if (err && err.name === 'AbortError') {
+        busy = false;
+        return;
+      }
       console.error('membox: assist failed', err);
+      const msg = (err && err.message) || 'Assist failed';
       paint({
         running: false,
-        status: err.message || 'Assist failed',
+        status: msg,
         result: assembled,
         canApply: false,
       });
-      showToast(err.message || 'Assist failed');
+      showToast(msg);
     } finally {
       busy = false;
     }
@@ -384,11 +388,14 @@ function openAssist(ctx) {
 
 export function initAssist() {
   onAnnotToolbarHide(() => {
+    // Only cancel when the panel is actually dismissed while idle. Hiding
+    // because the page selection collapsed (focus moved into the prompt)
+    // used to abort deepseek mid-flight and surface "empty output".
+    if (busy) return;
     if (abortController) {
       abortController.abort();
       abortController = null;
     }
-    busy = false;
   });
   registerAnnotAction({
     id: 'assist',

@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"unicode"
@@ -209,13 +210,22 @@ func findProjection(ctx context.Context, service *application.Service, videoID, 
 
 // Publish writes or updates the membox Markdown projection for an echo-bp
 // artifact. Identity is video_id (+ course); the readable filename is derived
-// from the LLM summary H1 / lecture title so pairs read as:
+// from the source video title (never LLM section headings) so pairs read as:
 //
 //	yt-<id>-transcript.md
-//	yt-<id>-<slug>-summary.md
+//	yt-<id>-<video-title-slug>-summary.md
 //
 // and a manual graph edge links transcript → summary.
 func Publish(ctx context.Context, service *application.Service, artifact Artifact) (Result, error) {
+	// Transcript frontmatter title is the most reliable video title on the browser path.
+	if t := transcriptVideoTitle(ctx, service, artifact.VideoID); t != "" {
+		if strings.TrimSpace(artifact.CourseTitle) == "" {
+			artifact.CourseTitle = t
+		}
+		if strings.TrimSpace(artifact.LectureTitle) == "" || looksLikeSectionHeading(artifact.LectureTitle) {
+			artifact.LectureTitle = t
+		}
+	}
 	displayTitle := preferDisplayTitle(artifact)
 	filename := SummaryFilename(artifact)
 	transcriptName := TranscriptFilename(artifact.VideoID)
@@ -274,9 +284,9 @@ func Publish(ctx context.Context, service *application.Service, artifact Artifac
 // SummaryFilename builds a stable, readable name.
 // Browser/ad-hoc: yt-<video_id>-<slug>-summary.md (pairs with yt-<id>-transcript.md).
 // Course path: <course>-lec<N>-<slug>.md.
-// Slug always comes from the source video title, never the LLM note H1.
+// Slug always comes from the source video title, never LLM section headings.
 func SummaryFilename(artifact Artifact) string {
-	slug := videoTitleSlug(artifact)
+	slug := titleSlug(videoTitleForNaming(artifact))
 	vid := strings.TrimSpace(artifact.VideoID)
 	code := strings.TrimSpace(strings.ToLower(artifact.CourseCode))
 	if code == "" || code == DefaultBrowserCourseCode {
@@ -297,36 +307,63 @@ func SummaryFilename(artifact Artifact) string {
 	return fmt.Sprintf("%s-%s.md", code, slug)
 }
 
-// preferDisplayTitle is used for the human title in frontmatter / rename UI.
-// Filename slug uses videoTitleSlug instead (always the source video title).
+// preferDisplayTitle is the human title in frontmatter / rename UI.
 func preferDisplayTitle(artifact Artifact) string {
-	if t := strings.TrimSpace(artifact.LectureTitle); t != "" {
+	if t := videoTitleForNaming(artifact); t != "" {
 		return t
-	}
-	if h1 := firstMarkdownH1(artifact.Summary); h1 != "" {
-		return h1
 	}
 	return strings.TrimSpace(artifact.VideoID)
 }
 
-// videoTitleSlug builds the filename slug from the source video title only
-// (not the LLM note H1), so renames stay stable across re-summaries.
-func videoTitleSlug(artifact Artifact) string {
-	if t := strings.TrimSpace(artifact.LectureTitle); t != "" {
-		return titleSlug(t)
+// videoTitleForNaming picks the source video title for filenames.
+// Prefer LectureTitle (per-video) then CourseTitle (playlist/collection),
+// skipping LLM section headings like "一、背景与动机（00:00:00 – 00:07:52）".
+func videoTitleForNaming(artifact Artifact) string {
+	for _, candidate := range []string{artifact.LectureTitle, artifact.CourseTitle} {
+		t := strings.TrimSpace(candidate)
+		if t == "" || looksLikeSectionHeading(t) {
+			continue
+		}
+		return t
 	}
 	return ""
 }
 
-func firstMarkdownH1(body string) string {
-	body = stripFrontmatter(strings.TrimSpace(body))
-	for _, line := range strings.Split(body, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "# ") && !strings.HasPrefix(line, "##") {
-			return strings.TrimSpace(strings.TrimPrefix(line, "#"))
-		}
+var (
+	reTimestamp = regexp.MustCompile(`\d{1,2}:\d{2}(?::\d{2})?`)
+	reCNSection = regexp.MustCompile(`^[一二三四五六七八九十百千0-9]+[、.．．:：]`)
+	reCNChapter = regexp.MustCompile(`^第[一二三四五六七八九十百千0-9]+[章节講讲部份]`)
+)
+
+// looksLikeSectionHeading rejects LLM chapter titles so they never become filenames.
+func looksLikeSectionHeading(title string) bool {
+	t := strings.TrimSpace(title)
+	if t == "" {
+		return false
 	}
-	return ""
+	if reTimestamp.MatchString(t) && (strings.ContainsAny(t, "–—-(") || strings.Contains(t, "至")) {
+		return true
+	}
+	if reCNSection.MatchString(t) || reCNChapter.MatchString(t) {
+		return true
+	}
+	return false
+}
+
+func transcriptVideoTitle(ctx context.Context, service *application.Service, videoID string) string {
+	id := findTranscriptDocumentID(ctx, service, videoID)
+	if id == "" {
+		return ""
+	}
+	body, err := service.ReadDocument(ctx, id)
+	if err != nil {
+		return ""
+	}
+	t := strings.TrimSpace(markdownFrontmatter(body)["title"])
+	if t == "" || looksLikeSectionHeading(t) {
+		return ""
+	}
+	return t
 }
 
 func titleSlug(title string) string {

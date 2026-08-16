@@ -246,6 +246,13 @@ function onAnnotMouseUp(e) {
   // Clicks on an annotated passage are handled by onAnnotPassageClick.
   if (e.target.closest && e.target.closest('span.annot')) return;
   setTimeout(() => {
+    // Assist/dict panels own the toolbar until Escape or explicit close.
+    // Focusing the prompt input collapses the page selection; that must NOT
+    // tear down an in-flight deepseek request or the panel itself.
+    if (annotToolbar && !annotToolbar.hidden &&
+        (annotToolbar.classList.contains('is-assist') || annotToolbar.classList.contains('is-dict'))) {
+      return;
+    }
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
       hideAnnotToolbar();

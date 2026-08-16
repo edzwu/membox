@@ -242,7 +242,11 @@ func (r Runner) runPrompt(ctx context.Context, provider, model, prompt string, o
 		frame, readErr := readRPCFrame(reader)
 		if readErr != nil {
 			if errors.Is(readErr, io.EOF) {
-				return "", fmt.Errorf("Pi RPC exited before settling: %s", strings.TrimSpace(stderr.String()))
+				detail := strings.TrimSpace(stderr.String())
+				if detail == "" {
+					detail = "(no stderr)"
+				}
+				return "", fmt.Errorf("Pi RPC exited before settling: %s", detail)
 			}
 			return "", fmt.Errorf("read Pi RPC: %w", readErr)
 		}
@@ -269,17 +273,29 @@ func (r Runner) runPrompt(ctx context.Context, provider, model, prompt string, o
 		case "message_update":
 			var update struct {
 				AssistantMessageEvent struct {
-					Type  string `json:"type"`
-					Delta string `json:"delta"`
+					Type    string `json:"type"`
+					Delta   string `json:"delta"`
+					Content string `json:"content"`
 				} `json:"assistantMessageEvent"`
 			}
 			_ = json.Unmarshal(frame, &update)
-			if update.AssistantMessageEvent.Type == "text_delta" && update.AssistantMessageEvent.Delta != "" {
-				delta := update.AssistantMessageEvent.Delta
-				collected.WriteString(delta)
-				if onDelta != nil {
-					if err := onDelta(delta); err != nil {
-						return "", err
+			ev := update.AssistantMessageEvent
+			switch ev.Type {
+			case "text_delta":
+				if ev.Delta != "" {
+					collected.WriteString(ev.Delta)
+					if onDelta != nil {
+						if err := onDelta(ev.Delta); err != nil {
+							return "", err
+						}
+					}
+				}
+			case "text_end":
+				// Some Pi builds only deliver the full text on text_end.
+				if collected.Len() == 0 && strings.TrimSpace(ev.Content) != "" {
+					collected.WriteString(ev.Content)
+					if onDelta != nil {
+						_ = onDelta(ev.Content)
 					}
 				}
 			}
@@ -292,13 +308,88 @@ func (r Runner) runPrompt(ctx context.Context, provider, model, prompt string, o
 					}
 				}
 			}
+		case "agent_end":
+			// Fallback: pull assistant text from the final messages payload.
+			if collected.Len() == 0 {
+				if text := agentEndText(frame); text != "" {
+					collected.WriteString(text)
+					if onDelta != nil {
+						_ = onDelta(text)
+					}
+				}
+			}
 		case "agent_settled":
 			if !accepted {
 				return "", errors.New("Pi settled without accepting the prompt")
 			}
-			return collected.String(), nil
+			out := collected.String()
+			if strings.TrimSpace(out) == "" {
+				// enabledModels pattern warnings are noise — not the selected model.
+				detail := filterPiNoise(stderr.String())
+				if detail != "" {
+					return "", fmt.Errorf("model returned empty output from %s/%s (pi: %s)", provider, model, detail)
+				}
+				return "", fmt.Errorf("model returned empty output from %s/%s — try mm web restart", provider, model)
+			}
+			return out, nil
 		}
 	}
+}
+
+// filterPiNoise drops settings.json enabledModels pattern warnings so they
+// are not mistaken for the model Miru assist actually selected.
+func filterPiNoise(stderr string) string {
+	var keep []string
+	for _, line := range strings.Split(stderr, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if strings.Contains(line, "No models match pattern") {
+			continue
+		}
+		keep = append(keep, line)
+	}
+	return strings.Join(keep, "; ")
+}
+
+func agentEndText(frame []byte) string {
+	var event struct {
+		Messages []struct {
+			Role    string          `json:"role"`
+			Content json.RawMessage `json:"content"`
+		} `json:"messages"`
+	}
+	if json.Unmarshal(frame, &event) != nil {
+		return ""
+	}
+	for i := len(event.Messages) - 1; i >= 0; i-- {
+		m := event.Messages[i]
+		if m.Role != "assistant" {
+			continue
+		}
+		var plain string
+		if json.Unmarshal(m.Content, &plain) == nil && strings.TrimSpace(plain) != "" {
+			return plain
+		}
+		var blocks []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		if json.Unmarshal(m.Content, &blocks) != nil {
+			continue
+		}
+		var out strings.Builder
+		for _, b := range blocks {
+			if b.Type == "text" {
+				out.WriteString(b.Text)
+			}
+		}
+		if s := out.String(); strings.TrimSpace(s) != "" {
+			return s
+		}
+	}
+	return ""
 }
 
 // ApplyReplacement replaces the first unique occurrence of selection in

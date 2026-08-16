@@ -8,14 +8,28 @@ import { loadSettings } from '../lib/settings';
 import { getNotesEnabled } from '../lib/float-notes';
 import { isYouTubeVideoURL, normalizeSourceURL, youTubeVideoID } from '../lib/url';
 import { captionsToMarkdown, type YouTubeCaptionsResult } from '../lib/youtube-captions';
+import {
+  clearActiveJob,
+  getActiveJob,
+  newJobId,
+  setActiveJob,
+  type ActiveJob,
+} from '../lib/jobs';
 import type { ClipPayload, IngestConflict, IngestResult, SourceClip } from '../lib/types';
 
 type IngestResponse =
   | { ok: true; result: IngestResult }
-  | { ok: false; error: string; conflict?: IngestConflict };
+  | { ok: true; started: true; jobId: string }
+  | { ok: false; error: string; conflict?: IngestConflict; job?: ActiveJob };
 
 async function syncBadge() {
   try {
+    const job = await getActiveJob();
+    if (job?.status === 'running') {
+      await browser.action.setBadgeText({ text: '…' });
+      await browser.action.setBadgeBackgroundColor({ color: '#1b365d' });
+      return;
+    }
     const enabled = await getNotesEnabled();
     if (enabled) {
       await browser.action.setBadgeText({ text: 'on' });
@@ -29,15 +43,36 @@ async function syncBadge() {
   }
 }
 
+/** Keep the MV3 service worker alive during long summarize jobs. */
+let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
+function keepAliveStart() {
+  if (keepAliveTimer) return;
+  keepAliveTimer = setInterval(() => {
+    void browser.storage.session.get('membox.activeJob');
+  }, 20_000);
+}
+function keepAliveStop() {
+  if (keepAliveTimer) {
+    clearInterval(keepAliveTimer);
+    keepAliveTimer = null;
+  }
+}
+
 export default defineBackground(() => {
   void syncBadge();
   browser.storage.onChanged.addListener((_changes, area) => {
-    if (area === 'local') void syncBadge();
+    if (area === 'local' || area === 'session') void syncBadge();
   });
 
   browser.runtime.onMessage.addListener((message, sender) => {
     if (message?.type === 'membox.ingest-active-tab') {
-      return ingestActiveTab({ overwrite: message.overwrite === true });
+      return startActiveTabJob({ overwrite: message.overwrite === true });
+    }
+    if (message?.type === 'membox.job-status') {
+      return getActiveJob().then((job) => ({ ok: true as const, job }));
+    }
+    if (message?.type === 'membox.job-clear') {
+      return clearActiveJob().then(() => ({ ok: true as const }));
     }
     if (message?.type === 'membox.ingest-payload') {
       return ingestPayload(message.payload as ClipPayload, {
@@ -75,8 +110,6 @@ async function ingestPayload(
       return { ok: false, error: 'Empty clip payload' };
     }
     const settings = await loadSettings();
-    // A selection note belongs to its page: make sure the page itself is in
-    // membox first, so the annotation has a document to be projected onto.
     if (payload.clipMode === 'selection' && payload.sourceUrl && opts.tabId) {
       await ensurePageClip(settings, opts.tabId, payload.sourceUrl);
     }
@@ -95,10 +128,6 @@ async function ingestPayload(
   }
 }
 
-/**
- * Make sure the current page is saved to membox as a page clip. Best-effort:
- * if clipping the page fails, the selection note is still saved on its own.
- */
 async function ensurePageClip(
   settings: Awaited<ReturnType<typeof loadSettings>>,
   tabId: number,
@@ -106,69 +135,158 @@ async function ensurePageClip(
 ): Promise<void> {
   try {
     const clips = await fetchClipsBySource(settings, sourceUrl, 'all');
-    if (clips.some((c) => c.clip_mode === 'page')) return; // already saved
-    const clip = await clipTab(tabId); // full-page clip (clip_mode: 'page')
+    if (clips.some((c) => c.clip_mode === 'page')) return;
+    const clip = await clipTab(tabId);
     await ingestClip(settings, clip);
   } catch {
-    /* best effort — the note itself is saved regardless */
+    /* best effort */
   }
 }
 
-async function ingestActiveTab(opts: { overwrite?: boolean } = {}): Promise<IngestResponse> {
-  try {
-    const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-    if (!tab?.id) {
-      return { ok: false, error: 'No active tab' };
-    }
-    const url = tab.url || '';
-    if (
-      !url ||
-      url.startsWith('chrome://') ||
-      url.startsWith('chrome-extension://') ||
-      url.startsWith('about:') ||
-      url.startsWith('edge://') ||
-      url.startsWith('moz-extension://') ||
-      url.startsWith('devtools://')
-    ) {
-      return { ok: false, error: 'This page cannot be clipped' };
-    }
+/**
+ * Start save/summarize as a background job that outlives the popup.
+ * Popup closes no longer cancel the work — progress lives in session storage.
+ */
+async function startActiveTabJob(opts: { overwrite?: boolean } = {}): Promise<IngestResponse> {
+  const running = await getActiveJob();
+  if (running?.status === 'running') {
+    return { ok: false, error: 'A save is already running', job: running };
+  }
 
-    // YouTube watch pages go through browser captions → echo-bp summary
-    // (idempotent open when the summary already exists in membox).
-    if (isYouTubeVideoURL(url)) {
-      return summarizeActiveYouTube(url, {
-        open: true,
-        force: opts.overwrite === true,
-        tabId: tab.id,
+  const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id) {
+    return { ok: false, error: 'No active tab' };
+  }
+  const url = tab.url || '';
+  if (
+    !url ||
+    url.startsWith('chrome://') ||
+    url.startsWith('chrome-extension://') ||
+    url.startsWith('about:') ||
+    url.startsWith('edge://') ||
+    url.startsWith('moz-extension://') ||
+    url.startsWith('devtools://')
+  ) {
+    return { ok: false, error: 'This page cannot be clipped' };
+  }
+
+  const youtube = isYouTubeVideoURL(url);
+  // Fast page clips stay synchronous (seconds). YouTube summarize is long —
+  // run detached so closing the popup cannot abort it.
+  if (!youtube) {
+    try {
+      await updateJobProgress({
+        id: newJobId(),
+        kind: 'page',
+        status: 'running',
+        label: 'Extracting page…',
+        pct: 30,
+        url,
       });
+      const clip = await clipTab(tab.id);
+      await updateJobProgress({ label: 'Saving…', pct: 70 });
+      const result = await ingestPayload(clip, { open: true, overwrite: opts.overwrite });
+      if (!result.ok) {
+        await finishJobError(result.error || 'Save failed');
+        return result;
+      }
+      if ('result' in result && result.result) {
+        await finishJobDone(result.result);
+      }
+      return result;
+    } catch (err) {
+      if (err instanceof IngestConflictError) {
+        await clearActiveJob();
+        return { ok: false, error: err.message, conflict: err.conflict };
+      }
+      const msg = err instanceof Error ? err.message : String(err);
+      await finishJobError(msg);
+      return { ok: false, error: msg };
     }
-
-    const clip = await clipTab(tab.id);
-    return ingestPayload(clip, { open: true, overwrite: opts.overwrite });
-  } catch (err) {
-    if (err instanceof IngestConflictError) {
-      return { ok: false, error: err.message, conflict: err.conflict };
-    }
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
+
+  const jobId = newJobId();
+  await updateJobProgress({
+    id: jobId,
+    kind: 'youtube',
+    status: 'running',
+    label: 'Starting…',
+    pct: 5,
+    url,
+  });
+
+  // Detached: do not await inside the message handler's returned promise chain
+  // beyond this point — popup can close immediately after receiving started.
+  void runYouTubeJob(jobId, url, {
+    open: true,
+    force: opts.overwrite === true,
+    tabId: tab.id,
+  });
+
+  return { ok: true, started: true, jobId };
 }
 
-async function summarizeActiveYouTube(
+async function updateJobProgress(patch: Partial<ActiveJob> & { id?: string; kind?: ActiveJob['kind'] }) {
+  const cur = (await getActiveJob()) || {
+    id: patch.id || newJobId(),
+    kind: patch.kind || 'youtube',
+    status: 'running' as const,
+    label: 'Working…',
+    pct: null as number | null,
+    updatedAt: Date.now(),
+  };
+  await setActiveJob({
+    ...cur,
+    ...patch,
+    status: patch.status || cur.status || 'running',
+    label: patch.label ?? cur.label,
+    pct: patch.pct !== undefined ? patch.pct : cur.pct,
+  });
+}
+
+async function finishJobDone(result: IngestResult) {
+  keepAliveStop();
+  const cur = await getActiveJob();
+  await setActiveJob({
+    id: cur?.id || newJobId(),
+    kind: cur?.kind || 'youtube',
+    status: 'done',
+    label: 'Done',
+    pct: 100,
+    url: cur?.url,
+    title: result.title,
+    result,
+    updatedAt: Date.now(),
+  });
+}
+
+async function finishJobError(error: string) {
+  keepAliveStop();
+  const cur = await getActiveJob();
+  await setActiveJob({
+    id: cur?.id || newJobId(),
+    kind: cur?.kind || 'youtube',
+    status: 'error',
+    label: 'Failed',
+    pct: null,
+    url: cur?.url,
+    error,
+    updatedAt: Date.now(),
+  });
+}
+
+async function runYouTubeJob(
+  jobId: string,
   url: string,
-  opts: { open: boolean; force?: boolean; tabId?: number },
-): Promise<IngestResponse> {
+  opts: { open: boolean; force?: boolean; tabId: number },
+) {
+  keepAliveStart();
   try {
     const settings = await loadSettings();
     const videoId = youTubeVideoID(url);
 
-    // Browser-session captions (echo-style) are required for the extension
-    // path so echo-bp never hits yt-dlp (which often times out). Existing
-    // membox summaries are still opened by the companion before captions matter
-    // when force is false — but we still fetch captions only when needed.
-    //
-    // Fast path: ask companion first without transcript; if reused, open it.
-    // Otherwise fetch captions and re-post with segments.
     if (!opts.force) {
+      await updateJobProgress({ id: jobId, label: 'Checking library…', pct: 12 });
       try {
         const existing = await summarizeVideo(settings, {
           url,
@@ -176,45 +294,62 @@ async function summarizeActiveYouTube(
           lookupOnly: true,
         });
         if (existing.reused && existing.view_url) {
+          await updateJobProgress({ label: 'Opening…', pct: 90, title: existing.title });
           if (opts.open && settings.autoOpen) {
             await browser.tabs.create({ url: existing.view_url });
           }
-          return { ok: true, result: existing };
+          await finishJobDone(existing);
+          return;
         }
       } catch {
-        /* 404 / offline — continue to caption fetch + summarize */
+        /* continue */
       }
     }
 
-    if (!opts.tabId || !videoId) {
-      return {
-        ok: false,
-        error: 'YouTube captions require an open video tab (reload the page and try again)',
-      };
+    if (!videoId) {
+      await finishJobError('Not a YouTube video URL');
+      return;
     }
+
+    await updateJobProgress({ label: 'Fetching captions…', pct: 28 });
     const captions = await fetchYouTubeCaptions(opts.tabId, videoId);
     const transcriptMarkdown = captionsToMarkdown(captions);
-
-    const result = await summarizeVideo(settings, {
-      url,
-      force: opts.force === true,
-      videoId: captions.videoId || videoId,
+    await updateJobProgress({
+      label: 'Summarizing with deepseek…',
+      pct: 48,
       title: captions.title,
-      lang: captions.lang,
-      source: 'browser',
-      playlistId: captions.playlistId,
-      playlistIndex: captions.playlistIndex,
-      // Companion saves this Markdown into membox, then ebp summarizes:
-      // system prompt + markdown body (deepseek/deepseek-v4-flash).
-      transcriptMarkdown,
     });
-    const shouldOpen = opts.open && settings.autoOpen && result.view_url;
-    if (shouldOpen) {
+
+    const pulse = setInterval(() => {
+      void updateJobProgress({ label: 'Summarizing with deepseek…', pct: null });
+    }, 5000);
+
+    let result: IngestResult;
+    try {
+      result = await summarizeVideo(settings, {
+        url,
+        force: opts.force === true,
+        videoId: captions.videoId || videoId,
+        title: captions.title,
+        lang: captions.lang,
+        source: 'browser',
+        playlistId: captions.playlistId,
+        playlistIndex: captions.playlistIndex,
+        transcriptMarkdown,
+      });
+    } finally {
+      clearInterval(pulse);
+    }
+
+    await updateJobProgress({ label: 'Opening…', pct: 92, title: result.title || captions.title });
+    if (opts.open && settings.autoOpen && result.view_url) {
       await browser.tabs.create({ url: result.view_url });
     }
-    return { ok: true, result };
+    await finishJobDone(result);
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    await finishJobError(err instanceof Error ? err.message : String(err));
+  } finally {
+    keepAliveStop();
   }
 }
 
@@ -274,9 +409,6 @@ async function clipTab(tabId: number): Promise<ClipPayload> {
     throw new Error('Extracted Markdown was empty');
   }
 
-  // The content script can outlive an SPA navigation. Compare its payload
-  // with the tab URL at the end of extraction so a stale page cannot be saved
-  // under the current page's identity.
   const tab = await browser.tabs.get(tabId);
   const expected = normalizeSourceURL(tab.url || '');
   const actual = normalizeSourceURL(response.payload.sourceUrl || '');

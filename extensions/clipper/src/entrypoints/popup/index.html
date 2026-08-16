@@ -3,59 +3,82 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>membox clipper</title>
+    <title>membox</title>
     <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
     <main class="panel">
-      <header class="header">
-        <div class="brand">membox</div>
-        <div id="status" class="status status-unknown">checking…</div>
-      </header>
+      <!-- ── Home ── -->
+      <section id="homeView" class="view">
+        <header class="header">
+          <div class="brand-row">
+            <div class="brand">membox</div>
+            <div id="status" class="status-dot status-unknown" title="checking…"></div>
+          </div>
+          <button id="openSettings" type="button" class="icon-btn" title="Settings" aria-label="Settings">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
+            </svg>
+          </button>
+        </header>
 
-      <p class="hint">Save the current page as Markdown into membox and open it in Miru. YouTube pages: browser fetches captions → echo-bp summarizes with deepseek flash (existing summaries open directly).</p>
+        <div class="home-body">
+          <div class="toggle-row">
+            <span class="toggle-label">Notes</span>
+            <button id="notesToggle" type="button" class="switch" role="switch" aria-checked="false" title="Enable note-taking on pages">
+              <span class="switch-knob"></span>
+            </button>
+          </div>
 
-      <div class="enable-row">
-        <div class="enable-meta">
-          <span class="enable-label">Note-taking</span>
-          <span id="enableHint" class="enable-hint">Off — selection composer and note cards are disabled</span>
+          <button id="clip" type="button" class="primary save-btn">Save</button>
+
+          <div id="progress" class="progress" hidden>
+            <div class="progress-track">
+              <div id="progressBar" class="progress-bar"></div>
+            </div>
+            <div id="progressLabel" class="progress-label">Working…</div>
+          </div>
+
+          <p id="message" class="message" hidden></p>
         </div>
-        <button id="notesToggle" type="button" class="secondary notes-toggle">Enable</button>
-      </div>
+      </section>
 
-      <label class="field">
-        <span>Server URL</span>
-        <input id="baseUrl" type="url" placeholder="http://127.0.0.1:8787" autocomplete="off" />
-      </label>
+      <!-- ── Settings ── -->
+      <section id="settingsView" class="view" hidden>
+        <header class="header">
+          <button id="closeSettings" type="button" class="icon-btn back" title="Back" aria-label="Back">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M15 18l-6-6 6-6" />
+            </svg>
+          </button>
+          <div class="brand">Settings</div>
+          <div class="header-spacer"></div>
+        </header>
 
-      <label class="field">
-        <span>Bridge token</span>
-        <input id="token" type="password" placeholder="from mm serve" autocomplete="off" />
-      </label>
+        <label class="field">
+          <span>Server URL</span>
+          <input id="baseUrl" type="url" placeholder="http://127.0.0.1:8787" autocomplete="off" />
+        </label>
 
-      <label class="check">
-        <input id="autoOpen" type="checkbox" checked />
-        <span>Open in Miru after save</span>
-      </label>
+        <label class="field">
+          <span>Bridge token</span>
+          <input id="token" type="password" placeholder="from mm web status" autocomplete="off" />
+        </label>
 
-      <div class="actions">
-        <button id="saveSettings" type="button" class="secondary">Save settings</button>
-        <button id="clip" type="button" class="primary">Save / summarize</button>
-      </div>
+        <label class="check">
+          <input id="autoOpen" type="checkbox" checked />
+          <span>Open in Miru after save</span>
+        </label>
 
-      <div class="float-row">
-        <div class="float-meta">
-          <span class="float-label">Pins on this page</span>
-          <span id="floatCount" class="float-count">—</span>
-          <span class="float-hint">Overlay only · membox notes stay saved</span>
+        <div class="actions">
+          <button id="saveSettings" type="button" class="primary">Save settings</button>
         </div>
-        <div class="float-actions">
-          <button id="floatRestore" type="button" class="secondary float-toggle" disabled hidden>Restore</button>
-          <button id="floatToggle" type="button" class="secondary float-toggle" disabled>Expand</button>
-        </div>
-      </div>
 
-      <pre id="message" class="message" hidden></pre>
+        <p id="settingsHint" class="settings-hint">
+          First-time setup: run <code>mm web status</code>, paste the token here.
+        </p>
+      </section>
     </main>
     <script type="module" src="./main.ts"></script>
   </body>
