@@ -7,9 +7,9 @@ import { session } from './session.js';
 
 const REVIEW_ICON =
   '<svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">' +
-  '<path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" ' +
-  'd="M4 6h16M4 12h10M4 18h7"/>' +
-  '<path fill="currentColor" d="M17 13.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8.8-2.2z"/>' +
+  '<path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" ' +
+  'd="M9 4h8a3 3 0 0 1 3 3v8"/>' +
+  '<rect x="4" y="9" width="11" height="11" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.7"/>' +
   '</svg>';
 
 const REPLY_ICON =
@@ -18,11 +18,11 @@ const REPLY_ICON =
   'd="M9 14 4 9l5-5M4 9h11a5 5 0 0 1 5 5v6"/>' +
   '</svg>';
 
-const GRADES = [
-  { key: 'again', label: '忘了', className: 'review-grade-again' },
-  { key: 'hard', label: '模糊', className: 'review-grade-hard' },
-  { key: 'good', label: '想起', className: 'review-grade-good' },
-];
+const SUMMARY_ICON =
+  '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">' +
+  '<path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" ' +
+  'd="M4 6h16M4 12h10M4 18h7"/>' +
+  '</svg>';
 
 let reviewContainer = null;
 let reviewButton = null;
@@ -86,14 +86,6 @@ function renderBody(card) {
   return holder.outerHTML;
 }
 
-function gradeSummary(card) {
-  if (card.reps === 0) return '';
-  const parts = [`复习 ${card.reps} 次`];
-  if (card.interval_days > 0) parts.push(`间隔 ${card.interval_days} 天`);
-  if (card.lapses > 0) parts.push(`遗忘 ${card.lapses} 次`);
-  return `<span class="review-schedule">${parts.join(' · ')}</span>`;
-}
-
 function cardHTML(card) {
   return (
     '<article class="review-card" data-note-id="' + escapeHTML(card.note_id) + '">' +
@@ -106,16 +98,15 @@ function cardHTML(card) {
         ? `<blockquote class="review-quote">${escapeHTML(card.quote)}</blockquote>`
         : '') +
       `<div class="review-card-body">${renderBody(card)}</div>` +
+      `<div class="review-summary" hidden>` +
+        '<div class="review-summary-bar" hidden><div class="review-summary-progress"></div></div>' +
+        '<p class="review-summary-text"></p>' +
+      '</div>' +
       `<footer class="review-card-foot">` +
-        `<span class="review-actions">` +
-          GRADES.map((g) =>
-            `<button type="button" class="review-grade ${g.className}" data-grade="${g.key}">${g.label}</button>`,
-          ).join('') +
-        `</span>` +
         `<button type="button" class="review-reply-toggle" title="跟帖" aria-label="跟帖">${REPLY_ICON}</button>` +
         (card.replies_count ? `<span class="review-reply-count">${card.replies_count}</span>` : '') +
-        `<span class="review-card-grades">${gradeSummary(card)}</span>` +
-        `<a class="review-open" href="/?id=${encodeURIComponent(card.target_id)}" title="打开原文">原文 →</a>` +
+        `<button type="button" class="review-summarize" title="总结" aria-label="总结">${SUMMARY_ICON}<span>总结</span></button>` +
+        `<a class="review-open" href="/?id=${encodeURIComponent(card.target_id)}&note=${encodeURIComponent(card.note_id)}" title="打开原文">原文 →</a>` +
       '</footer>' +
       '<div class="review-reply-box" hidden>' +
         '<textarea class="review-reply-input" rows="2" placeholder="跟帖：补充想法…"></textarea>' +
@@ -133,21 +124,21 @@ async function fetchQueue(offset = 0, limit = 25) {
   return response.json();
 }
 
-async function rateCard(noteID, grade) {
-  const response = await fetch('/api/review/rate', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ note_id: noteID, grade }),
-  });
-  if (!response.ok) throw new Error((await response.text()).trim() || `HTTP ${response.status}`);
-  return response.json();
-}
-
 async function replyToCard(noteID, reply) {
   const response = await fetch('/api/review/reply', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ note_id: noteID, reply }),
+  });
+  if (!response.ok) throw new Error((await response.text()).trim() || `HTTP ${response.status}`);
+  return response.json();
+}
+
+async function summarizeCard(noteID) {
+  const response = await fetch('/api/review/summarize', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ note_id: noteID }),
   });
   if (!response.ok) throw new Error((await response.text()).trim() || `HTTP ${response.status}`);
   return response.json();
@@ -175,7 +166,7 @@ export async function openReviewFeed() {
   reviewContainer.innerHTML =
     '<div class="review-head">' +
       '<button type="button" class="review-back" title="返回" aria-label="返回">←</button>' +
-      '<span class="review-title">复习流</span>' +
+      '<span class="review-title">广场</span>' +
       '<span class="review-stats" id="review-stats"></span>' +
     '</div>' +
     '<div class="review-list" id="review-list"><p class="review-loading">加载中…</p></div>';
@@ -202,6 +193,8 @@ export async function openReviewFeed() {
   list.appendChild(sentinel);
 
   const appendPage = (data) => {
+    // The initial 加载中… placeholder must go once the first page renders.
+    list.querySelectorAll('.review-loading').forEach((el) => el.remove());
     total = data.stats ? data.stats.all : total;
     statsEl.textContent = `${renderStats(data.stats)} · 已显示 ${loadedCards.size + data.cards.length}/${total}`;
     data.cards.forEach((card) => {
@@ -236,13 +229,12 @@ export async function openReviewFeed() {
     } finally {
       loading = false;
       sentinel.classList.remove('is-loading');
+      if (!exhausted && !sentinel.textContent.includes('加载失败')) {
+        // Idle between pages: no permanent "加载中…" stuck on screen.
+        sentinel.textContent = '';
+      }
     }
   };
-
-  const observer = new IntersectionObserver((entries) => {
-    if (entries.some((entry) => entry.isIntersecting)) void loadMore();
-  }, { rootMargin: '400px' });
-  observer.observe(sentinel);
 
   try {
     const first = await fetchQueue(0, PAGE);
@@ -256,6 +248,14 @@ export async function openReviewFeed() {
   } catch (err) {
     list.innerHTML = `<p class="review-empty">加载失败：${escapeHTML(err.message)}</p>`;
   }
+
+  // Attach the scroll trigger only after the first page is on screen, so the
+  // sentinel (which sits inside the empty list during the initial fetch) does
+  // not immediately fire a second, duplicate load.
+  const observer = new IntersectionObserver((entries) => {
+    if (entries.some((entry) => entry.isIntersecting)) void loadMore();
+  }, { rootMargin: '400px' });
+  observer.observe(sentinel);
 }
 
 function bindCard(el, card) {
@@ -277,28 +277,50 @@ function bindCard(el, card) {
       bodyEl.classList.toggle('is-truncated', !bodyEl.classList.contains('is-expanded'));
     });
   }
-  el.querySelectorAll('.review-grade').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      btn.disabled = true;
-      try {
-        const schedule = await rateCard(card.note_id, btn.dataset.grade);
-        const updated = { ...card, ...schedule };
-        // Refresh the card's schedule summary in place.
-        const foot = el.querySelector('.review-card-foot');
-        const summary = foot.querySelector('.review-card-grades');
-        if (summary) summary.innerHTML = gradeSummary(updated);
-        showToast(btn.dataset.grade === 'good' ? '想起 ✓' : btn.dataset.grade === 'hard' ? '模糊 ~' : '忘了 ✗');
-      } catch (err) {
-        showToast(err.message || '评分失败');
-        btn.disabled = false;
-      }
-    });
-  });
-
   const toggle = el.querySelector('.review-reply-toggle');
   const box = el.querySelector('.review-reply-box');
   const input = el.querySelector('.review-reply-input');
   const send = el.querySelector('.review-reply-send');
+
+  // 总结: local mmd → ≤140 chars, with an indeterminate progress bar.
+  const summaryWrap = el.querySelector('.review-summary');
+  const summaryBar = el.querySelector('.review-summary-bar');
+  const summaryProgress = el.querySelector('.review-summary-progress');
+  const summaryText = el.querySelector('.review-summary-text');
+  const summarizeBtn = el.querySelector('.review-summarize');
+  let summarizing = false;
+  summarizeBtn.addEventListener('click', async () => {
+    if (summarizing) return;
+    summarizing = true;
+    summarizeBtn.disabled = true;
+    summaryWrap.hidden = false;
+    summaryBar.hidden = false;
+    summaryText.textContent = '';
+    // Indeterminate pulse: mmd one-shot has no per-token events, so the bar
+    // eases toward 92% and snaps to 100% when the response lands.
+    summaryProgress.style.transition = 'none';
+    summaryProgress.style.width = '0%';
+    void requestAnimationFrame(() => {
+      summaryProgress.style.transition = 'width 1.2s ease';
+      summaryProgress.style.width = '92%';
+    });
+    try {
+      const result = await summarizeCard(card.note_id);
+      summaryProgress.style.transition = 'width 0.25s ease';
+      summaryProgress.style.width = '100%';
+      summaryText.textContent = result.summary || '';
+      await new Promise((r) => setTimeout(r, 350));
+      summaryBar.hidden = true;
+      summaryText.hidden = false;
+    } catch (err) {
+      summaryBar.hidden = true;
+      summaryText.textContent = `总结失败：${err.message}`;
+      summaryText.classList.add('is-error');
+    } finally {
+      summarizing = false;
+      summarizeBtn.disabled = false;
+    }
+  });
   toggle.addEventListener('click', () => {
     box.hidden = !box.hidden;
     if (!box.hidden) input.focus();
@@ -360,23 +382,33 @@ export function initReview() {
   reviewButton = document.createElement('button');
   reviewButton.type = 'button';
   reviewButton.id = 'membox-review';
-  reviewButton.className = 'action membox-review';
-  reviewButton.innerHTML = REVIEW_ICON + '<span class="sr-only">复习流</span>';
-  reviewButton.title = '复习流 — 浏览笔记卡片';
-  reviewButton.setAttribute('aria-label', '复习流');
-  elements.themeToggle.insertAdjacentElement('beforebegin', reviewButton);
+  reviewButton.className = 'membox-review';
+  reviewButton.innerHTML = REVIEW_ICON;
+  reviewButton.title = '广场 — 浏览笔记卡片';
+  reviewButton.setAttribute('aria-label', '广场');
+  // Top-center, beside the document switcher (the topbar center column).
+  const center = document.querySelector('.topbar-center');
+  (center || elements.themeToggle).appendChild(reviewButton);
   reviewButton.addEventListener('click', () => {
     if (!session.connected) {
       showToast('先连接 membox');
       return;
     }
-    if (isReviewView()) closeReviewFeed();
-    else openReviewFeed();
+    if (isReviewView()) {
+      reviewButton.classList.remove('is-open');
+      closeReviewFeed();
+    } else {
+      reviewButton.classList.add('is-open');
+      openReviewFeed();
+    }
   });
 
   // Browser back from ?view=review closes the feed cleanly.
   window.addEventListener('popstate', () => {
-    if (!isReviewView() && reviewContainer) reviewContainer.hidden = true;
+    if (!isReviewView() && reviewContainer) {
+      reviewContainer.hidden = true;
+      reviewButton?.classList.remove('is-open');
+    }
   });
 
   if (isReviewView()) {

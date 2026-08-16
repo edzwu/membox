@@ -972,20 +972,36 @@ dt > .membox-translation {
 }
 
 /* ---- Review feed (X-style note cards) ---- */
+/* 广场 button: a pure-icon square that matches the topbar action buttons
+   (theme-toggle etc.) — no text label, just a Threads-like glyph. */
 .membox-review {
-  position: relative;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
   width: 36px;
   height: 36px;
   padding: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--line);
-  background: var(--paper-raised);
-  color: var(--muted);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease;
 }
-.membox-review svg { width: 19px; height: 19px; }
-.membox-review:hover { color: var(--accent); }
+.membox-review svg {
+  width: 17px;
+  height: 17px;
+  color: currentColor;
+}
+.membox-review:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.membox-review.is-open {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
 
 #review-feed {
   position: relative;
@@ -1141,24 +1157,6 @@ dt > .membox-translation {
   border-top: 1px solid var(--line);
   flex-wrap: wrap;
 }
-.review-actions { display: inline-flex; gap: 6px; }
-.review-grade {
-  appearance: none;
-  border: 1px solid var(--line);
-  background: transparent;
-  color: var(--ink-soft);
-  font: inherit;
-  font-size: 12px;
-  padding: 3px 10px;
-  border-radius: 14px;
-  cursor: pointer;
-}
-.review-grade:hover { border-color: var(--accent); color: var(--accent); }
-.review-grade:disabled { opacity: 0.45; cursor: default; }
-.review-grade-again:hover { border-color: #b3402f; color: #b3402f; }
-.review-grade-hard:hover { border-color: #b3862f; color: #b3862f; }
-.review-grade-good:hover { border-color: #3d9a5f; color: #3d9a5f; }
-
 .review-reply-toggle {
   appearance: none;
   border: 0;
@@ -1177,12 +1175,57 @@ dt > .membox-translation {
   font-size: 11px;
   color: var(--muted);
 }
-.review-card-grades {
-  margin-left: auto;
-  font-size: 11px;
-  color: var(--muted);
+
+.review-summarize {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 9px;
+  border-radius: 14px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
+.review-summarize svg { width: 13px; height: 13px; }
+.review-summarize:hover { border-color: var(--accent); color: var(--accent); }
+.review-summarize:disabled { opacity: 0.5; cursor: default; }
+
+.review-summary {
+  margin-top: 10px;
+  border-top: 1px dashed var(--line);
+  padding-top: 10px;
+}
+.review-summary[hidden] { display: none; }
+.review-summary-bar {
+  height: 4px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+.review-summary-bar[hidden] { display: none; }
+.review-summary-progress {
+  height: 100%;
+  width: 0%;
+  border-radius: 2px;
+  background: var(--accent);
+}
+.review-summary-text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--ink-soft);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.review-summary-text.is-error { color: #b3402f; }
+
 .review-open {
+  margin-left: auto;
   font-size: 12px;
   color: var(--accent);
   text-decoration: none;

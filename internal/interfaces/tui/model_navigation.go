@@ -1152,6 +1152,11 @@ func previewCmd(ctx context.Context, app App, selector string, width int, genera
 			return previewMsg{documentID: selector, generation: generation, err: err}
 		}
 		raw := string(body)
+		// A stored summary (e.g. generated from the review feed's 总结 button)
+		// leads the preview so the takeaway is visible before the body.
+		if summary, summaryErr := app.ReadDocumentSummary(ctx, selector); summaryErr == nil && strings.TrimSpace(summary) != "" {
+			raw = "摘要：" + strings.TrimSpace(summary) + "\n\n" + raw
+		}
 		if len(raw) > previewMaxBytes {
 			raw = raw[:previewMaxBytes] + "\n\n… (preview truncated)\n"
 		}

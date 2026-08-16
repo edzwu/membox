@@ -83,6 +83,13 @@ func Run(ctx context.Context, options Options) error {
 			return translation.EnsureMMD(ctx, options.Home)
 		},
 	})
+	// The same mmd client backs the review feed's one-shot summarize button.
+	server.SetSummarizer(translation.MMDClient{
+		SocketPath: translation.SocketPath(options.Home),
+		Ensure: func(ctx context.Context) error {
+			return translation.EnsureMMD(ctx, options.Home)
+		},
+	})
 	// Selection assist (ask/edit) uses Pi → deepseek-v4-flash one-shot RPC.
 	userHome, _ := os.UserHomeDir()
 	assistPiPath, _ := service.Store().GetSetting(runCtx, "agent.pi_path")

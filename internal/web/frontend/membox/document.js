@@ -59,6 +59,8 @@ export function replaceDocumentID(id) {
   const url = new URL(window.location.href);
   if (session.documentID) url.searchParams.set('id', session.documentID);
   else url.searchParams.delete('id');
+  // Preserve one-way navigation intent (e.g. `note=<ref>` from the review
+  // feed's 原文 link) — replaceDocumentID only rewrites the document id.
   window.history.replaceState(null, '', url);
   emitRender();
 }

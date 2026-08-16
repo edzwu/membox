@@ -233,6 +233,42 @@ func (s *Service) RateReviewCard(ctx context.Context, noteSelector string, grade
 	return sched, nil
 }
 
+// SummarizeReviewCard runs the local mmd model over the note body and stores
+// the ≤140-char summary in the note document's index metadata. Returns the
+// generated summary plus the model label that produced it.
+func (s *Service) SummarizeReviewCard(ctx context.Context, noteSelector string, complete func(ctx context.Context, prompt string) (string, error)) (string, string, error) {
+	body, err := s.ReadDocument(ctx, noteSelector)
+	if err != nil {
+		return "", "", err
+	}
+	text := string(body)
+	_, rest := splitFrontMatter(text)
+	rest = strings.TrimSpace(rest)
+	if rest == "" {
+		return "", "", errors.New("note is empty")
+	}
+	if len([]rune(rest)) > 4000 {
+		rest = string([]rune(rest)[:4000])
+	}
+	if complete == nil {
+		return "", "", errors.New("local model (mmd) is not configured")
+	}
+	prompt := "你是笔记整理助手。把下面的笔记内容压缩成一段 140 字以内的中文总结，保留核心观点，直接输出总结本身，不要前缀不要解释。\n\n笔记内容：\n" + rest + "\n\n140字以内的总结："
+	generated, err := complete(ctx, prompt)
+	if err != nil {
+		return "", "", err
+	}
+	summary := strings.TrimSpace(generated)
+	if summary == "" {
+		return "", "", errors.New("local model returned an empty summary")
+	}
+	// Store it as the note document's summary (TUI preview + index metadata).
+	if _, err := s.SetDocumentSummary(ctx, noteSelector, summary); err != nil {
+		return "", "", err
+	}
+	return summary, "local qwen3:14b", nil
+}
+
 // ReplyToReviewCard appends a dated reply block to the note file and bumps
 // annotation_notes.updated_at so the feed shows the card as fresh.
 func (s *Service) ReplyToReviewCard(ctx context.Context, noteSelector, reply string) (ReviewCardView, error) {

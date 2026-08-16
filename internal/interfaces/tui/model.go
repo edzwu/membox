@@ -44,6 +44,7 @@ type App interface {
 	SetDocumentSummary(context.Context, membox.SetSummaryCommand) (membox.DocumentView, error)
 	SummarizeDocument(context.Context, string) (membox.DocumentView, error)
 	ReadDocument(context.Context, membox.ReadDocumentQuery) ([]byte, error)
+	ReadDocumentSummary(context.Context, string) (string, error)
 	ResolveDocumentLocation(context.Context, membox.ResolveLocationQuery) (membox.LocationView, error)
 	ReindexDocument(context.Context, membox.ReindexDocumentCommand) error
 	DeleteDocument(context.Context, membox.DeleteDocumentCommand) (membox.DeleteDocumentResult, error)

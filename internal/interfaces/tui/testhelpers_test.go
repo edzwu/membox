@@ -34,6 +34,7 @@ type fakeApp struct {
 	documents          []membox.DocumentView
 	renamedTo          string
 	previewPath        string
+	previewSummary     string
 	readBody           []byte
 	readCount          int
 	pdfTitle           string
@@ -84,6 +85,9 @@ func (f *fakeApp) ReadDocument(context.Context, membox.ReadDocumentQuery) ([]byt
 		return f.readBody, nil
 	}
 	return []byte("body"), nil
+}
+func (f *fakeApp) ReadDocumentSummary(context.Context, string) (string, error) {
+	return f.previewSummary, nil
 }
 func (f *fakeApp) ResolveDocumentLocation(_ context.Context, query membox.ResolveLocationQuery) (membox.LocationView, error) {
 	f.resolved++

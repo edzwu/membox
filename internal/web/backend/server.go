@@ -61,6 +61,10 @@ type Server struct {
 
 	// Paragraph translation is delegated to mmd, which owns Pi RPC.
 	translator translation.Streamer
+
+	// Summarizer is the one-shot local-LLM completer (mmd qwen3:14b) used by
+	// the review feed's "总结" button. Nil outside Companion.
+	summarizer translation.Completer
 }
 
 // NewServer receives frontend files from the composition root rather than
@@ -75,6 +79,10 @@ func (s *Server) SetToken(token string) { s.token = strings.TrimSpace(token) }
 
 // SetTranslationStreamer wires the mmd-backed paragraph stream used by Miru.
 func (s *Server) SetTranslationStreamer(streamer translation.Streamer) { s.translator = streamer }
+
+// SetSummarizer wires the one-shot local-LLM completer (mmd) used by the
+// review feed's summarize button.
+func (s *Server) SetSummarizer(completer translation.Completer) { s.summarizer = completer }
 
 // SetHome records MEMBOX_HOME so extension-facing routes can start mmd and
 // resolve daemon sockets for the same catalog the companion opened.
@@ -115,6 +123,7 @@ func (s *Server) Start(ctx context.Context, port int) (string, error) {
 	mux.HandleFunc("/api/review/queue", s.handleReviewQueue)
 	mux.HandleFunc("/api/review/rate", s.handleReviewRate)
 	mux.HandleFunc("/api/review/reply", s.handleReviewReply)
+	mux.HandleFunc("/api/review/summarize", s.handleReviewSummarize)
 	mux.HandleFunc("/api/documents/candidates", s.handleDocumentCandidates)
 	mux.HandleFunc("/api/documents/by-path", s.handleDocumentByPath)
 	mux.HandleFunc("/api/doc/", s.handleDocument)

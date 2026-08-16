@@ -767,6 +767,17 @@ func (b *Box) ReadDocument(ctx context.Context, query ReadDocumentQuery) ([]byte
 	return b.service.ReadDocument(ctx, query.Selector)
 }
 
+// ReadDocumentSummary returns the index metadata summary for a document
+// (empty string when none is stored). Used by the TUI preview to surface
+// web-generated card summaries above the note body.
+func (b *Box) ReadDocumentSummary(ctx context.Context, selector string) (string, error) {
+	document, _, err := b.service.ResolveDocument(ctx, selector)
+	if err != nil {
+		return "", err
+	}
+	return document.Index.Summary, nil
+}
+
 // ReadDocumentText returns Markdown or extracted PDF text for agent-facing
 // consumers that must not receive binary PDF bytes.
 func (b *Box) ReadDocumentText(ctx context.Context, query ReadDocumentQuery) ([]byte, error) {

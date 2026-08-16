@@ -63,6 +63,43 @@ func (s *Server) handleReviewRate(writer http.ResponseWriter, request *http.Requ
 	_ = json.NewEncoder(writer).Encode(schedule)
 }
 
+// handleReviewSummarize runs the local mmd model over a note card and stores
+// a ≤140-char summary in its index metadata.
+func (s *Server) handleReviewSummarize(writer http.ResponseWriter, request *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(request.Body, 1<<20))
+	if err != nil {
+		http.Error(writer, "reading summarize request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	var payload struct {
+		NoteID string `json:"note_id"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		http.Error(writer, "invalid summarize payload", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(payload.NoteID) == "" {
+		http.Error(writer, "note_id is required", http.StatusBadRequest)
+		return
+	}
+	if s.summarizer == nil {
+		http.Error(writer, "local model (mmd) is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	summary, model, err := s.service.SummarizeReviewCard(request.Context(), payload.NoteID, s.summarizer.Complete)
+	if err != nil {
+		http.Error(writer, err.Error(), http.StatusConflict)
+		return
+	}
+	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+	writer.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(writer).Encode(map[string]any{
+		"note_id": payload.NoteID,
+		"summary": summary,
+		"model":   model,
+	})
+}
+
 // handleReviewReply appends a dated reply block to a note card.
 func (s *Server) handleReviewReply(writer http.ResponseWriter, request *http.Request) {
 	body, err := io.ReadAll(io.LimitReader(request.Body, 2<<20))
