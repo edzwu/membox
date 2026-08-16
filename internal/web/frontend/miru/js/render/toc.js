@@ -84,6 +84,35 @@ function makeTocLink(heading) {
   return a;
 }
 
+// outlineDepth reads hierarchical numbers in the heading label:
+// "10.1 多 Agent…" → 2, "10.1.1 维度一" → 3, "第 10 章" → null.
+// PDF conversions often flatten every section to ## while keeping the printed
+// outline in the title text — without this, progressive disclosure cannot nest.
+export function outlineDepth(label) {
+  const text = String(label || '').trim();
+  const match = text.match(/^(\d+(?:\.\d+)*)\b/);
+  if (!match) return null;
+  return match[1].split('.').length;
+}
+
+function tocNestLevel(heading, label, stack) {
+  const outline = outlineDepth(label);
+  if (outline != null) return { level: outline, outline: true };
+
+  const htmlLevel = Number(heading.tagName.slice(1)) || 1;
+  if (htmlLevel === 1) return { level: 1, outline: false };
+
+  // Unnumbered H2/H3 body-ish headings ("实验要求", long sentences promoted to
+  // ##) nest under the current numbered section instead of sitting as peers of
+  // 10.1 / 10.2 and blowing up the top-level outline.
+  for (let i = stack.length - 1; i >= 1; i -= 1) {
+    if (stack[i].outline) {
+      return { level: stack[i].level + 1, outline: false };
+    }
+  }
+  return { level: htmlLevel, outline: false };
+}
+
 export function buildToc(headings) {
   elements.tocNav.innerHTML = '';
 
@@ -99,14 +128,14 @@ export function buildToc(headings) {
   const list = document.createElement('ul');
   list.className = 'toc-list';
 
-  // Nest by heading level (H1→H2→H3). Sublists use progressive disclosure:
-  // collapsed until scrollspy marks an ancestor group expanded (setActiveToc).
-  // Supports lecture notes that use H1+H3 (no H2), not only H2+H3.
-  // stack frames: { level, li, subList }
-  const stack = [{ level: 0, li: null, subList: list }];
+  // Nest by outline number when present (10.1 → 10.1.1), else HTML level
+  // (H1→H2→H3). Sublists use progressive disclosure via setActiveToc.
+  // stack frames: { level, outline, li, childList }
+  const stack = [{ level: 0, outline: false, li: null, subList: list }];
 
   headings.forEach((heading) => {
-    const level = Number(heading.tagName.slice(1)) || 1;
+    const label = heading.dataset.headingLabel || getHeadingLabel(heading);
+    const { level, outline } = tocNestLevel(heading, label, stack);
     const link = makeTocLink(heading);
     const li = document.createElement('li');
     li.appendChild(link);
@@ -131,7 +160,7 @@ export function buildToc(headings) {
       parent.childList.appendChild(li);
     }
 
-    stack.push({ level, li, childList: null });
+    stack.push({ level, outline, li, childList: null });
   });
 
   elements.tocNav.appendChild(title);
