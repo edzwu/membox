@@ -59,13 +59,8 @@ func (m Model) updateFilterInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "ctrl+f":
-		// Scope toggle (name ⇄ full content) moved here when tab took over
-		// pinning; ctrl+f is only pagedown in the fullscreen/help contexts.
-		if m.searchMode == searchModeName {
-			m.searchMode = searchModeFull
-		} else {
-			m.searchMode = searchModeName
-		}
+		// Scope toggle (name ⇄ full content). Also available under ctrl+o → scope.
+		m.toggleSearchScope()
 		return m, m.filterChanged(nil)
 	case "ctrl+g":
 		m.detailsVisible = !m.detailsVisible
@@ -727,11 +722,36 @@ func (m Model) updateConfigPanel(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// toggleSearchScope flips name ⇄ content. When entering content with only
+// name tags that match nothing (body-only terms), re-scope those tags to full.
+func (m *Model) toggleSearchScope() {
+	if m.searchMode == searchModeName {
+		m.searchMode = searchModeFull
+		onlyName := len(m.textFilters) > 0
+		for _, filter := range m.textFilters {
+			if filter.Mode != searchModeName {
+				onlyName = false
+				break
+			}
+		}
+		if onlyName {
+			m.refreshFilter()
+			if len(m.filtered) == 0 {
+				for i := range m.textFilters {
+					m.textFilters[i].Mode = searchModeFull
+				}
+			}
+		}
+		return
+	}
+	m.searchMode = searchModeName
+}
+
 // updateFilterOptions handles keys while the filter-options panel is open:
-// ↑↓ picks Match or Case, ←→/space toggles, esc returns to the input.
+// ↑↓ picks a row (match / case / scope), ←→/space toggles, esc returns to input.
 // Every change is applied immediately and the status bar reflects it.
 func (m Model) updateFilterOptions(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	rows := 2
+	const rows = 3
 	changed := false
 	switch msg.String() {
 	case "esc", "enter", "q":
@@ -753,6 +773,8 @@ func (m Model) updateFilterOptions(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.filterExact = !m.filterExact
 		case 1:
 			m.filterCase = !m.filterCase
+		case 2:
+			m.toggleSearchScope()
 		}
 		changed = true
 	}

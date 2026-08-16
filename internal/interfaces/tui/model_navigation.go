@@ -681,12 +681,19 @@ func (m Model) effectiveNameFilters() []textFilter {
 // fullTextFilter returns the combined content-search query plus whether every
 // contributing filter wants exact (whole-token) matching. Committed filters
 // freeze their own semantics; the live draft follows the options panel.
+//
+// Exact defaults to false (prefix-friendly content search). It becomes true
+// only when every contributing full-text filter/draft requests exact match —
+// previously it started true, so a lone exact-tagged filter (or an empty
+// contributor set edge case) made ChatService-style tokens too strict.
 func (m Model) fullTextFilter() (string, bool) {
 	queries := make([]string, 0, len(m.textFilters)+1)
+	have := false
 	exact := true
 	for _, filter := range m.textFilters {
 		if filter.Mode == searchModeFull {
 			queries = append(queries, filter.Value)
+			have = true
 			if !filter.Exact {
 				exact = false
 			}
@@ -695,10 +702,14 @@ func (m Model) fullTextFilter() (string, bool) {
 	if m.inputVisible && m.searchMode == searchModeFull {
 		if draft := textFilterQuery(m.input.Value()); draft != "" {
 			queries = append(queries, draft)
+			have = true
 			if !m.filterExact {
 				exact = false
 			}
 		}
+	}
+	if !have {
+		return "", false
 	}
 	return strings.Join(queries, " "), exact
 }

@@ -90,30 +90,30 @@ func (m Model) deleteConfirmView() string {
 	return border.Render(content)
 }
 
-// filterOptionsView is the match-semantics panel opened with ctrl+o while the
-// filter input is focused: 全匹配 (contains ⇄ exact) and 大小写 (case).
-// Both are orthogonal to the name/content scope chip; the status bar segment
-// reflects them immediately.
+// filterOptionsView is the panel opened with ctrl+o while the filter input is
+// focused: match, case, and name/content scope.
 func (m Model) filterOptionsView() string {
 	width := max(10, m.width-2)
 	border := lipgloss.NewStyle().Width(width).MaxWidth(width).Border(lipgloss.NormalBorder(), true, false, false, false).BorderForeground(colors.BorderAccent)
-	rows := [][2]string{
-		{"match", "contains"}, // label, off-option (on = whole word)
-		{"case", "ignore"},    // label, off-option (on = sensitive)
-	}
 	lines := []string{accentStyle.Render("filter options")}
+	type optRow struct {
+		label   string
+		left    string
+		right   string
+		onRight bool
+	}
+	rows := []optRow{
+		{label: "match", left: "contains", right: "exact", onRight: m.filterExact},
+		{label: "case", left: "ignore", right: "sensitive", onRight: m.filterCase},
+		{label: "scope", left: "name", right: "content", onRight: m.searchMode == searchModeFull},
+	}
 	for index, row := range rows {
-		label := fitWidth(row[0], 10)
-		options := []string{}
-		onValue, offValue := "exact", row[1]
-		if index == 1 {
-			onValue = "sensitive"
-		}
-		on := (index == 0 && m.filterExact) || (index == 1 && m.filterCase)
-		if on {
-			options = append(options, dimStyle.Render(" "+offValue+" "), accentStyle.Render("["+onValue+"]"))
+		label := fitWidth(row.label, 10)
+		var options []string
+		if row.onRight {
+			options = append(options, dimStyle.Render(" "+row.left+" "), accentStyle.Render("["+row.right+"]"))
 		} else {
-			options = append(options, accentStyle.Render("["+offValue+"]"), dimStyle.Render(" "+onValue+" "))
+			options = append(options, accentStyle.Render("["+row.left+"]"), dimStyle.Render(" "+row.right+" "))
 		}
 		rowText := label + " " + strings.Join(options, "")
 		if index == m.filterOptionsSelected {
@@ -881,7 +881,8 @@ func (m Model) previewLineRange() (first, last, total int) {
 }
 
 func (m Model) modeBadge() string {
-	mode := " NAME "
+	// Search input always shows SEARCH; name vs content lives in ctrl+o / status.
+	mode := " SEARCH "
 	background := lipgloss.AdaptiveColor{Dark: "#3159b8", Light: "#d9e8ff"}
 	foreground := lipgloss.AdaptiveColor{Dark: "#ffffff", Light: "#1b3a5b"}
 	switch m.inputMode {
@@ -893,12 +894,6 @@ func (m Model) modeBadge() string {
 		mode = " AGENT "
 		background = lipgloss.AdaptiveColor{Dark: "#7048a8", Light: "#eadcff"}
 		foreground = lipgloss.AdaptiveColor{Dark: "#ffffff", Light: "#3c1f63"}
-	default:
-		if m.searchMode == searchModeFull {
-			mode = " CONTENT "
-			background = lipgloss.AdaptiveColor{Dark: "#2f7d4a", Light: "#c9f0d8"}
-			foreground = lipgloss.AdaptiveColor{Dark: "#f4fff8", Light: "#173f26"}
-		}
 	}
 	return lipgloss.NewStyle().Background(background).Foreground(foreground).Bold(true).Inline(true).Render(mode)
 }
@@ -949,18 +944,43 @@ func matchesMediaScope(document membox.DocumentView, scope string) bool {
 }
 
 func searchResultItems(items []item, results []membox.SearchResult, dateFilters []dateFilter, nameFilters []textFilter, hideNotes bool, mediaScope string) []item {
-	allowed := make(map[string]bool, len(results))
-	for _, result := range results {
-		allowed[result.DocumentID] = true
-	}
-	filtered := make([]item, 0, len(results))
+	byID := make(map[string]item, len(items))
 	for _, candidate := range items {
+		byID[candidate.document.ID] = candidate
+	}
+	// Preserve FTS rank order. Synthesize a row when a hit is not in the
+	// current catalog page (stale list / limit) so body matches never vanish.
+	filtered := make([]item, 0, len(results))
+	seen := make(map[string]bool, len(results))
+	for _, result := range results {
+		id := result.DocumentID
+		if id == "" || seen[id] {
+			continue
+		}
+		candidate, ok := byID[id]
+		if !ok {
+			filename := filepath.Base(result.Path)
+			candidate = item{
+				document: membox.DocumentView{
+					ID: result.DocumentID, Title: result.Title, Path: result.Path,
+					RelativePath: filename, MediaType: "text/markdown", Status: "active",
+				},
+				title: displayTitle(result.Title, result.Path), filename: filename,
+				match: result.Title + " " + result.Path + " " + filename + " " + result.DocumentID,
+			}
+		}
 		if hideNotes && isClippedNote(candidate.filename) {
 			continue
 		}
-		if allowed[candidate.document.ID] && matchesMediaScope(candidate.document, mediaScope) && matchesDateFilters(candidate.document, dateFilters) && matchesTextFilters(candidate.title, candidate.filename, candidate.match, candidate.document.ID, nameFilters) {
-			filtered = append(filtered, candidate)
+		if !matchesMediaScope(candidate.document, mediaScope) || !matchesDateFilters(candidate.document, dateFilters) {
+			continue
 		}
+		// Optional name tags still AND with content hits (N: alpha + C: flash).
+		if !matchesTextFilters(candidate.title, candidate.filename, candidate.match, candidate.document.ID, nameFilters) {
+			continue
+		}
+		filtered = append(filtered, candidate)
+		seen[id] = true
 	}
 	return filtered
 }

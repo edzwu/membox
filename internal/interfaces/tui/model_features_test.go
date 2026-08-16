@@ -346,11 +346,11 @@ func TestModel_InputUsesSingleHighlightedModeBadge(t *testing.T) {
 	model.width = 120
 	model.inputVisible = true
 	input := model.inputView()
-	if !strings.Contains(input, " NAME ") {
+	if !strings.Contains(input, " SEARCH ") {
 		t.Fatalf("input does not contain highlighted mode badge: %q", input)
 	}
-	if strings.Contains(input, " NAME ") && strings.Contains(input, "name  filter documents") {
-		t.Fatalf("mode appears redundantly: %q", input)
+	if strings.Count(input, " SEARCH ") != 1 {
+		t.Fatalf("SEARCH badge should appear once: %q", input)
 	}
 }
 
@@ -380,20 +380,25 @@ func TestModel_ViewUsesTerminalHeightExactly(t *testing.T) {
 	}
 }
 
-func TestModel_CtrlFTogglesHighlightedMode(t *testing.T) {
+func TestModel_CtrlFTogglesSearchScope(t *testing.T) {
 	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
 	model.inputVisible = true
 	model.inputActive = true
 	model.input.Focus()
-	badge := model.modeBadge()
-	if !strings.Contains(badge, " NAME ") {
-		t.Fatalf("default mode badge=%q", badge)
+	if model.searchMode != searchModeName {
+		t.Fatalf("default scope=%s", model.searchMode)
+	}
+	// Badge stays SEARCH; scope is status/ctrl+o, not the badge label.
+	if !strings.Contains(model.modeBadge(), " SEARCH ") {
+		t.Fatalf("badge=%q", model.modeBadge())
 	}
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlF})
 	model = updated.(Model)
-	badge = model.modeBadge()
-	if !strings.Contains(badge, " CONTENT ") {
-		t.Fatalf("full mode badge=%q", badge)
+	if model.searchMode != searchModeFull {
+		t.Fatalf("ctrl+f did not enter content: %s", model.searchMode)
+	}
+	if !strings.Contains(model.modeBadge(), " SEARCH ") {
+		t.Fatalf("badge should remain SEARCH: %q", model.modeBadge())
 	}
 	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlF})
 	model = updated.(Model)
@@ -437,7 +442,7 @@ func TestModel_FullModePreviewKeepsHighlightAfterResults(t *testing.T) {
 	}
 }
 
-func TestModeBadgeUsesBlueAndGreen(t *testing.T) {
+func TestModeBadgeSearchIsStableBlue(t *testing.T) {
 	prevProfile := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	t.Cleanup(func() { lipgloss.SetColorProfile(prevProfile) })
@@ -446,12 +451,35 @@ func TestModeBadgeUsesBlueAndGreen(t *testing.T) {
 	name := model.modeBadge()
 	model.searchMode = searchModeFull
 	full := model.modeBadge()
-	if !strings.Contains(name, "48;2;48;89;184") {
-		t.Fatalf("NAME badge is not blue: %q", name)
+	if !strings.Contains(name, "SEARCH") || !strings.Contains(full, "SEARCH") {
+		t.Fatalf("search badge should say SEARCH: name=%q full=%q", name, full)
 	}
-	if !strings.Contains(full, "48;2;47;125;73") {
-		t.Fatalf("FULL badge is not green: %q", full)
+	if !strings.Contains(name, "48;2;48;89;184") || !strings.Contains(full, "48;2;48;89;184") {
+		t.Fatalf("SEARCH badge should stay blue: name=%q full=%q", name, full)
 	}
+}
+
+func TestFilterOptionsCanToggleScope(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.width, model.height = 120, 24
+	model.inputVisible, model.inputActive, model.inputMode = true, true, inputModeSearch
+	model.searchMode = searchModeName
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlO})
+	model = updated.(Model)
+	if !strings.Contains(model.inputView(), "scope") {
+		t.Fatalf("scope row missing: %q", model.inputView())
+	}
+	// move to scope row (2) and toggle to content
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = updated.(Model)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = updated.(Model)
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeySpace})
+	model = updated.(Model)
+	if model.searchMode != searchModeFull {
+		t.Fatalf("scope toggle did not enter content: %s", model.searchMode)
+	}
+	_ = cmd
 }
 
 func TestShortIDUsesLastFourUUIDCharacters(t *testing.T) {
