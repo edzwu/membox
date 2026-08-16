@@ -21,6 +21,12 @@ export function removeAnnot(id) {
 
 // Wrap a range in an element, tolerating ranges that cross element
 // boundaries (surroundContents throws there; we merge instead).
+//
+// Nested/overlapping annotations must be flattened first: wrapping over an
+// existing span.annot corrupts the inner span (extractContents splits it and
+// orphans its text — the "selected text disappears" bug). absorbOverlapping
+// annotations does that before we reach here; this fallback is only a safety
+// net for exotic element-boundary cases.
 export function wrapRange(range, el) {
   try {
     range.surroundContents(el);
@@ -29,6 +35,99 @@ export function wrapRange(range, el) {
     el.appendChild(frag);
     range.insertNode(el);
   }
+}
+
+// Collect the existing annotation spans that intersect `range`. Used before a
+// wrap so a new annotation never nests inside/around old ones, which breaks
+// the inner spans' text (orphaned text nodes = "selection disappeared").
+function intersectingAnnotEls(range) {
+  const found = [];
+  const walker = document.createTreeWalker(elements.article, NodeFilter.SHOW_ELEMENT);
+  while (walker.nextNode()) {
+    const el = walker.currentNode;
+    if (!el.classList || !el.classList.contains('annot') || !el.dataset.annotId) continue;
+    if (range.intersectsNode(el)) found.push(el);
+  }
+  return found;
+}
+
+// Re-anchor a Range onto the current article text. Callers pass the original
+// selected text; after unwrapping overlaps the DOM is flattened, so text-node
+// offsets from before are stale. Prefers the occurrence closest to the old
+// start offset to stay deterministic on repeated passages.
+function reanchorRange(range, text, hintStart) {
+  if (!text) return;
+  const walker = document.createTreeWalker(elements.article, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  let pos = 0;
+  let best = -1;
+  let bestDist = Infinity;
+  const idxs = [];
+  for (const n of nodes) {
+    const t = n.textContent;
+    let from = 0;
+    for (;;) {
+      const i = t.indexOf(text, from);
+      if (i < 0) break;
+      idxs.push({ node: n, offset: i, abs: pos + i });
+      from = i + 1;
+    }
+    pos += t.length;
+  }
+  for (const hit of idxs) {
+    const dist = Math.abs(hit.abs - hintStart);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = hit;
+    }
+  }
+  if (best >= 0) {
+    const hit = idxs[best];
+    range.setStart(hit.node, hit.offset);
+    range.setEnd(hit.node, hit.offset + text.length);
+  }
+}
+
+// Flatten every existing annotation span that overlaps `range`, folding their
+// flags/note into `flags` so the new annotation supersedes them visually and
+// in state. Without this, wrapping a range that covers an old highlight/note
+// splits the inner spans and orphans their text (the "selected text
+// disappears" bug). Overlap is a deliberate supersede, not data loss: the
+// inner note text survives on the new annotation.
+function absorbOverlappingAnnotations(range, flags) {
+  const els = intersectingAnnotEls(range);
+  if (!els.length) return;
+
+  const selText = range.toString();
+  const startHint = range.startOffset;
+  const absorbed = [];
+
+  els.forEach((el) => {
+    const entry = findAnnot(el.dataset.annotId);
+    if (entry) {
+      absorbed.push(entry);
+      if (entry.hl) flags.hl = true;
+      if (entry.ul) flags.ul = true;
+      if (entry.sl) flags.sl = true;
+      if (entry.note && !flags.note) {
+        flags.note = entry.note;
+        flags.kind = entry.kind || flags.kind || null;
+      }
+    }
+    const card = elements.annotationLayer.querySelector(`.annot-note[data-annot-id="${el.dataset.annotId}"]`);
+    if (card) card.remove();
+    unwrapAnnotEl(el);
+  });
+
+  if (absorbed.length) {
+    const ids = new Set(absorbed.map((a) => a.id));
+    state.annotations = state.annotations.filter((a) => !ids.has(a.id));
+  }
+
+  // The unwraps mutated the DOM the range pointed into; re-anchor by text so
+  // the new wrap covers exactly the original selection.
+  reanchorRange(range, selText, startHint);
 }
 
 export function unwrapAnnotEl(annotEl) {
@@ -179,6 +278,9 @@ export function applyAnnotationRange(range, flags) {
   if (flags.note) classes.push('annot-note-ref');
   span.className = classes.join(' ');
   span.dataset.annotId = id;
+  // Flatten any existing annotation the new range overlaps; wrapping over
+  // them would split inner spans and orphan their text.
+  absorbOverlappingAnnotations(range, flags);
   wrapRange(range, span);
   if (flags.note) {
     attachNoteBadge(span, id);

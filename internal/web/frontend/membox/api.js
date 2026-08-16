@@ -148,7 +148,7 @@ export async function resolveDocumentByPath(name) {
   return response.json();
 }
 
-// Selection assist (ask/edit) — NDJSON stream from Companion → Pi → model.
+// Selection assist (ask) — NDJSON stream from Companion → Pi → model.
 export async function streamAssist(documentID, payload, onEvent, signal) {
   const response = await fetch(`/api/doc/${encodeURIComponent(documentID)}/assist`, {
     method: 'POST',
@@ -183,14 +183,6 @@ export async function streamAssist(documentID, payload, onEvent, signal) {
     if (done) break;
   }
   if (buffer.trim()) consume(buffer.replace(/\r$/, ''));
-}
-
-export async function applyAssistEdit(documentID, payload) {
-  const response = await request(`/api/doc/${encodeURIComponent(documentID)}/assist/apply`, {
-    method: 'POST',
-    body: payload,
-  });
-  return response.json();
 }
 
 // Free Dictionary lookup — same source as ~/repo/lookup.

@@ -1,15 +1,12 @@
-/* Selection assist: ask / edit via deepseek-v4-flash (Companion → Pi).
-   Minimal panel: model status · reply · single input row. */
+/* Selection assist: ask about a selection via deepseek-v4-flash (Companion → Pi).
+   Minimal panel: model status · reply · single input row · save Q&A note. */
 
 import { applyNote, findAnnot, setNoteOnPassage } from '../js/annotations/model.js';
 import { onAnnotToolbarHide, registerAnnotAction } from '../js/annotations/toolbar.js';
-import { loadDocument } from '../js/document.js';
 import { state } from '../js/state.js';
 import { showToast } from '../js/ui/feedback.js';
-import { streamAssist, applyAssistEdit } from './api.js';
-import { applyConversionDisplayLabelIfNeeded } from './document.js';
+import { streamAssist } from './api.js';
 import { session } from './session.js';
-import { emitRender } from './events.js';
 
 const MODEL_LABEL = 'deepseek-v4-flash';
 
@@ -40,11 +37,6 @@ const ICON_BOOKMARK =
   '<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">' +
   '<path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" ' +
   'd="M7 4h10a1 1 0 0 1 1 1v15l-6-3.5L6 20V5a1 1 0 0 1 1-1z"/>' +
-  '</svg>';
-
-const ICON_CHECK =
-  '<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">' +
-  '<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M5 12.5 10 17.5 19 7"/>' +
   '</svg>';
 
 let abortController = null;
@@ -119,29 +111,21 @@ function statusTitle(status) {
 }
 
 function renderPanel({
-  mode = 'ask',
   status = '',
   result = '',
-  canApply = false,
+  canSave = false,
   running = false,
   model = modelStatus,
 }) {
-  const askOn = mode === 'ask' ? ' is-on' : '';
-  const editOn = mode === 'edit' ? ' is-on' : '';
-  const placeholder = mode === 'edit' ? 'Rewrite…' : 'Ask…';
   const showResult = Boolean(result) || running;
   const err = status && /fail|error|empty|unavail/i.test(status);
-  const saveIcon = mode === 'ask' ? ICON_BOOKMARK : ICON_CHECK;
-  const saveLabel = mode === 'ask' ? 'Save note' : 'Apply edit';
 
   return (
-    '<div class="annot-assist-panel" role="dialog" aria-label="Assist">' +
+    '<div class="annot-assist-panel" role="dialog" aria-label="Ask selection">' +
       '<div class="annot-assist-head">' +
         `<span class="annot-assist-dot annot-assist-dot-${model}" title="${escapeHTML(statusTitle(model))}"></span>` +
         `<span class="annot-assist-model-name" title="${escapeHTML(statusTitle(model))}">${escapeHTML(MODEL_LABEL)}</span>` +
         '<span class="annot-assist-spacer"></span>' +
-        `<button type="button" class="annot-assist-seg-btn${askOn}" data-assist-mode="ask">Ask</button>` +
-        `<button type="button" class="annot-assist-seg-btn${editOn}" data-assist-mode="edit">Edit</button>` +
         `<button type="button" class="annot-assist-close" data-assist-close aria-label="Close">${ICON_CLOSE}</button>` +
       '</div>' +
       (showResult
@@ -151,11 +135,12 @@ function renderPanel({
         : '') +
       (status ? `<p class="annot-assist-status${err ? ' is-error' : ''}">${escapeHTML(status)}</p>` : '') +
       '<div class="annot-assist-composer">' +
-        `<textarea class="annot-assist-input" rows="1" placeholder="${placeholder}" autocomplete="off" ` +
-          'aria-label="Message (⌘↵ to send)"></textarea>' +
+        '<textarea class="annot-assist-input" rows="1" placeholder="Ask…" autocomplete="off" ' +
+          'aria-label="Question (⌘↵ to send)"></textarea>' +
         '<div class="annot-assist-actions">' +
-          (canApply
-            ? `<button type="button" class="annot-assist-save" title="${saveLabel}" aria-label="${saveLabel}">${saveIcon}</button>`
+          (canSave
+            ? '<button type="button" class="annot-assist-save" title="Save note" aria-label="Save note">' +
+                `${ICON_BOOKMARK}</button>`
             : '') +
           `<button type="button" class="annot-assist-run"${running ? ' disabled' : ''} title="Send (⌘↵)" aria-label="Send">` +
             `${running ? ICON_SPIN : ICON_SEND}</button>` +
@@ -194,8 +179,6 @@ function openAssist(ctx) {
     return;
   }
 
-  let mode = 'ask';
-  let replacement = '';
   let answer = '';
   let lastInstruction = '';
   const markdown = state.currentMarkdown || '';
@@ -210,7 +193,7 @@ function openAssist(ctx) {
     }
   });
 
-  ctx.toolbar.innerHTML = renderPanel({ mode, model: modelStatus });
+  ctx.toolbar.innerHTML = renderPanel({ model: modelStatus });
   const input = ctx.toolbar.querySelector('.annot-assist-input');
   if (input) {
     input.value = '';
@@ -219,19 +202,15 @@ function openAssist(ctx) {
   }
   ctx.position(ctx.range || ctx.annotEl);
 
-  const canApplyNow = () => {
-    if (mode === 'edit') return Boolean(replacement);
-    return Boolean(answer) && hasNoteAnchor(ctx);
-  };
+  const canSaveNow = () => Boolean(answer) && hasNoteAnchor(ctx);
 
   const paint = (opts) => {
     const field = ctx.toolbar.querySelector('.annot-assist-input');
     const value = field?.value || '';
     ctx.toolbar.innerHTML = renderPanel({
-      mode,
       status: opts.status || '',
       result: opts.result || '',
-      canApply: opts.canApply !== undefined ? Boolean(opts.canApply) : canApplyNow(),
+      canSave: opts.canSave !== undefined ? Boolean(opts.canSave) : canSaveNow(),
       running: Boolean(opts.running),
       model: modelStatus,
     });
@@ -246,19 +225,9 @@ function openAssist(ctx) {
   };
 
   const bind = () => {
-    ctx.toolbar.querySelectorAll('[data-assist-mode]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        mode = btn.dataset.assistMode === 'edit' ? 'edit' : 'ask';
-        paint({
-          result: mode === 'edit' ? (replacement || answer) : (answer || replacement),
-          canApply: canApplyNow(),
-        });
-        ctx.toolbar.querySelector('.annot-assist-input')?.focus();
-      });
-    });
     ctx.toolbar.querySelector('[data-assist-close]')?.addEventListener('click', () => ctx.hide());
     ctx.toolbar.querySelector('.annot-assist-run')?.addEventListener('click', () => { void run(); });
-    ctx.toolbar.querySelector('.annot-assist-save')?.addEventListener('click', () => { void apply(); });
+    ctx.toolbar.querySelector('.annot-assist-save')?.addEventListener('click', () => { applyNoteAnswer(); });
     const field = ctx.toolbar.querySelector('.annot-assist-input');
     field?.addEventListener('input', () => {
       autosizeInput(field);
@@ -294,22 +263,21 @@ function openAssist(ctx) {
     const field = ctx.toolbar.querySelector('.annot-assist-input');
     const instruction = (field?.value || '').trim();
     if (!instruction) {
-      showToast(mode === 'edit' ? 'Describe the edit' : 'Ask a question');
+      showToast('Ask a question');
       field?.focus();
       return;
     }
     lastInstruction = instruction;
     busy = true;
-    replacement = '';
     answer = '';
     if (abortController) abortController.abort();
     abortController = new AbortController();
-    paint({ running: true, result: '', canApply: false });
+    paint({ running: true, result: '', canSave: false });
 
     let assembled = '';
     try {
       await streamAssist(session.documentID, {
-        mode,
+        mode: 'ask',
         instruction,
         selection,
         prefix,
@@ -332,13 +300,8 @@ function openAssist(ctx) {
           ctx.position(ctx.range || ctx.annotEl);
         }
         if (event.type === 'done') {
-          if (event.mode === 'edit' && event.replacement) {
-            replacement = event.replacement;
-            assembled = event.replacement;
-          } else {
-            answer = (event.text || assembled || '').trim();
-            assembled = answer;
-          }
+          answer = (event.text || assembled || '').trim();
+          assembled = answer;
         }
         if (event.type === 'error') {
           modelStatus = 'bad';
@@ -349,7 +312,7 @@ function openAssist(ctx) {
       paint({
         running: false,
         result: assembled,
-        canApply: canApplyNow(),
+        canSave: canSaveNow(),
       });
     } catch (err) {
       if (err && err.name === 'AbortError') {
@@ -362,49 +325,9 @@ function openAssist(ctx) {
         running: false,
         status: (err && err.message) || 'Assist failed',
         result: assembled,
-        canApply: false,
+        canSave: false,
       });
       showToast((err && err.message) || 'Assist failed');
-    } finally {
-      busy = false;
-    }
-  };
-
-  const applyEdit = async () => {
-    if (!replacement) return;
-    busy = true;
-    paint({ running: true, status: 'Applying…', result: replacement, canApply: false });
-    try {
-      const result = await applyAssistEdit(session.documentID, {
-        selection,
-        replacement,
-        prefix,
-        suffix,
-        body: state.currentMarkdown || '',
-      });
-      const nextBody = result.body || '';
-      if (!nextBody) throw new Error('empty body after apply');
-      state.currentMarkdown = nextBody;
-      session.loadedMarkdown = nextBody;
-      loadDocument(nextBody);
-      applyConversionDisplayLabelIfNeeded(
-        state.droppedFilename || result.filename || '',
-        state.docTitle || '',
-      );
-      session.annotationsDirty = false;
-      session.annotationsMutated = false;
-      emitRender();
-      showToast('Edit applied');
-      ctx.finish();
-    } catch (err) {
-      console.error('membox: assist apply failed', err);
-      paint({
-        running: false,
-        status: err.message || 'Apply failed',
-        result: replacement,
-        canApply: true,
-      });
-      showToast(err.message || 'Apply failed');
     } finally {
       busy = false;
     }
@@ -436,15 +359,6 @@ function openAssist(ctx) {
     }
   };
 
-  const apply = async () => {
-    if (busy) return;
-    if (mode === 'edit') {
-      await applyEdit();
-      return;
-    }
-    applyNoteAnswer();
-  };
-
   bind();
 }
 
@@ -459,7 +373,7 @@ export function initAssist() {
   registerAnnotAction({
     id: 'assist',
     icon: ASSIST_ICON,
-    title: 'Ask / Edit selection',
+    title: 'Ask about selection',
     when: ({ mode, text }) => {
       if (mode !== 'create') return false;
       const value = String(text || '').trim();

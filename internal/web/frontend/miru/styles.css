@@ -1144,25 +1144,6 @@ body.is-snippet .toc {
 
 .annot-assist-spacer { flex: 1; min-width: 4px; }
 
-.annot-assist-seg-btn {
-  appearance: none;
-  border: 0;
-  background: transparent;
-  color: var(--ink-soft);
-  font: inherit;
-  font-size: 10.5px;
-  font-weight: 600;
-  padding: 2px 6px;
-  border-radius: 4px;
-  cursor: pointer;
-  opacity: 0.65;
-}
-.annot-assist-seg-btn.is-on {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  color: var(--accent);
-  opacity: 1;
-}
-
 .annot-assist-close {
   appearance: none;
   border: 0;
@@ -1302,15 +1283,9 @@ body.is-snippet .toc {
   height: auto;
   min-width: 0;
 }
-.annot-toolbar.is-assist button.annot-assist-seg-btn.is-on {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-}
 .annot-toolbar.is-assist button:hover:not(.annot-assist-run):not(.annot-assist-save) {
   background: transparent;
   color: inherit;
-}
-.annot-toolbar.is-assist button.annot-assist-seg-btn:hover {
-  background: color-mix(in srgb, var(--ink) 5%, transparent);
 }
 .annot-toolbar.is-assist button.annot-assist-close:hover {
   background: color-mix(in srgb, var(--ink) 6%, transparent);
