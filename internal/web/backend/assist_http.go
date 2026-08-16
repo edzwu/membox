@@ -42,6 +42,66 @@ func getAssistRunner() *assist.Runner {
 	}
 }
 
+// handleSelectionSummarize summarizes a user-selected excerpt with the local
+// mmd model and returns the ≤140-char summary. The frontend saves it as an
+// annotation note (kind=summary) via the normal note flow.
+func (s *Server) handleSelectionSummarize(writer http.ResponseWriter, request *http.Request, selector string) {
+	if request.Method != http.MethodPost {
+		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	selector = strings.TrimSpace(selector)
+	if selector == "" {
+		http.Error(writer, "missing document selector", http.StatusBadRequest)
+		return
+	}
+	if _, _, err := s.service.ResolveDocument(request.Context(), selector); err != nil {
+		http.Error(writer, err.Error(), http.StatusNotFound)
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(request.Body, 1<<20))
+	if err != nil {
+		http.Error(writer, "reading summarize request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	var payload struct {
+		Selection string `json:"selection"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		http.Error(writer, "invalid summarize payload", http.StatusBadRequest)
+		return
+	}
+	selection := strings.TrimSpace(payload.Selection)
+	if selection == "" {
+		http.Error(writer, "selection is empty", http.StatusBadRequest)
+		return
+	}
+	if len([]rune(selection)) > 4000 {
+		selection = string([]rune(selection)[:4000])
+	}
+	if s.summarizer == nil {
+		http.Error(writer, "local model (mmd) is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	prompt := "你是笔记整理助手。把下面选中的内容压缩成一段 140 字以内的中文总结，保留核心观点，直接输出总结本身，不要前缀不要解释。\n\n选中内容：\n" + selection + "\n\n140字以内的总结："
+	summary, err := s.summarizer.Complete(request.Context(), prompt)
+	if err != nil {
+		http.Error(writer, err.Error(), http.StatusConflict)
+		return
+	}
+	summary = strings.TrimSpace(summary)
+	if summary == "" {
+		http.Error(writer, "local model returned an empty summary", http.StatusConflict)
+		return
+	}
+	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+	writer.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(writer).Encode(map[string]any{
+		"summary": summary,
+		"model":   "local qwen3:14b",
+	})
+}
+
 func (s *Server) handleDocumentAssist(writer http.ResponseWriter, request *http.Request, selector string) {
 	if request.Method != http.MethodPost {
 		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)

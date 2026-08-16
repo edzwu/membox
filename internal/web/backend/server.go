@@ -310,6 +310,10 @@ func (s *Server) handleDocument(writer http.ResponseWriter, request *http.Reques
 		s.handleDocumentAssist(writer, request, strings.TrimSuffix(selector, "/assist"))
 		return
 	}
+	if strings.HasSuffix(selector, "/summarize") {
+		s.handleSelectionSummarize(writer, request, strings.TrimSuffix(selector, "/summarize"))
+		return
+	}
 	if selector == "" {
 		http.Error(writer, "missing document selector", http.StatusBadRequest)
 		return

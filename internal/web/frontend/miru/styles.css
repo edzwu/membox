@@ -1474,6 +1474,30 @@ textarea.annot-note-input {
   pointer-events: none;
 }
 
+/* Local-model selection summaries — green-ish tint, distinct from QA. */
+.annot-note.is-summary {
+  border-left-color: color-mix(in srgb, var(--accent) 70%, #3d9a5f);
+  background: color-mix(in srgb, var(--paper-raised) 88%, #3d9a5f 12%);
+}
+.annot-note.is-summary::before {
+  content: 'SUM';
+  position: absolute;
+  top: 4px;
+  right: 8px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: color-mix(in srgb, var(--accent) 45%, #3d9a5f);
+  opacity: 0.85;
+  pointer-events: none;
+}
+/* The summary is the card: hide the excerpt blockquote (kept in the note file
+   only as the anchor for restore) so a ≤140-char summary reads inline without
+   collapsing or an Open-full-note affordance. */
+.annot-note.is-summary .annot-note-text blockquote {
+  display: none;
+}
+
 .annot-note-body {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);

@@ -249,7 +249,8 @@ function detectNoteKind(noteText) {
 
 function insertNoteCard(id, noteText, kind) {
   const card = document.createElement('aside');
-  card.className = 'annot-note' + (kind === 'qa' ? ' is-qa' : '');
+  const kindClass = kind === 'qa' ? ' is-qa' : kind === 'summary' ? ' is-summary' : '';
+  card.className = 'annot-note' + kindClass;
   card.dataset.annotId = id;
   if (kind) card.dataset.noteKind = kind;
   const body = document.createElement('div');
@@ -341,6 +342,7 @@ export function setNoteOnPassage(entry, annotEl, text, opts = {}) {
     const card = elements.annotationLayer.querySelector(`.annot-note[data-annot-id="${entry.id}"]`);
     if (card) {
       card.classList.toggle('is-qa', kind === 'qa');
+      card.classList.toggle('is-summary', kind === 'summary');
       if (kind) card.dataset.noteKind = kind;
       else delete card.dataset.noteKind;
     }

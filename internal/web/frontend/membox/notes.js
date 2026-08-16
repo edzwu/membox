@@ -82,6 +82,10 @@ function renderLongNotePreviews() {
       if (link) link.remove();
       return;
     }
+    // Summary notes keep the excerpt in the file as the restore anchor, but
+    // the card hides it (.is-summary CSS) so only the ≤140-char summary shows.
+    // They still go through the normal isLong check: a genuinely long summary
+    // collapses with an Open full note link like any other note.
     const lineHeight = parseFloat(getComputedStyle(text).lineHeight) || 16.8;
     const isLong = text.scrollHeight > lineHeight * NOTE_PREVIEW_LINES + 8;
     if (!isLong) {

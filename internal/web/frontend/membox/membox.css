@@ -1274,3 +1274,12 @@ body.is-reviewing .empty,
 body.is-reviewing .main { display: none; }
 body.is-reviewing .toc { display: none; }
 body.is-reviewing #review-feed { margin-top: 8px; }
+
+/* Selection-summarize spinner: the toolbar icon rotates while the local
+   model runs (~30s) so the in-progress state is visible. */
+.membox-summarize-spin {
+  animation: membox-summarize-spin 0.8s linear infinite;
+}
+@keyframes membox-summarize-spin {
+  to { transform: rotate(360deg); }
+}

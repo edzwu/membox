@@ -38,6 +38,7 @@ import { initDictionary } from './dictionary.js';
 import { initSeriesNav } from './series-nav.js';
 import { initWikiLinks } from './wiki-links.js';
 import { initAssist } from './assist.js';
+import { initSelectionSummarize } from './summarize.js';
 import { initReview } from './review.js';
 import { initReadingState, isRestoring, scheduleReadingStateSave } from './reading-state.js';
 import { autoCreateForAnnotations, syncToMembox } from './sync.js';
@@ -64,6 +65,7 @@ initDictionary();
 initSeriesNav();
 initWikiLinks();
 initAssist();
+initSelectionSummarize();
 initReview();
 
 // User edits make the in-memory annotation set authoritative for deletions on

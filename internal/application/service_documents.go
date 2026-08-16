@@ -199,8 +199,9 @@ type SaveAnnotationNoteOptions struct {
 
 // Annotation note kinds stored on annotation_notes.kind and note front matter.
 const (
-	AnnotationNoteKindPlain = ""
-	AnnotationNoteKindQA    = "qa"
+	AnnotationNoteKindPlain   = ""
+	AnnotationNoteKindQA      = "qa"
+	AnnotationNoteKindSummary = "summary"
 )
 
 // NormalizeAnnotationNoteKind returns a canonical kind or empty for plain notes.
@@ -208,6 +209,8 @@ func NormalizeAnnotationNoteKind(kind string) string {
 	switch strings.ToLower(strings.TrimSpace(kind)) {
 	case AnnotationNoteKindQA:
 		return AnnotationNoteKindQA
+	case AnnotationNoteKindSummary:
+		return AnnotationNoteKindSummary
 	default:
 		return AnnotationNoteKindPlain
 	}
