@@ -87,6 +87,20 @@ func Run(ctx context.Context, options Options) error {
 	// Selection assist (ask/edit) uses Pi → deepseek-v4-flash one-shot RPC.
 	userHome, _ := os.UserHomeDir()
 	assistPiPath, _ := service.Store().GetSetting(runCtx, "agent.pi_path")
+	assistPiPath = strings.TrimSpace(assistPiPath)
+	if assistPiPath == "" {
+		// Fall back to common install locations when PATH is minimal (launchd).
+		for _, candidate := range []string{
+			filepath.Join(userHome, ".local/bin/pi"),
+			"/opt/homebrew/bin/pi",
+			"/usr/local/bin/pi",
+		} {
+			if st, err := os.Stat(candidate); err == nil && !st.IsDir() {
+				assistPiPath = candidate
+				break
+			}
+		}
+	}
 	server.SetAssistRunner(&assist.Runner{
 		PiPath:   assistPiPath,
 		Home:     userHome,

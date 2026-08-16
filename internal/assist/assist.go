@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"unicode/utf8"
 )
@@ -68,6 +69,13 @@ func (r Runner) resolve() (piPath, provider, model string) {
 	piPath = strings.TrimSpace(r.PiPath)
 	if piPath == "" {
 		piPath = "pi"
+	}
+	// Prefer an absolute path so GUI/launchd companions without a full login
+	// PATH still find Homebrew pi instead of silently running a stub/none.
+	if !filepath.IsAbs(piPath) {
+		if resolved, err := exec.LookPath(piPath); err == nil {
+			piPath = resolved
+		}
 	}
 	provider = strings.TrimSpace(r.Provider)
 	if provider == "" {
