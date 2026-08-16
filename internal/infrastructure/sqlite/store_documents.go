@@ -201,9 +201,10 @@ func (s *Store) UpsertAnnotationNote(ctx context.Context, record port.Annotation
 	if updatedAt.IsZero() {
 		updatedAt = createdAt
 	}
+	kind := strings.TrimSpace(record.Kind)
 	_, err := s.db.ExecContext(ctx, `INSERT INTO annotation_notes(
 note_document_id,target_document_id,anchor_start,anchor_prefix,anchor_suffix,
-highlight,underline,strikethrough,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)
+highlight,underline,strikethrough,kind,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(note_document_id) DO UPDATE SET
  target_document_id=excluded.target_document_id,
  anchor_start=excluded.anchor_start,
@@ -212,9 +213,10 @@ ON CONFLICT(note_document_id) DO UPDATE SET
  highlight=excluded.highlight,
  underline=excluded.underline,
  strikethrough=excluded.strikethrough,
+ kind=excluded.kind,
  updated_at=excluded.updated_at`,
 		record.NoteDocumentID, record.TargetDocumentID, record.Start, record.Prefix, record.Suffix,
-		record.Highlight, record.Underline, record.Strikethrough, millis(createdAt), millis(updatedAt))
+		record.Highlight, record.Underline, record.Strikethrough, kind, millis(createdAt), millis(updatedAt))
 	if err != nil {
 		return fmt.Errorf("saving annotation note %s: %w", record.NoteDocumentID, err)
 	}
@@ -223,7 +225,7 @@ ON CONFLICT(note_document_id) DO UPDATE SET
 
 func (s *Store) ListAnnotationNotes(ctx context.Context, targetDocumentID catalog.DocumentID) ([]port.AnnotationNoteRecord, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT a.note_document_id,a.target_document_id,a.anchor_start,a.anchor_prefix,a.anchor_suffix,
-a.highlight,a.underline,a.strikethrough,a.created_at,a.updated_at
+a.highlight,a.underline,a.strikethrough,COALESCE(a.kind,''),a.created_at,a.updated_at
 FROM annotation_notes a
 JOIN document_locations l ON l.document_id=a.note_document_id
 WHERE a.target_document_id=? AND l.status='active'
@@ -239,7 +241,7 @@ ORDER BY a.anchor_start,a.created_at,a.note_document_id`, targetDocumentID)
 		var highlight, underline, strikethrough int
 		var createdAt, updatedAt int64
 		if err := rows.Scan(&record.NoteDocumentID, &record.TargetDocumentID, &record.Start, &record.Prefix, &record.Suffix,
-			&highlight, &underline, &strikethrough, &createdAt, &updatedAt); err != nil {
+			&highlight, &underline, &strikethrough, &record.Kind, &createdAt, &updatedAt); err != nil {
 			return nil, err
 		}
 		record.Highlight = highlight != 0
@@ -257,9 +259,9 @@ func (s *Store) GetAnnotationNote(ctx context.Context, noteDocumentID catalog.Do
 	var highlight, underline, strikethrough int
 	var createdAt, updatedAt int64
 	err := s.db.QueryRowContext(ctx, `SELECT note_document_id,target_document_id,anchor_start,anchor_prefix,anchor_suffix,
-highlight,underline,strikethrough,created_at,updated_at FROM annotation_notes WHERE note_document_id=?`, noteDocumentID).
+highlight,underline,strikethrough,COALESCE(kind,''),created_at,updated_at FROM annotation_notes WHERE note_document_id=?`, noteDocumentID).
 		Scan(&record.NoteDocumentID, &record.TargetDocumentID, &record.Start, &record.Prefix, &record.Suffix,
-			&highlight, &underline, &strikethrough, &createdAt, &updatedAt)
+			&highlight, &underline, &strikethrough, &record.Kind, &createdAt, &updatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return port.AnnotationNoteRecord{}, false, nil
 	}

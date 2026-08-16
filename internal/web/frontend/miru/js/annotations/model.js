@@ -140,10 +140,19 @@ function buildNoteBtn(kind) {
   return b;
 }
 
-function insertNoteCard(id, noteText) {
+function detectNoteKind(noteText) {
+  const text = String(noteText || '');
+  if (/\*\*Q:\*\*|\*\*Q\*\*:/.test(text) || /^---[\s\S]*?\nkind:\s*["']?qa["']?/m.test(text)) {
+    return 'qa';
+  }
+  return '';
+}
+
+function insertNoteCard(id, noteText, kind) {
   const card = document.createElement('aside');
-  card.className = 'annot-note';
+  card.className = 'annot-note' + (kind === 'qa' ? ' is-qa' : '');
   card.dataset.annotId = id;
+  if (kind) card.dataset.noteKind = kind;
   const body = document.createElement('div');
   body.className = 'annot-note-body';
   const text = document.createElement('div');
@@ -173,7 +182,7 @@ export function applyAnnotationRange(range, flags) {
   wrapRange(range, span);
   if (flags.note) {
     attachNoteBadge(span, id);
-    insertNoteCard(id, flags.note);
+    insertNoteCard(id, flags.note, flags.kind || detectNoteKind(flags.note));
   }
   state.annotations.push({
     id,
@@ -182,6 +191,8 @@ export function applyAnnotationRange(range, flags) {
     ul: !!flags.ul,
     sl: !!flags.sl,
     note: flags.note || null,
+    // kind: '' plain note, 'qa' assist Q&A — persisted on annotation_notes.kind
+    kind: flags.kind || detectNoteKind(flags.note) || null,
     ref: flags.ref || null,
   });
   refreshNoteNumbers();
@@ -210,22 +221,35 @@ export function applyMark(type, range) {
   });
 }
 
-export function applyNote(range, noteText) {
-  applyAnnotationRange(range, { hl: false, ul: false, note: noteText });
+export function applyNote(range, noteText, opts = {}) {
+  applyAnnotationRange(range, {
+    hl: false,
+    ul: false,
+    note: noteText,
+    kind: opts.kind || detectNoteKind(noteText) || null,
+  });
 }
 
 // Add a note to (or update the note on) an existing annotated passage.
-export function setNoteOnPassage(entry, annotEl, text) {
+export function setNoteOnPassage(entry, annotEl, text, opts = {}) {
+  const kind = opts.kind || detectNoteKind(text) || entry.kind || '';
   if (entry.note) {
     entry.note = text;
+    entry.kind = kind || null;
     const card = elements.annotationLayer.querySelector(`.annot-note[data-annot-id="${entry.id}"]`);
+    if (card) {
+      card.classList.toggle('is-qa', kind === 'qa');
+      if (kind) card.dataset.noteKind = kind;
+      else delete card.dataset.noteKind;
+    }
     const textEl = card && card.querySelector('.annot-note-text');
     if (textEl) renderNoteText(textEl, text);
   } else {
     entry.note = text;
+    entry.kind = kind || null;
     annotEl.classList.add('annot-note-ref');
     attachNoteBadge(annotEl, entry.id);
-    insertNoteCard(entry.id, text);
+    insertNoteCard(entry.id, text, kind);
     // The annotated passage is already in view. Highlight the new pair without
     // moving the document to a rail/stack card that may sit near the page end.
     requestAnimationFrame(() => focusNote(entry.id, { duration: 1600 }));

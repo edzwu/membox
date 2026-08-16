@@ -1481,6 +1481,24 @@ textarea.annot-note-input {
   border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
 }
 
+/* Assist Q&A notes — distinct left rail so they read as dialogue, not scribbles. */
+.annot-note.is-qa {
+  border-left-color: color-mix(in srgb, var(--accent) 70%, #5b7cfa);
+  background: color-mix(in srgb, var(--paper-raised) 88%, #5b7cfa 12%);
+}
+.annot-note.is-qa::before {
+  content: 'QA';
+  position: absolute;
+  top: 4px;
+  right: 8px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: color-mix(in srgb, var(--accent) 55%, #5b7cfa);
+  opacity: 0.85;
+  pointer-events: none;
+}
+
 .annot-note-body {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);

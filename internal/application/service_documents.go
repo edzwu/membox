@@ -193,6 +193,50 @@ type SaveAnnotationNoteOptions struct {
 	Highlight      bool
 	Underline      bool
 	Strikethrough  bool
+	// Kind is optional note subtype: "" (plain) or "qa" (assist Q&A).
+	Kind string
+}
+
+// Annotation note kinds stored on annotation_notes.kind and note front matter.
+const (
+	AnnotationNoteKindPlain = ""
+	AnnotationNoteKindQA    = "qa"
+)
+
+// NormalizeAnnotationNoteKind returns a canonical kind or empty for plain notes.
+func NormalizeAnnotationNoteKind(kind string) string {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case AnnotationNoteKindQA:
+		return AnnotationNoteKindQA
+	default:
+		return AnnotationNoteKindPlain
+	}
+}
+
+// DetectAnnotationNoteKind infers kind from note Markdown (front matter or Q: body).
+func DetectAnnotationNoteKind(body string) string {
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return AnnotationNoteKindPlain
+	}
+	if strings.HasPrefix(body, "---") {
+		rest := body[3:]
+		if end := strings.Index(rest, "\n---"); end >= 0 {
+			fm := rest[:end]
+			for _, line := range strings.Split(fm, "\n") {
+				line = strings.TrimSpace(line)
+				if strings.HasPrefix(line, "kind:") {
+					val := strings.TrimSpace(strings.TrimPrefix(line, "kind:"))
+					val = strings.Trim(val, `"'`)
+					return NormalizeAnnotationNoteKind(val)
+				}
+			}
+		}
+	}
+	if strings.Contains(body, "**Q:**") || strings.Contains(body, "**Q**:") {
+		return AnnotationNoteKindQA
+	}
+	return AnnotationNoteKindPlain
 }
 
 type SaveAnnotationNoteResult struct {
@@ -269,19 +313,27 @@ func (s *Service) SaveAnnotationNote(ctx context.Context, opts SaveAnnotationNot
 	if _, edgeErr = s.store.AddEdge(ctx, edge); edgeErr != nil {
 		return SaveAnnotationNoteResult{}, edgeErr
 	}
+	kind := NormalizeAnnotationNoteKind(opts.Kind)
+	if kind == "" && strings.TrimSpace(opts.Body) != "" {
+		kind = DetectAnnotationNoteKind(opts.Body)
+	}
 	record := port.AnnotationNoteRecord{
 		NoteDocumentID: note.ID, TargetDocumentID: target.ID, Start: opts.Start,
 		Prefix: opts.Prefix, Suffix: opts.Suffix, Highlight: opts.Highlight,
-		Underline: opts.Underline, Strikethrough: opts.Strikethrough,
+		Underline: opts.Underline, Strikethrough: opts.Strikethrough, Kind: kind,
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if existing, ok, getErr := s.store.GetAnnotationNote(ctx, note.ID); getErr != nil {
 		return SaveAnnotationNoteResult{}, getErr
 	} else if ok {
 		record.CreatedAt = existing.CreatedAt
+		if kind == "" {
+			record.Kind = existing.Kind
+		}
 		if !contentChanged && existing.TargetDocumentID == record.TargetDocumentID &&
 			existing.Start == record.Start && existing.Prefix == record.Prefix && existing.Suffix == record.Suffix &&
-			existing.Highlight == record.Highlight && existing.Underline == record.Underline && existing.Strikethrough == record.Strikethrough {
+			existing.Highlight == record.Highlight && existing.Underline == record.Underline && existing.Strikethrough == record.Strikethrough &&
+			existing.Kind == record.Kind {
 			return SaveAnnotationNoteResult{Record: existing, Note: note, Path: absolute}, nil
 		}
 	}

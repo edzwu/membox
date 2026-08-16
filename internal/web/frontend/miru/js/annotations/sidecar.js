@@ -66,6 +66,8 @@ function captureAnnotationAnchor(entry, canonicalText) {
     underline: !!entry.ul,
     strikethrough: !!entry.sl,
     note: entry.note || null,
+    // Note subtype: 'qa' for assist Q&A; omitted/empty for plain notes.
+    kind: entry.kind || null,
     // Host-neutral identity for matching async persistence responses. `ref` is
     // an optional durable join key assigned by hosts such as membox.
     clientId: entry.clientId || null,
@@ -154,6 +156,7 @@ export function parseAnnotationSidecar(text) {
       underline,
       strikethrough,
       note,
+      kind: typeof item.kind === 'string' && item.kind === 'qa' ? 'qa' : '',
       clientId: typeof item.clientId === 'string' ? item.clientId.slice(0, 128) : '',
       ref: typeof item.ref === 'string' ? item.ref.slice(0, 64) : '',
     };
@@ -352,6 +355,7 @@ export function restoreAnnotationSidecar(data) {
           ul: anchor.underline,
           sl: anchor.strikethrough,
           note: anchor.note,
+          kind: anchor.kind || null,
           clientId: anchor.clientId || null,
           ref: anchor.ref || null,
           notify: false,

@@ -12,7 +12,7 @@ func TestExcerptRoundTripBindsMultilineSelections(t *testing.T) {
 	browserExact := "c := make(chan int)  // Allocate a channel.\n// Start the sort in a goroutine.\ngo func() {\n    list.Sort()\n    c <- 1\n}()\n<-c"
 
 	// What the backend writes into the note document.
-	noteBody := selectionNoteMarkdown("", browserExact, "像 C++ 的 future")
+	noteBody := selectionNoteMarkdown("", browserExact, "像 C++ 的 future", "")
 
 	excerpt, note, _ := parseClipBody(noteBody)
 	if note != "像 C++ 的 future" {

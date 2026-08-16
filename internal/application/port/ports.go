@@ -134,8 +134,11 @@ type AnnotationNoteRecord struct {
 	Highlight        bool
 	Underline        bool
 	Strikethrough    bool
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	// Kind distinguishes note subtypes in the DB (empty = plain selection note,
+	// "qa" = assist Q&A). Mirrored in note Markdown front matter as kind:.
+	Kind      string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 type DocumentReadState struct {

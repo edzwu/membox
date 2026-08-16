@@ -143,6 +143,7 @@ CREATE TABLE IF NOT EXISTS annotation_notes (
     highlight INTEGER NOT NULL DEFAULT 0,
     underline INTEGER NOT NULL DEFAULT 0,
     strikethrough INTEGER NOT NULL DEFAULT 0,
+    kind TEXT NOT NULL DEFAULT '',
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
@@ -443,7 +444,29 @@ CREATE TABLE IF NOT EXISTS document_trash (
 `); err != nil {
 		return fmt.Errorf("migrating document_trash: %w", err)
 	}
+	if err := s.migrateAnnotationNoteKind(); err != nil {
+		return err
+	}
 	return s.migrateAgentSessions()
+}
+
+// migrateAnnotationNoteKind adds annotation_notes.kind so assist Q&A notes
+// are distinguishable from plain selection notes at the database layer.
+func (s *Store) migrateAnnotationNoteKind() error {
+	var hasKind int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('annotation_notes') WHERE name='kind'`).Scan(&hasKind)
+	if err != nil {
+		return fmt.Errorf("inspecting annotation_notes.kind: %w", err)
+	}
+	if hasKind == 0 {
+		if _, err := s.db.Exec(`ALTER TABLE annotation_notes ADD COLUMN kind TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("adding annotation_notes.kind: %w", err)
+		}
+	}
+	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS annotation_notes_kind ON annotation_notes(kind)`); err != nil {
+		return fmt.Errorf("indexing annotation_notes.kind: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) migrateAgentSessions() error {

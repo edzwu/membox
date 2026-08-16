@@ -424,9 +424,9 @@ function openAssist(ctx) {
       if (ctx.annotEl && ctx.annotEl.isConnected) {
         const entry = findAnnot(ctx.annotEl.dataset.annotId);
         if (!entry) throw new Error('annotation missing');
-        setNoteOnPassage(entry, ctx.annotEl, noteText);
+        setNoteOnPassage(entry, ctx.annotEl, noteText, { kind: 'qa' });
       } else {
-        applyNote(ctx.range, noteText);
+        applyNote(ctx.range, noteText, { kind: 'qa' });
       }
       showToast('Saved as note');
       ctx.finish();

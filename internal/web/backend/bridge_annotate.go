@@ -130,8 +130,10 @@ type annotationAnchorPayload struct {
 	Underline     bool   `json:"underline"`
 	Strikethrough bool   `json:"strikethrough"`
 	Note          any    `json:"note"`
-	ClientID      string `json:"clientId,omitempty"`
-	Ref           string `json:"ref,omitempty"`
+	// Kind is the note subtype: "" plain selection note, "qa" assist Q&A.
+	Kind     string `json:"kind,omitempty"`
+	ClientID string `json:"clientId,omitempty"`
+	Ref      string `json:"ref,omitempty"`
 }
 
 type annotationProgressPayload struct {
@@ -244,12 +246,18 @@ func annotationMap(record port.AnnotationNoteRecord, exact, note string) map[str
 	if strings.TrimSpace(note) != "" {
 		noteValue = note
 	}
-	return map[string]any{
+	out := map[string]any{
 		"start": record.Start, "end": record.Start + jsStringLength(exact), "exact": exact,
 		"prefix": record.Prefix, "suffix": record.Suffix,
 		"highlight": record.Highlight, "underline": record.Underline, "strikethrough": record.Strikethrough,
 		"note": noteValue, "ref": string(record.NoteDocumentID),
 	}
+	if kind := application.NormalizeAnnotationNoteKind(record.Kind); kind != "" {
+		out["kind"] = kind
+	} else if kind := application.DetectAnnotationNoteKind(note); kind != "" {
+		out["kind"] = kind
+	}
+	return out
 }
 
 // reconcileAnnotationNotes materializes every user annotation as a Markdown
@@ -314,14 +322,21 @@ func (s *Server) reconcileAnnotationNotes(ctx context.Context, pageID string, pa
 			}
 		}
 
-		body := selectionNoteMarkdown("", exact, note)
+		kind := application.NormalizeAnnotationNoteKind(anchor.Kind)
+		if kind == "" {
+			kind = application.DetectAnnotationNoteKind(note)
+		}
+		body := selectionNoteMarkdown("", exact, note, kind)
 		if ref != "" {
 			if current, readErr := s.service.ReadDocument(ctx, ref); readErr == nil {
 				oldExact, oldNote, _ := parseClipBody(string(current))
 				if denseExcerpt(oldExact) == denseExcerpt(exact) && strings.TrimSpace(oldNote) == note {
 					body = "" // no content churn; update anchor metadata only
+					if kind == "" {
+						kind = application.DetectAnnotationNoteKind(string(current))
+					}
 				} else {
-					body = selectionNoteMarkdown(string(current), exact, note)
+					body = selectionNoteMarkdown(string(current), exact, note, kind)
 				}
 			} else {
 				ref = ""
@@ -332,6 +347,7 @@ func (s *Server) reconcileAnnotationNotes(ctx context.Context, pageID string, pa
 			TargetSelector: pageID, NoteSelector: ref, Title: annotationNoteTitle(exact), Body: body,
 			Start: anchor.Start, Prefix: anchor.Prefix, Suffix: anchor.Suffix,
 			Highlight: anchor.Highlight, Underline: anchor.Underline, Strikethrough: anchor.Strikethrough,
+			Kind: kind,
 		})
 		if saveErr != nil {
 			return nil, 0, false, saveErr
@@ -408,7 +424,9 @@ func annotationNoteTitle(exact string) string {
 
 // selectionNoteMarkdown updates the human-readable note while preserving any
 // existing front matter and Source footer written by the browser extension.
-func selectionNoteMarkdown(existing, exact, note string) string {
+// kind is written into front matter (kind: qa) so notes remain classifiable
+// even outside annotation_notes rows.
+func selectionNoteMarkdown(existing, exact, note, kind string) string {
 	frontMatter := ""
 	sourceFooter := ""
 	content := existing
@@ -421,6 +439,11 @@ func selectionNoteMarkdown(existing, exact, note string) string {
 			content = content[cut:]
 		}
 	}
+	kind = application.NormalizeAnnotationNoteKind(kind)
+	if kind == "" {
+		kind = application.DetectAnnotationNoteKind(note)
+	}
+	frontMatter = ensureNoteKindFrontMatter(frontMatter, kind)
 	for _, line := range strings.Split(content, "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "Source:") {
 			sourceFooter = strings.TrimSpace(line)
@@ -449,6 +472,68 @@ func selectionNoteMarkdown(existing, exact, note string) string {
 	}
 	b.WriteByte('\n')
 	return b.String()
+}
+
+// ensureNoteKindFrontMatter sets or clears kind: in YAML front matter.
+func ensureNoteKindFrontMatter(frontMatter, kind string) string {
+	kind = application.NormalizeAnnotationNoteKind(kind)
+	if kind == "" {
+		// Drop kind from existing FM if present.
+		if frontMatter == "" {
+			return ""
+		}
+		lines := strings.Split(strings.TrimSpace(frontMatter), "\n")
+		var kept []string
+		for _, line := range lines {
+			trim := strings.TrimSpace(line)
+			if strings.HasPrefix(trim, "kind:") {
+				continue
+			}
+			kept = append(kept, line)
+		}
+		out := strings.TrimSpace(strings.Join(kept, "\n"))
+		if out == "" || out == "---\n---" || out == "---" {
+			return ""
+		}
+		if !strings.HasSuffix(out, "\n") {
+			out += "\n"
+		}
+		return out + "\n"
+	}
+	line := "kind: \"" + kind + "\""
+	if frontMatter == "" {
+		return "---\n" + line + "\n---\n\n"
+	}
+	// Inject/replace after opening ---
+	trimmed := strings.TrimSpace(frontMatter)
+	if !strings.HasPrefix(trimmed, "---") {
+		return "---\n" + line + "\n---\n\n" + frontMatter
+	}
+	body := strings.TrimPrefix(trimmed, "---")
+	body = strings.TrimPrefix(body, "\n")
+	end := strings.LastIndex(body, "---")
+	inner := body
+	if end >= 0 {
+		inner = body[:end]
+	}
+	var kept []string
+	hasKind := false
+	for _, l := range strings.Split(inner, "\n") {
+		trim := strings.TrimSpace(l)
+		if trim == "" {
+			continue
+		}
+		if strings.HasPrefix(trim, "kind:") {
+			kept = append(kept, line)
+			hasKind = true
+			continue
+		}
+		kept = append(kept, l)
+	}
+	if !hasKind {
+		kept = append([]string{line}, kept...)
+	}
+	return "---\n" + strings.Join(kept, "\n") + "\n---\n\n"
 }
 
 // ---------------------------------------------------------------------------
