@@ -99,32 +99,39 @@ export function buildToc(headings) {
   const list = document.createElement('ul');
   list.className = 'toc-list';
 
-  // Two-level outline: h3 headings nest under their preceding h2. Sublists
-  // are progressive-disclosed — collapsed by default, expanded by the
-  // scrollspy while that section is being read (see setActiveToc).
-  let group = null;
+  // Nest by heading level (H1→H2→H3). Sublists use progressive disclosure:
+  // collapsed until scrollspy marks an ancestor group expanded (setActiveToc).
+  // Supports lecture notes that use H1+H3 (no H2), not only H2+H3.
+  // stack frames: { level, li, subList }
+  const stack = [{ level: 0, li: null, subList: list }];
 
   headings.forEach((heading) => {
+    const level = Number(heading.tagName.slice(1)) || 1;
     const link = makeTocLink(heading);
     const li = document.createElement('li');
     li.appendChild(link);
 
-    if (heading.tagName === 'H3' && group) {
-      if (!group.subList) {
-        group.li.classList.add('toc-group');
+    while (stack.length > 1 && stack[stack.length - 1].level >= level) {
+      stack.pop();
+    }
+    const parent = stack[stack.length - 1];
+
+    if (parent.level === 0) {
+      parent.subList.appendChild(li);
+    } else {
+      if (!parent.childList) {
+        parent.li.classList.add('toc-group');
         const wrap = document.createElement('div');
         wrap.className = 'toc-sub-wrap';
-        group.subList = document.createElement('ul');
-        group.subList.className = 'toc-sub';
-        wrap.appendChild(group.subList);
-        group.li.appendChild(wrap);
+        parent.childList = document.createElement('ul');
+        parent.childList.className = 'toc-sub';
+        wrap.appendChild(parent.childList);
+        parent.li.appendChild(wrap);
       }
-      group.subList.appendChild(li);
-      return;
+      parent.childList.appendChild(li);
     }
 
-    list.appendChild(li);
-    group = heading.tagName === 'H2' ? { li, subList: null } : null;
+    stack.push({ level, li, childList: null });
   });
 
   elements.tocNav.appendChild(title);
