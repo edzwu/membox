@@ -107,7 +107,7 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.viewMode == viewTree {
 			m.previewFocused = true
 			m.statusMessage = ""
-			m.resize()
+			return m, m.resize()
 		}
 		return m, nil
 	case "ctrl+t":
@@ -212,7 +212,7 @@ func (m Model) updatePreviewNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "tab", "esc", "q", "left", "h":
 		m.previewFocused = false
 		m.statusMessage = ""
-		m.resize()
+		return m, m.resize()
 	case "up", "k":
 		m.preview.LineUp(1)
 	case "down", "j":
@@ -1047,17 +1047,39 @@ func listDocumentsCmd(ctx context.Context, app App, sequence uint64) tea.Cmd {
 		return documentsMsg{sequence: sequence, documents: documents, err: err}
 	}
 }
-func previewCmd(ctx context.Context, app App, selector string) tea.Cmd {
+
+// previewMaxBytes caps how much of a document we paint in the side pane so a
+// multi-hundred-KB transcript never stalls navigation.
+const previewMaxBytes = 96 << 10
+
+func previewCmd(ctx context.Context, app App, selector string, width int, generation uint64) tea.Cmd {
 	return func() tea.Msg {
 		location, err := app.ResolveDocumentLocation(ctx, membox.ResolveLocationQuery{Selector: selector})
 		if err != nil {
-			return previewMsg{documentID: selector, err: err}
+			return previewMsg{documentID: selector, generation: generation, err: err}
 		}
 		if strings.EqualFold(filepath.Ext(location.Path), ".pdf") {
-			return previewMsg{documentID: selector, content: "PDF document\n\n" + location.Path + "\n\nPress Enter to open with the system viewer."}
+			plain := "PDF document\n\n" + location.Path + "\n\nPress Enter to open with the system viewer."
+			rendered := renderMarkdownPreview(plain, width)
+			return previewMsg{
+				documentID: selector, content: plain, rendered: rendered,
+				width: width, generation: generation,
+			}
 		}
 		body, err := app.ReadDocument(ctx, membox.ReadDocumentQuery{Selector: selector})
-		return previewMsg{documentID: selector, content: string(body), err: err}
+		if err != nil {
+			return previewMsg{documentID: selector, generation: generation, err: err}
+		}
+		raw := string(body)
+		if len(raw) > previewMaxBytes {
+			raw = raw[:previewMaxBytes] + "\n\n… (preview truncated)\n"
+		}
+		// Lightweight line renderer (not glamour) — still off the UI goroutine.
+		rendered := renderMarkdownPreview(raw, width)
+		return previewMsg{
+			documentID: selector, content: raw, rendered: rendered,
+			width: width, generation: generation,
+		}
 	}
 }
 func scanCmd(ctx context.Context, app App) tea.Cmd {

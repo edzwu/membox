@@ -366,7 +366,7 @@ func TestModel_PinnedRowStaysVisibleWhenDetailsReduceTreeHeight(t *testing.T) {
 	}
 }
 
-func TestModel_PreviewShowsSummaryInsteadOfBody(t *testing.T) {
+func TestModel_PreviewShowsBodyNotIndexSummary(t *testing.T) {
 	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
 	model.items = documentItems([]membox.DocumentView{
 		{ID: "with-summary", Path: "/tmp/a.md", Summary: "要点总结"},
@@ -374,10 +374,14 @@ func TestModel_PreviewShowsSummaryInsteadOfBody(t *testing.T) {
 	})
 	model.refreshFilter()
 
+	// Index summaries stay out of the preview pane; body is rendered instead.
 	updated, _ := model.Update(previewMsg{documentID: "with-summary", content: "# 原文 body"})
 	model = updated.(Model)
-	if model.rawContent != "要点总结" {
-		t.Fatalf("preview must show the summary, got %q", model.rawContent)
+	if model.rawContent != "# 原文 body" {
+		t.Fatalf("preview must keep the Markdown body, got %q", model.rawContent)
+	}
+	if !strings.Contains(model.preview.View(), "原文") {
+		t.Fatalf("rendered preview missing body: %q", model.preview.View())
 	}
 
 	updated, _ = model.Update(previewMsg{documentID: "without", content: "# body only"})
@@ -557,7 +561,14 @@ func TestModel_PDFPreviewNeverReadsBinaryIntoTerminal(t *testing.T) {
 	}})
 	model.refreshFilter()
 
-	message := model.loadPreview()()
+	// loadPreview debounces; flush the tick then the real load cmd.
+	debounced := model.loadPreview()
+	updated, loadCmd := model.Update(debounced())
+	model = updated.(Model)
+	if loadCmd == nil {
+		t.Fatal("expected preview load command after debounce")
+	}
+	message := loadCmd()
 	preview, ok := message.(previewMsg)
 	if !ok {
 		t.Fatalf("loadPreview returned %T, want previewMsg", message)
@@ -569,7 +580,7 @@ func TestModel_PDFPreviewNeverReadsBinaryIntoTerminal(t *testing.T) {
 		t.Fatalf("unsafe PDF preview: %+v", preview)
 	}
 
-	updated, _ := model.Update(preview)
+	updated, _ = model.Update(preview)
 	model = updated.(Model)
 	view := model.treePreviewView()
 	if !strings.Contains(view, "paper.pdf") || !strings.Contains(view, "PDF document") {

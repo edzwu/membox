@@ -131,16 +131,19 @@ type Model struct {
 	preview viewport.Model
 	spinner spinner.Model
 
-	items          []item
-	filtered       []item
-	dateFilters    []dateFilter
-	textFilters    []textFilter
-	filterSequence uint64
-	selected       int
-	scrollTop      int
-	boardScrollY   int
-	rawContent     string
-	rawDocumentID  string
+	items           []item
+	filtered        []item
+	dateFilters     []dateFilter
+	textFilters     []textFilter
+	filterSequence  uint64
+	selected        int
+	scrollTop       int
+	boardScrollY    int
+	rawContent      string
+	rawDocumentID   string
+	renderedPreview string // styled preview for rawContent at renderedWidth
+	renderedWidth   int
+	previewGen      uint64 // drops stale async preview renders
 
 	inputVisible   bool
 	inputActive    bool
@@ -261,7 +264,10 @@ type settingSavedMsg struct {
 }
 type previewMsg struct {
 	documentID string
-	content    string
+	content    string // raw Markdown (or plain placeholder)
+	rendered   string // pre-rendered ANSI at width (may be empty on error path)
+	width      int
+	generation uint64
 	err        error
 }
 type scanMsg struct {
@@ -437,7 +443,9 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := message.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		m.resize()
+		if cmd := m.resize(); cmd != nil {
+			commands = append(commands, cmd)
+		}
 	case tea.KeyMsg:
 		if m.webQuitPrompt {
 			return m.updateWebQuitPrompt(msg)
@@ -594,7 +602,17 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
+	case previewDebounceMsg:
+		if msg.generation == m.previewGen {
+			if cmd := m.runPreviewLoad(msg.generation); cmd != nil {
+				commands = append(commands, cmd)
+			}
+		}
 	case previewMsg:
+		// Ignore outdated async renders from a previous selection/width.
+		if msg.generation != 0 && msg.generation != m.previewGen {
+			break
+		}
 		m.err = msg.err
 		if msg.err == nil {
 			m.rawContent = msg.content
@@ -603,11 +621,14 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			} else if document, ok := m.selectedDocument(); ok {
 				m.rawDocumentID = document.ID
 			}
-			// Documents with a summary show the summary instead of the
-			// Markdown body: the preview is the at-a-glance pane.
-			if summary := m.summaryFor(m.rawDocumentID); summary != "" {
-				m.rawContent = summary
+			if msg.rendered != "" {
+				m.renderedPreview = msg.rendered
+				m.renderedWidth = msg.width
+			} else {
+				m.renderedPreview = ""
+				m.renderedWidth = 0
 			}
+			// Cheap: paint cached ANSI; styling runs only in previewCmd.
 			m.applyPreviewContent()
 		}
 	case scanMsg:
@@ -874,33 +895,48 @@ func (m Model) selectedDocument() (membox.DocumentView, bool) {
 	return m.filtered[m.selected].document, true
 }
 
-// summaryFor returns the document's stored summary, or "" when there is
-// none. The preview pane shows the summary in place of the Markdown body.
-func (m *Model) summaryFor(documentID string) string {
-	if documentID == "" {
-		return ""
-	}
-	for _, candidate := range m.items {
-		if candidate.document.ID == documentID {
-			return strings.TrimSpace(candidate.document.Summary)
-		}
-	}
-	return ""
+// previewDebounce is how long we wait after the last selection change before
+// reading/rendering the document. Keeps arrow-key navigation fluid.
+const previewDebounce = 60 * time.Millisecond
+
+type previewDebounceMsg struct{ generation uint64 }
+
+func (m *Model) loadPreview() tea.Cmd {
+	m.previewGen++
+	gen := m.previewGen
+	// Debounce: only the latest generation after idle fires the real load.
+	return tea.Tick(previewDebounce, func(time.Time) tea.Msg {
+		return previewDebounceMsg{generation: gen}
+	})
 }
 
-func (m Model) loadPreview() tea.Cmd {
+func (m *Model) runPreviewLoad(gen uint64) tea.Cmd {
+	if gen != m.previewGen {
+		return nil
+	}
+	width := m.preview.Width
+	if width <= 0 {
+		_, width = m.layoutWidths()
+	}
 	if m.fullscreen && m.fullDocument != nil {
-		return previewCmd(m.ctx, m.app, m.fullDocument.ID)
+		return previewCmd(m.ctx, m.app, m.fullDocument.ID, width, gen)
 	}
 	if document, ok := m.selectedDocument(); ok {
 		// Always resolve the media type before reading. In particular, never
 		// send PDF binary bytes to a terminal: embedded control sequences can
 		// corrupt the TUI in addition to rendering as mojibake.
-		return previewCmd(m.ctx, m.app, document.ID)
+		return previewCmd(m.ctx, m.app, document.ID, width, gen)
 	}
-	return func() tea.Msg { return previewMsg{content: previewPlaceholder("No document selected.")} }
+	placeholder := previewPlaceholder("No document selected.")
+	return func() tea.Msg {
+		return previewMsg{
+			content: placeholder, rendered: placeholder, width: width, generation: gen,
+		}
+	}
 }
 
+// applyPreviewContent paints the viewport from the cached render. It must stay
+// cheap — Markdown styling runs only inside previewCmd / rewrapPreviewCmd.
 func (m *Model) applyPreviewContent() {
 	query := ""
 	if m.inputVisible {
@@ -909,14 +945,40 @@ func (m *Model) applyPreviewContent() {
 	if query == "" && len(m.textFilters) > 0 {
 		query = m.textFilters[len(m.textFilters)-1].Value
 	}
-	content := highlightQuery(m.rawContent, query)
+	rendered := m.renderedPreview
+	if rendered == "" {
+		rendered = m.rawContent // last resort: raw text, still no glamour here
+	}
+	content := highlightQuery(rendered, query)
 	m.preview.SetContent(content)
-	if line := firstMatchLine(m.rawContent, query); line >= 0 {
+	if line := firstMatchLine(rendered, query); line >= 0 {
 		target := max(0, line-m.preview.Height/2)
 		m.preview.SetYOffset(target)
 		return
 	}
 	m.preview.GotoTop()
+}
+
+// rewrapPreviewCmd re-styles Markdown off the UI thread when the pane width changes.
+func (m *Model) rewrapPreviewCmd() tea.Cmd {
+	if strings.TrimSpace(m.rawContent) == "" {
+		return nil
+	}
+	m.previewGen++
+	gen := m.previewGen
+	width := m.preview.Width
+	if width <= 0 {
+		_, width = m.layoutWidths()
+	}
+	raw := m.rawContent
+	docID := m.rawDocumentID
+	return func() tea.Msg {
+		rendered := renderMarkdownPreview(raw, width)
+		return previewMsg{
+			documentID: docID, content: raw, rendered: rendered,
+			width: width, generation: gen,
+		}
+	}
 }
 
 func highlightQuery(content, query string) string {
@@ -957,7 +1019,7 @@ func firstMatchLine(content, query string) int {
 	return -1
 }
 
-func (m *Model) resize() {
+func (m *Model) resize() tea.Cmd {
 	if m.fullscreen {
 		m.preview.Width = max(20, m.width-2)
 		m.preview.Height = max(3, m.height-2)
@@ -967,6 +1029,11 @@ func (m *Model) resize() {
 		m.preview.Height = m.visibleRows()
 	}
 	m.input.Width = max(10, m.width-12)
+	// Width change needs a new style pass — never on the UI goroutine.
+	if m.rawContent != "" && m.preview.Width != m.renderedWidth {
+		return m.rewrapPreviewCmd()
+	}
+	return nil
 }
 
 func (m Model) layoutWidths() (int, int) {
