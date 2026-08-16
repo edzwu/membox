@@ -100,6 +100,7 @@ function cardHTML(card) {
       '<header class="review-card-head">' +
         `<span class="review-card-meta">${renderMeta(card)}</span>` +
         `${kindTag(card.kind)}` +
+        (card.position ? `<span class="review-position">${card.position}</span>` : '') +
       '</header>' +
       (card.quote
         ? `<blockquote class="review-quote">${escapeHTML(card.quote)}</blockquote>`
@@ -126,8 +127,8 @@ function cardHTML(card) {
   );
 }
 
-async function fetchQueue() {
-  const response = await fetch('/api/review/queue?limit=40', { cache: 'no-store' });
+async function fetchQueue(offset = 0, limit = 25) {
+  const response = await fetch(`/api/review/queue?limit=${limit}&offset=${offset}`, { cache: 'no-store' });
   if (!response.ok) throw new Error((await response.text()).trim() || `HTTP ${response.status}`);
   return response.json();
 }
@@ -159,8 +160,7 @@ function renderStats(stats) {
   if (stats.due > 0) parts.push(`到期 ${stats.due}`);
   return parts.join(' · ');
 }
-
-export function openReviewFeed() {
+export async function openReviewFeed() {
   // Remember the doc we came from so "原文" style navigation and back work.
   const url = new URL(window.location.href);
   url.searchParams.set('view', 'review');
@@ -188,23 +188,74 @@ export function openReviewFeed() {
   elements.body.classList.add('is-reviewing');
   document.getElementById('toc')?.classList.add('is-hidden');
 
-  void fetchQueue().then((data) => {
-    statsEl.textContent = renderStats(data.stats);
-    list.innerHTML = '';
-    if (!data.cards || !data.cards.length) {
-      list.innerHTML = '<p class="review-empty">没有可复习的笔记。先在文档里选中文字，用标注或 Q&A 生成卡片。</p>';
-      return;
-    }
+  // Infinite scroll state: append pages of cards as the user scrolls so the
+  // feed can reach the full queue without rendering 200+ cards at once.
+  const PAGE = 25;
+  let offset = 0;
+  let loading = false;
+  let exhausted = false;
+  let total = null;
+  const loadedCards = new Map(); // note_id → rendered element
+
+  const sentinel = document.createElement('div');
+  sentinel.className = 'review-sentinel';
+  list.appendChild(sentinel);
+
+  const appendPage = (data) => {
+    total = data.stats ? data.stats.all : total;
+    statsEl.textContent = `${renderStats(data.stats)} · 已显示 ${loadedCards.size + data.cards.length}/${total}`;
     data.cards.forEach((card) => {
+      if (loadedCards.has(card.note_id)) return;
       const article = document.createElement('div');
       article.innerHTML = cardHTML(card);
       const el = article.firstElementChild;
       bindCard(el, card);
-      list.appendChild(el);
+      list.insertBefore(el, sentinel);
+      loadedCards.set(card.note_id, el);
     });
-  }).catch((err) => {
+    if (!data.cards.length || offset + data.cards.length >= total) {
+      exhausted = true;
+      sentinel.textContent = total ? `已全部加载（${total} 张）` : '';
+      sentinel.classList.add('is-end');
+    }
+  };
+
+  const loadMore = async () => {
+    if (loading || exhausted) return;
+    loading = true;
+    sentinel.classList.add('is-loading');
+    sentinel.textContent = '加载中…';
+    try {
+      const data = await fetchQueue(offset, PAGE);
+      offset += data.cards.length;
+      appendPage(data);
+    } catch (err) {
+      if (!exhausted) {
+        sentinel.textContent = `加载失败：${escapeHTML(err.message)}`;
+      }
+    } finally {
+      loading = false;
+      sentinel.classList.remove('is-loading');
+    }
+  };
+
+  const observer = new IntersectionObserver((entries) => {
+    if (entries.some((entry) => entry.isIntersecting)) void loadMore();
+  }, { rootMargin: '400px' });
+  observer.observe(sentinel);
+
+  try {
+    const first = await fetchQueue(0, PAGE);
+    if (!first.cards || !first.cards.length) {
+      statsEl.textContent = renderStats(first.stats);
+      list.innerHTML = '<p class="review-empty">没有可复习的笔记。先在文档里选中文字，用标注或 Q&A 生成卡片。</p>';
+      return;
+    }
+    offset = first.cards.length;
+    appendPage(first);
+  } catch (err) {
     list.innerHTML = `<p class="review-empty">加载失败：${escapeHTML(err.message)}</p>`;
-  });
+  }
 }
 
 function bindCard(el, card) {

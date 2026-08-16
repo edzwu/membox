@@ -45,6 +45,9 @@ type ReviewCardView struct {
 	RepliesCount     int     `json:"replies_count"`
 	IsNew            bool    `json:"is_new"`
 	IsDue            bool    `json:"is_due"`
+	// Position is this card's 1-based index in the FULL mixed queue (new →
+	// due → aging), so the feed shows where the current page sits in 217.
+	Position int `json:"position"`
 }
 
 // ReviewStats is the queue headline the feed header shows.
@@ -64,12 +67,15 @@ type ReviewQueue struct {
 // ListReviewQueue returns the review feed: newest-first cards, then mixed by
 // due/aging weight so the user browses old notes naturally without a hard
 // scheduler gate. limit caps the returned batch.
-func (s *Service) ListReviewQueue(ctx context.Context, limit int) (ReviewQueue, error) {
+func (s *Service) ListReviewQueue(ctx context.Context, limit, offset int) (ReviewQueue, error) {
 	if limit <= 0 {
 		limit = 20
 	}
 	if limit > 100 {
 		limit = 100
+	}
+	if offset < 0 {
+		offset = 0
 	}
 	cards, err := s.store.ListReviewCards(ctx)
 	if err != nil {
@@ -131,10 +137,13 @@ func (s *Service) ListReviewQueue(ctx context.Context, limit int) (ReviewQueue, 
 	order = append(order, dueIDs...)
 	order = append(order, seenIDs...)
 
-	if limit < len(order) {
-		order = order[:limit]
-	}
-	for _, id := range order {
+	for index, id := range order {
+		if index < offset {
+			continue
+		}
+		if index >= offset+limit {
+			break
+		}
 		card := byID[id]
 		view, viewErr := s.reviewCardView(ctx, *card)
 		if viewErr != nil {
@@ -142,6 +151,7 @@ func (s *Service) ListReviewQueue(ctx context.Context, limit int) (ReviewQueue, 
 		}
 		view.IsNew = card.Schedule.DueAt == 0
 		view.IsDue = card.Schedule.DueAt != 0 && card.Schedule.DueAt <= now
+		view.Position = index + 1
 		views = append(views, view)
 	}
 	return ReviewQueue{Cards: views, Stats: stats}, nil

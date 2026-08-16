@@ -11,10 +11,12 @@ import (
 	"membox/internal/application"
 )
 
-// handleReviewQueue returns the mixed review feed (new + due + aging cards).
+// handleReviewQueue returns the mixed review feed (new + due + aging cards),
+// paged by limit/offset for infinite scroll.
 func (s *Server) handleReviewQueue(writer http.ResponseWriter, request *http.Request) {
 	limit, _ := strconv.Atoi(request.URL.Query().Get("limit"))
-	queue, err := s.service.ListReviewQueue(request.Context(), limit)
+	offset, _ := strconv.Atoi(request.URL.Query().Get("offset"))
+	queue, err := s.service.ListReviewQueue(request.Context(), limit, offset)
 	if err != nil {
 		http.Error(writer, err.Error(), http.StatusInternalServerError)
 		return

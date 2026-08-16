@@ -1029,6 +1029,15 @@ dt > .membox-translation {
 
 .review-list { display: flex; flex-direction: column; gap: 14px; }
 .review-loading, .review-empty { color: var(--muted); font-size: 13px; padding: 24px 8px; text-align: center; }
+.review-sentinel {
+  padding: 18px 8px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--muted);
+  min-height: 24px;
+}
+.review-sentinel.is-loading { color: var(--accent); }
+.review-sentinel.is-end { color: var(--muted); opacity: 0.7; }
 
 .review-card {
   border: 1px solid var(--line);
@@ -1073,6 +1082,14 @@ dt > .membox-translation {
   padding: 0 5px;
   border-radius: 8px;
   font-size: 10px;
+}
+
+.review-position {
+  margin-left: auto;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  opacity: 0.8;
 }
 
 .review-quote {
