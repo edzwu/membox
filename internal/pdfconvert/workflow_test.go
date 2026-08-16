@@ -142,8 +142,12 @@ func TestWorkflowPublishesStructuredBookAsLinkedChapterDocuments(t *testing.T) {
 		t.Fatalf("unexpected split publication: result=%+v publications=%+v", result, workspace.publications)
 	}
 	index := workspace.publications[3]
-	if index.filename != "book-pdf-019ffe58b0af7b65baf12b7d9c066b19.md" || strings.Contains(index.body, "intro\n") || !strings.Contains(index.body, "chapter-001.md") {
+	if index.filename != "book-pdf-019ffe58b0af7b65baf12b7d9c066b19.md" || strings.Contains(index.body, "intro\n") {
 		t.Fatalf("unexpected index publication: %+v", index)
+	}
+	// TOC must use catalog identity links, not bare chapter filenames.
+	if strings.Contains(index.body, "chapter-001.md") || !strings.Contains(index.body, "/?id=") {
+		t.Fatalf("index TOC must use /?id= document links: %+v", index)
 	}
 	if len(workspace.publications[0].assets) != 1 {
 		t.Fatalf("assets were not published with chapters: %+v", workspace.publications)

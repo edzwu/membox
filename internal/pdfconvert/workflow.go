@@ -124,6 +124,7 @@ func (w *Workflow) ConvertWithProgress(ctx context.Context, workspace Workspace,
 	}
 
 	publishedChapters := make([]PublishedChapter, 0, len(processed.Chapters))
+	filenameToID := make(map[string]string, len(processed.Chapters)+1)
 	for index, chapter := range processed.Chapters {
 		assets := []Asset(nil)
 		if index == 0 {
@@ -137,11 +138,18 @@ func (w *Workflow) ConvertWithProgress(ctx context.Context, workspace Workspace,
 			Title: chapter.Title, Filename: chapter.Filename, DocumentID: published.DocumentID,
 			Path: published.Path, Created: published.Created,
 		})
+		filenameToID[strings.ToLower(filepath.Base(chapter.Filename))] = published.DocumentID
 	}
-	indexDocument, err := workspace.PublishBundle(ctx, source.DocumentID, filename, processed.IndexMarkdown, nil)
+	// Bake catalog UUIDs into the TOC before publish. Filename .md hrefs are
+	// fragile in the browser (markdown-it percent-encodes CJK paths); /?id=
+	// is the same identity the conversion graph already stores.
+	indexMarkdown := rewriteRelativeMarkdownLinks(processed.IndexMarkdown, filenameToID)
+	indexDocument, err := workspace.PublishBundle(ctx, source.DocumentID, filename, indexMarkdown, nil)
 	if err != nil {
 		return Result{}, fmt.Errorf("publishing converted PDF index: %w", err)
 	}
+	// Chapter → index backlinks still use the stable index filename; Miru
+	// rewrites them via /series (filename→id). TOC is identity-linked above.
 	if err := workspace.LinkDocuments(ctx, source.DocumentID, indexDocument.DocumentID); err != nil {
 		return Result{}, fmt.Errorf("linking PDF to converted Markdown index: %w", err)
 	}

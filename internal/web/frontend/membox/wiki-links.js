@@ -10,8 +10,16 @@ import { session } from './session.js';
 const resolveCache = new Map(); // filename → id | null
 
 function basename(href) {
-  const clean = String(href || '').split('#')[0].split('?')[0].trim();
+  let clean = String(href || '').split('#')[0].split('?')[0].trim();
   if (!clean) return '';
+  // markdown-it percent-encodes non-ASCII in hrefs (e.g. C-%E5%8E%9F….md).
+  // Series maps and by-path resolution use the real Unicode filename — decode
+  // so TOC chapter links from PDF conversion indexes resolve again.
+  try {
+    clean = decodeURIComponent(clean);
+  } catch {
+    // leave malformed % sequences as-is
+  }
   const parts = clean.replace(/\\/g, '/').split('/');
   return parts[parts.length - 1] || '';
 }
@@ -21,8 +29,28 @@ export function isRelativeMarkdownHref(href) {
   if (!value || value.startsWith('#') || value.startsWith('?')) return false;
   if (/^(https?:|mailto:|javascript:|data:)/i.test(value)) return false;
   if (value.startsWith('//')) return false;
+  // Identity links baked by PDF conversion: /?id=<uuid>
+  if (memboxIDFromHref(value)) return false;
   const file = basename(value);
   return /\.md$/i.test(file);
+}
+
+/** Extract a document UUID from /?id=… or ?id=… companion links. */
+export function memboxIDFromHref(href) {
+  const value = String(href || '').trim();
+  if (!value) return '';
+  try {
+    const url = value.startsWith('?') || value.startsWith('/')
+      ? new URL(value, window.location.origin)
+      : null;
+    if (url) {
+      const id = (url.searchParams.get('id') || '').trim();
+      if (/^[0-9a-fA-F-]{8,}$/.test(id)) return id;
+    }
+  } catch {
+    // ignore
+  }
+  return '';
 }
 
 export function docURL(id) {
@@ -77,6 +105,14 @@ async function onArticleClick(event) {
     return;
   }
   const href = link.getAttribute('href') || '';
+  // Conversion TOC / backlinks published as /?id=<uuid> (catalog identity).
+  const bakedID = memboxIDFromHref(href);
+  if (bakedID) {
+    event.preventDefault();
+    link.dataset.memboxDoc = bakedID;
+    window.location.assign(docURL(bakedID));
+    return;
+  }
   if (!isRelativeMarkdownHref(href)) return;
   event.preventDefault();
   const name = basename(href);
