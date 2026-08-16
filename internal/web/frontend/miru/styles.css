@@ -400,10 +400,20 @@ button {
 }
 
 .toc-list .toc-h1 { font-weight: 600; color: var(--ink-soft); }
-.toc-list .toc-h3 { padding-left: 24px; font-size: 12.5px; }
+.toc-list .toc-h2 { font-weight: 500; }
+/* Nested items get indent from .toc-sub; avoid double-padding on bare h3. */
+.toc-list > li > a.toc-h3 { padding-left: 12px; font-size: 12.5px; }
+.toc-sub a {
+  font-size: 12.5px;
+  padding-left: 14px;
+}
+.toc-sub .toc-sub a {
+  padding-left: 22px;
+  font-size: 12px;
+}
 
-/* Progressive disclosure: h3 sublists stay collapsed until the scrollspy
-   reaches their section. The grid-rows trick animates an unknown height. */
+/* Progressive disclosure: nested lists stay collapsed until the scrollspy
+   expands the group on the active path. grid-rows animates unknown height. */
 .toc-sub-wrap {
   display: grid;
   grid-template-rows: 0fr;
@@ -1082,146 +1092,218 @@ body.is-snippet .toc {
   color: var(--accent);
 }
 
-/* Selection assist (ask / edit) panel */
+/* Selection assist — minimal chat strip */
 .annot-toolbar.is-assist {
   align-items: stretch;
   padding: 0;
-  max-width: min(380px, calc(100vw - 24px));
+  max-width: min(300px, calc(100vw - 16px));
+  border-radius: 12px;
+  overflow: hidden;
 }
 
 .annot-assist-panel {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  min-width: 260px;
-  max-width: 380px;
-  padding: 10px 12px 12px;
+  gap: 6px;
+  width: min(300px, calc(100vw - 16px));
+  padding: 7px 8px 8px;
 }
 
-.annot-assist-modes {
-  display: inline-flex;
-  gap: 4px;
-  padding: 2px;
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--ink) 5%, var(--paper));
-  border: 1px solid var(--line);
-  align-self: flex-start;
+.annot-assist-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 22px;
 }
 
-.annot-assist-mode {
+.annot-assist-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--ink-soft);
+  opacity: 0.4;
+}
+.annot-assist-dot-ok {
+  background: #3d9a5f;
+  opacity: 1;
+  box-shadow: 0 0 0 2px color-mix(in srgb, #3d9a5f 22%, transparent);
+}
+.annot-assist-dot-bad {
+  background: #c44;
+  opacity: 1;
+}
+.annot-assist-dot-unknown { opacity: 0.35; }
+
+.annot-assist-model-name {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.annot-assist-spacer { flex: 1; min-width: 4px; }
+
+.annot-assist-seg-btn {
   appearance: none;
   border: 0;
   background: transparent;
   color: var(--ink-soft);
-  width: 30px;
-  height: 28px;
-  padding: 0;
-  border-radius: 6px;
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
   cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  opacity: 0.65;
 }
-
-.annot-assist-mode.is-active {
-  background: var(--paper-raised);
+.annot-assist-seg-btn.is-on {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
   color: var(--accent);
-  box-shadow: 0 1px 2px color-mix(in srgb, var(--ink) 8%, transparent);
+  opacity: 1;
 }
 
-.annot-assist-input {
+.annot-assist-close {
   appearance: none;
-  width: 100%;
-  min-height: 52px;
-  resize: vertical;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--paper);
-  color: var(--ink);
-  font-family: var(--font-sans);
-  font-size: 13px;
-  line-height: 1.4;
-  padding: 8px 10px;
-  box-sizing: border-box;
-}
-
-.annot-assist-input:focus {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
-}
-
-.annot-assist-actions {
-  display: flex;
-  gap: 8px;
-  justify-content: flex-end;
-}
-
-.annot-assist-run,
-.annot-assist-apply {
-  appearance: none;
-  border: 1px solid var(--line);
-  background: var(--paper-raised);
+  border: 0;
+  background: transparent;
   color: var(--ink-soft);
-  width: 32px;
-  height: 32px;
+  width: 22px;
+  height: 22px;
   padding: 0;
-  border-radius: 8px;
+  border-radius: 5px;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  opacity: 0.55;
 }
+.annot-assist-close:hover { opacity: 1; background: color-mix(in srgb, var(--ink) 6%, transparent); }
 
-.annot-assist-run {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--paper);
+/* Reply — only mounted when streaming or has content */
+.annot-assist-result {
+  max-height: min(200px, 36vh);
+  overflow: auto;
+  padding: 7px 9px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--accent) 4%, var(--paper));
+  color: var(--ink);
+  font-family: var(--font-serif);
+  font-size: 12.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
-
-.annot-assist-run:hover:not(:disabled),
-.annot-assist-apply:hover:not(:disabled) {
-  filter: brightness(1.05);
+.annot-assist-result.is-streaming {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--line));
 }
-
-.annot-assist-run:disabled,
-.annot-assist-apply:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-
-.annot-assist-spin {
-  animation: annot-assist-spin 0.8s linear infinite;
-}
-
-@keyframes annot-assist-spin {
-  to { transform: rotate(360deg); }
+.annot-assist-placeholder {
+  color: var(--ink-soft);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  opacity: 0.7;
 }
 
 .annot-assist-status {
   margin: 0;
-  font-size: 11.5px;
+  font-size: 10.5px;
+  line-height: 1.3;
   color: var(--ink-soft);
 }
+.annot-assist-status.is-error { color: #b3402f; }
 
-.annot-assist-result {
-  max-height: 220px;
-  overflow: auto;
-  padding: 8px 10px;
-  border-radius: 8px;
+/* Single input row — no focus ring / blue chrome */
+.annot-assist-composer {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 34px;
+  padding: 0 3px 0 10px;
   border: 1px solid var(--line);
-  background: color-mix(in srgb, var(--accent) 5%, var(--paper));
-  color: var(--ink);
-  font-family: var(--font-serif);
-  font-size: 13px;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-word;
+  border-radius: 999px;
+  background: var(--paper);
+  box-shadow: none;
+  outline: none;
+}
+.annot-assist-composer:focus-within {
+  border-color: var(--line);
+  box-shadow: none;
+  outline: none;
 }
 
-.annot-assist-result[hidden] {
-  display: none;
+.annot-assist-input {
+  appearance: none;
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  border: 0 !important;
+  outline: none !important;
+  box-shadow: none !important;
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 32px;
+  padding: 0;
+  caret-color: var(--ink);
 }
+.annot-assist-input:focus {
+  outline: none !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+
+.annot-assist-save,
+.annot-assist-run {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--ink-soft);
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 50%;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.annot-assist-save:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+}
+.annot-assist-run {
+  background: var(--accent);
+  color: var(--paper);
+}
+.annot-assist-run:hover:not(:disabled) { filter: brightness(1.06); }
+.annot-assist-run:disabled { opacity: 0.45; cursor: default; }
+
+/* Kill default toolbar button chrome inside assist (was a blue rect) */
+.annot-toolbar.is-assist button:not(.annot-assist-run):not(.annot-assist-save) {
+  background: transparent;
+  width: auto;
+  height: auto;
+  min-width: 0;
+}
+.annot-toolbar.is-assist button.annot-assist-seg-btn.is-on {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.annot-toolbar.is-assist button:hover:not(.annot-assist-run):not(.annot-assist-save) {
+  background: transparent;
+  color: inherit;
+}
+.annot-toolbar.is-assist button.annot-assist-seg-btn:hover {
+  background: color-mix(in srgb, var(--ink) 5%, transparent);
+}
+.annot-toolbar.is-assist button.annot-assist-close:hover {
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+}
+
+.annot-assist-spin { animation: annot-assist-spin 0.8s linear infinite; }
+@keyframes annot-assist-spin { to { transform: rotate(360deg); } }
 
 .annot-note-input {
   appearance: none;
