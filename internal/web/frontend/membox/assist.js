@@ -60,6 +60,15 @@ function escapeHTML(value) {
     .replace(/"/g, '&quot;');
 }
 
+/** Grow the composer textarea up to ~6 lines. */
+function autosizeInput(el) {
+  if (!el) return;
+  el.style.height = 'auto';
+  const max = 6 * 20; // ~6 lines at 20px line-height
+  const next = Math.min(Math.max(el.scrollHeight, 20), max);
+  el.style.height = `${next}px`;
+}
+
 function contextAround(markdown, selection, radius = 280) {
   if (!markdown || !selection) return { prefix: '', suffix: '' };
   const idx = markdown.indexOf(selection);
@@ -142,12 +151,15 @@ function renderPanel({
         : '') +
       (status ? `<p class="annot-assist-status${err ? ' is-error' : ''}">${escapeHTML(status)}</p>` : '') +
       '<div class="annot-assist-composer">' +
-        `<input type="text" class="annot-assist-input" placeholder="${placeholder}" autocomplete="off" aria-label="Message" />` +
-        (canApply
-          ? `<button type="button" class="annot-assist-save" title="${saveLabel}" aria-label="${saveLabel}">${saveIcon}</button>`
-          : '') +
-        `<button type="button" class="annot-assist-run"${running ? ' disabled' : ''} aria-label="Send">` +
-          `${running ? ICON_SPIN : ICON_SEND}</button>` +
+        `<textarea class="annot-assist-input" rows="1" placeholder="${placeholder}" autocomplete="off" ` +
+          'aria-label="Message (⌘↵ to send)"></textarea>' +
+        '<div class="annot-assist-actions">' +
+          (canApply
+            ? `<button type="button" class="annot-assist-save" title="${saveLabel}" aria-label="${saveLabel}">${saveIcon}</button>`
+            : '') +
+          `<button type="button" class="annot-assist-run"${running ? ' disabled' : ''} title="Send (⌘↵)" aria-label="Send">` +
+            `${running ? ICON_SPIN : ICON_SEND}</button>` +
+        '</div>' +
       '</div>' +
     '</div>'
   );
@@ -202,6 +214,7 @@ function openAssist(ctx) {
   const input = ctx.toolbar.querySelector('.annot-assist-input');
   if (input) {
     input.value = '';
+    autosizeInput(input);
     input.focus();
   }
   ctx.position(ctx.range || ctx.annotEl);
@@ -225,6 +238,7 @@ function openAssist(ctx) {
     const nextInput = ctx.toolbar.querySelector('.annot-assist-input');
     if (nextInput) {
       nextInput.value = value;
+      autosizeInput(nextInput);
     }
     if (opts.result) setResultHTML(ctx.toolbar, opts.result);
     bind();
@@ -246,12 +260,18 @@ function openAssist(ctx) {
     ctx.toolbar.querySelector('.annot-assist-run')?.addEventListener('click', () => { void run(); });
     ctx.toolbar.querySelector('.annot-assist-save')?.addEventListener('click', () => { void apply(); });
     const field = ctx.toolbar.querySelector('.annot-assist-input');
+    field?.addEventListener('input', () => {
+      autosizeInput(field);
+      ctx.position(ctx.range || ctx.annotEl);
+    });
     field?.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
+      // Enter alone: newline / IME candidate confirm. Only ⌘/Ctrl+Enter sends.
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.isComposing && e.keyCode !== 229) {
         e.preventDefault();
         void run();
+        return;
       }
-      if (e.key === 'Escape') ctx.hide();
+      if (e.key === 'Escape' && !e.isComposing) ctx.hide();
     });
   };
 

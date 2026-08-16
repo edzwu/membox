@@ -1213,15 +1213,15 @@ body.is-snippet .toc {
 }
 .annot-assist-status.is-error { color: #b3402f; }
 
-/* Single input row — no focus ring / blue chrome */
+/* Composer: multiline textarea; ⌘↵ sends (Enter = newline / IME confirm) */
 .annot-assist-composer {
   display: flex;
-  align-items: center;
-  gap: 2px;
-  height: 34px;
-  padding: 0 3px 0 10px;
+  align-items: flex-end;
+  gap: 4px;
+  min-height: 36px;
+  padding: 5px 4px 5px 10px;
   border: 1px solid var(--line);
-  border-radius: 999px;
+  border-radius: 14px;
   background: var(--paper);
   box-shadow: none;
   outline: none;
@@ -1236,7 +1236,11 @@ body.is-snippet .toc {
   appearance: none;
   flex: 1;
   min-width: 0;
-  height: 32px;
+  min-height: 20px;
+  max-height: 120px;
+  height: 20px;
+  resize: none;
+  overflow-y: auto;
   border: 0 !important;
   outline: none !important;
   box-shadow: none !important;
@@ -1244,14 +1248,24 @@ body.is-snippet .toc {
   color: var(--ink);
   font-family: var(--font-sans);
   font-size: 13px;
-  line-height: 32px;
-  padding: 0;
+  line-height: 20px;
+  padding: 4px 0;
+  margin: 0;
   caret-color: var(--ink);
+  field-sizing: content;
 }
 .annot-assist-input:focus {
   outline: none !important;
   border: 0 !important;
   box-shadow: none !important;
+}
+
+.annot-assist-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  padding-bottom: 1px;
 }
 
 .annot-assist-save,
