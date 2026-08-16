@@ -649,6 +649,32 @@ func (s *Server) handleRelated(writer http.ResponseWriter, request *http.Request
 		for _, link := range graph.Incoming {
 			appendLink(link, "in")
 		}
+		// Source PDFs only store a single edge to the conversion index. Surface
+		// the full chapter series so readers can jump into Markdown without first
+		// opening the TOC document.
+		if focus.Index.MediaType == "application/pdf" {
+			if series, seriesErr := s.buildConversionSeries(ctx, string(focus.ID)); seriesErr == nil && series.Kind == "pdf-conversion" {
+				for _, item := range series.Items {
+					if seenRelated[item.ID] || item.ID == string(focus.ID) {
+						continue
+					}
+					seenRelated[item.ID] = true
+					title := strings.TrimSpace(item.TocTitle)
+					if title == "" {
+						title = strings.TrimSpace(item.Title)
+					}
+					if title == "" {
+						title = item.Label
+					}
+					related = append(related, relatedView{
+						ID:        item.ID,
+						Title:     title,
+						Path:      item.Path,
+						Direction: "out",
+					})
+				}
+			}
+		}
 		writer.Header().Set("Content-Type", "application/json; charset=utf-8")
 		writer.Header().Set("Cache-Control", "no-store")
 		_ = json.NewEncoder(writer).Encode(map[string]any{

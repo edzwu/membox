@@ -70,6 +70,19 @@ func (s *Server) buildConversionSeries(ctx context.Context, selector string) (co
 	}
 	filename := filepath.Base(document.Location.RelativePath)
 	identity, ok := conversionIdentity(filename)
+	// PDFs live in a different managed path than their Markdown chapters. When
+	// the focus is the source PDF, recover the conversion identity from its
+	// stable UUID and scan across paths for -pdf-<compact> siblings.
+	focusIsPDF := document.Index.MediaType == "application/pdf"
+	crossPath := false
+	if !ok && focusIsPDF {
+		compact := strings.ToLower(strings.ReplaceAll(string(document.ID), "-", ""))
+		if len(compact) == 32 && hex32RE.MatchString(compact) {
+			identity = compact
+			ok = true
+			crossPath = true
+		}
+	}
 	if !ok {
 		return conversionSeriesResponse{Kind: "none"}, nil
 	}
@@ -84,8 +97,9 @@ func (s *Server) buildConversionSeries(ctx context.Context, selector string) (co
 		if record.Document == nil || record.Document.Status != catalog.DocumentActive {
 			continue
 		}
-		// Keep series inside the same managed path as the focus document.
-		if record.Document.Location.PathID != document.Location.PathID {
+		// Keep series inside the same managed path as the focus document, unless
+		// we are resolving outward from a PDF (notes live elsewhere).
+		if !crossPath && record.Document.Location.PathID != document.Location.PathID {
 			continue
 		}
 		base := filepath.Base(record.Document.Location.RelativePath)
@@ -147,6 +161,12 @@ func (s *Server) buildConversionSeries(ctx context.Context, selector string) (co
 		Kind:  "pdf-conversion",
 		Index: indexItem,
 		Items: siblings,
+	}
+	if current == nil && focusIsPDF && indexItem != nil {
+		// Source PDF is not itself a series file; stand on the TOC index so
+		// clients can jump into chapters the same way as opening the index.
+		copyItem := *indexItem
+		current = &copyItem
 	}
 	if current == nil {
 		// Focus matched the identity filter but vanished from the list — still none.
