@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"membox/internal/application"
 	"membox/internal/application/port"
@@ -662,6 +663,104 @@ func findExcerptOffsets(canonical, excerpt string) (int, int, bool) {
 		end = len([]rune(canonical))
 	}
 	return start, end, true
+}
+
+// LocateRenderedSelection maps a browser-rendered text selection back to rune
+// offsets [start, end) in the raw Markdown source. Miru renders Markdown to
+// HTML, so a selection like "bold code" no longer carries ** or backticks; the
+// selection text therefore cannot be found verbatim in the .md. This mirrors
+// markdownToCanonicalText line-by-line, keeping a canonical→source rune map,
+// then matches whitespace-insensitively (rendered text also disagrees with the
+// source about spacing around inline code / CJK punctuation).
+func LocateRenderedSelection(markdown, selection string) (int, int, bool) {
+	sel := strings.TrimSpace(cleanInlineMarkdown(selection))
+	if sel == "" {
+		return 0, 0, false
+	}
+	md := strings.ReplaceAll(markdown, "\r\n", "\n")
+	body := stripFrontMatter(md)
+	// body is a suffix of md for clipper-written files (front matter starts at
+	// byte 0). Rune offset of body within md:
+	bodyRuneOffset := utf8.RuneCountInString(md) - utf8.RuneCountInString(body)
+
+	mdRunes := []rune(md)
+	var canon strings.Builder
+	mapping := make([]int, 0, len(mdRunes))
+	inCode := false
+	runeOffset := bodyRuneOffset
+	for _, line := range strings.Split(body, "\n") {
+		lineRunes := []rune(line)
+		if reFence.MatchString(line) {
+			inCode = !inCode
+			runeOffset += len(lineRunes) + 1
+			continue
+		}
+		if inCode {
+			// Code is literal: append its non-whitespace runes verbatim.
+			appendDenseWithMapping(&canon, &mapping, lineRunes, runeOffset)
+			runeOffset += len(lineRunes) + 1
+			continue
+		}
+		cleaned := reHeading.ReplaceAllString(line, "")
+		cleaned = reQuote.ReplaceAllString(cleaned, "")
+		cleaned = reListMarker.ReplaceAllString(cleaned, "")
+		cleaned = cleanInlineMarkdown(cleaned)
+		cleaned = strings.TrimSpace(cleaned)
+		if cleaned != "" {
+			// Greedy subsequence alignment: cleaned non-whitespace runes are a
+			// subsequence of the source line (markdown cleanup only removes/renames
+			// characters), so each cleaned rune maps to the next match in source.
+			alignCleanedToSource(&canon, &mapping, []rune(cleaned), lineRunes, runeOffset)
+		}
+		runeOffset += len(lineRunes) + 1
+	}
+	canonical := canon.String()
+	selDense, _ := denseRunes(sel)
+	if selDense == "" {
+		return 0, 0, false
+	}
+	idx := strings.Index(canonical, selDense)
+	if idx < 0 {
+		return 0, 0, false
+	}
+	start := idx
+	end := idx + utf8.RuneCountInString(selDense) - 1
+	if start >= len(mapping) || end >= len(mapping) {
+		return 0, 0, false
+	}
+	return mapping[start], mapping[end] + 1, true
+}
+
+// appendDenseWithMapping writes non-whitespace runes to canon and records each
+// one's source rune offset.
+func appendDenseWithMapping(canon *strings.Builder, mapping *[]int, src []rune, srcBase int) {
+	for i, r := range src {
+		if r == ' ' || r == '\t' || r == '\u00a0' {
+			continue
+		}
+		canon.WriteRune(r)
+		*mapping = append(*mapping, srcBase+i)
+	}
+}
+
+// alignCleanedToSource maps a cleaned (markup-stripped) line's runes back to
+// the source line runes via greedy subsequence alignment.
+func alignCleanedToSource(canon *strings.Builder, mapping *[]int, cleaned, src []rune, srcBase int) {
+	si := 0
+	for _, c := range cleaned {
+		if c == ' ' || c == '\t' || c == '\u00a0' {
+			continue
+		}
+		for si < len(src) && src[si] != c {
+			si++
+		}
+		if si >= len(src) {
+			break
+		}
+		canon.WriteRune(c)
+		*mapping = append(*mapping, srcBase+si)
+		si++
+	}
 }
 
 // jsStringLength counts UTF-16 code units the way JavaScript's String.length

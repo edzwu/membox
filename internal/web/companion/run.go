@@ -36,14 +36,17 @@ type Options struct {
 
 // Run executes the Web Companion in the current process: singleton lock,
 // HTTP server, bridge.json, controller leases, and graceful shutdown. It is the
-// shared core of `mm web run` (detached child) and `mm serve` (foreground).
+// shared core of `mm web run` (detached child) and `mm web start --fg` (foreground).
 func Run(ctx context.Context, options Options) error {
 	if strings.TrimSpace(options.Home) == "" {
 		return errors.New("membox home is required")
 	}
 	lifecycle := options.Lifecycle
-	if lifecycle != LifecycleSession && lifecycle != LifecycleKeep {
-		return fmt.Errorf("lifecycle must be %q or %q", LifecycleSession, LifecycleKeep)
+	if lifecycle == "" {
+		lifecycle = LifecycleKeep
+	}
+	if lifecycle != LifecycleKeep {
+		return fmt.Errorf("unsupported lifecycle %q (only %q is supported)", lifecycle, LifecycleKeep)
 	}
 	release, err := AcquireLock(options.Home)
 	if err != nil {
@@ -71,10 +74,6 @@ func Run(ctx context.Context, options Options) error {
 	defer cancel()
 	stopOnce := sync.OnceFunc(cancel)
 
-	// Lifecycle may flip at runtime. The lease watcher reads mode under this
-	// mutex on every tick; keep never depends on controller leases.
-	var modeMu sync.Mutex
-	currentMode := lifecycle
 	server := web.NewServer(service)
 	server.SetHome(options.Home)
 	server.SetToken(token)
@@ -107,12 +106,7 @@ func Run(ctx context.Context, options Options) error {
 		Provider: assist.DefaultProvider,
 		Model:    assist.DefaultModel,
 	})
-	server.ConfigureCompanion(lifecycle, stopOnce, func(mode string) {
-		modeMu.Lock()
-		currentMode = mode
-		modeMu.Unlock()
-		rewriteBridgeMode(options.Home, mode)
-	})
+	server.ConfigureCompanion(stopOnce)
 
 	// Agent manager is lazy: first status/session request probes Pi.
 	// Free-form agent.* keys live in settings without the typed TUI settingSpecs.
@@ -173,6 +167,7 @@ func Run(ctx context.Context, options Options) error {
 		Mode:        lifecycle,
 		PID:         os.Getpid(),
 		HostVersion: options.Version,
+		HostBinary:  CurrentBinaryFingerprint(),
 	}); err != nil {
 		_ = server.Shutdown(runCtx)
 		return err
@@ -180,12 +175,6 @@ func Run(ctx context.Context, options Options) error {
 	if options.OnReady != nil {
 		options.OnReady(baseURL, token)
 	}
-
-	go watchControllerLeases(runCtx, server, 1500*time.Millisecond, func() bool {
-		modeMu.Lock()
-		defer modeMu.Unlock()
-		return currentMode == LifecycleSession
-	}, stopOnce)
 
 	<-runCtx.Done()
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -221,39 +210,4 @@ func startWithPortPreference(ctx context.Context, server *web.Server, port int) 
 		lastErr = errors.New("failed to start web companion")
 	}
 	return "", 0, lastErr
-}
-
-// watchControllerLeases stops a session companion after all TUI controllers
-// release or expire. A short startup grace lets the spawning TUI receive the
-// ready response and register its first lease. Keep mode never consults leases.
-func watchControllerLeases(ctx context.Context, server *web.Server, interval time.Duration, sessionMode func() bool, stop func()) {
-	startedAt := time.Now()
-	const startupGrace = 15 * time.Second
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			if !sessionMode() {
-				continue
-			}
-			active, ever := server.ControllerLeaseState()
-			if active == 0 && (ever || time.Since(startedAt) >= startupGrace) {
-				stop()
-				return
-			}
-		}
-	}
-}
-
-// rewriteBridgeMode keeps bridge.json honest after a runtime lifecycle switch.
-func rewriteBridgeMode(home, mode string) {
-	bridge, err := backend.ReadBridgeFile(home)
-	if err != nil {
-		return
-	}
-	bridge.Mode = mode
-	_, _ = backend.WriteBridgeFile(home, bridge)
 }

@@ -111,23 +111,22 @@ func (b *Box) WebStatus(ctx context.Context) (WebStatusView, error) {
 	return webStatusView(status), err
 }
 
-// webLifecycleFromSetting resolves the stored "web on exit" policy into the
-// companion lifecycle used when the caller does not pick one explicitly.
-func (b *Box) webLifecycleFromSetting(ctx context.Context) string {
-	value, err := b.service.GetSetting(ctx, application.SettingWebOnExit)
-	if err == nil && value == application.OnExitKeep {
-		return companion.LifecycleKeep
-	}
-	return companion.LifecycleSession
-}
+// defaultCompanionLifecycle is keep: one long-lived process per home, stopped
+// only by explicit mm web stop / TUI "web on exit=stop". Session mode still
+// exists for tests and `mm web run --lifecycle session`, but is not the default.
+//
+// Historically web_on_exit=stop also forced session mode at Ensure time, which
+// tied "kill on TUI quit" to "lease-watched process while running" and made
+// Miru/assist fragile whenever the TUI released leases or a stale session
+// companion was reused. Exit policy and run policy are now separate.
+func defaultCompanionLifecycle() string { return companion.LifecycleKeep }
 
 // EnsureWebCompanion connects to the running Web Companion or starts one.
-// An empty lifecycle defers to the stored "web on exit" policy. The Box never
-// embeds the server itself: one companion process per home owns the port, the
-// bridge file, and web-originated writes.
+// An empty lifecycle means keep. The Box never embeds the server itself: one
+// companion process per home owns the port, the bridge file, and web writes.
 func (b *Box) EnsureWebCompanion(ctx context.Context, lifecycle string) (WebStatusView, error) {
 	if strings.TrimSpace(lifecycle) == "" {
-		lifecycle = b.webLifecycleFromSetting(ctx)
+		lifecycle = defaultCompanionLifecycle()
 	}
 	status, _, err := companion.Ensure(ctx, b.home, lifecycle, 0, nil)
 	return webStatusView(status), err
@@ -139,7 +138,7 @@ func (b *Box) EnsureWebCompanion(ctx context.Context, lifecycle string) (WebStat
 // and Agent workers are owned by the current process generation.
 func (b *Box) RestartWebCompanion(ctx context.Context, lifecycle string) (WebStatusView, error) {
 	if strings.TrimSpace(lifecycle) == "" {
-		lifecycle = b.webLifecycleFromSetting(ctx)
+		lifecycle = defaultCompanionLifecycle()
 	}
 	status, err := companion.Restart(ctx, b.home, lifecycle, 0, nil)
 	return webStatusView(status), err
@@ -148,22 +147,6 @@ func (b *Box) RestartWebCompanion(ctx context.Context, lifecycle string) (WebSta
 // StopWeb asks the Web Companion to shut down gracefully and waits for it.
 func (b *Box) StopWeb(ctx context.Context) error {
 	return companion.Stop(ctx, b.home)
-}
-
-// RenewWebLease registers or heartbeats this TUI as one independent session
-// controller. Multiple TUIs can safely share a session companion.
-func (b *Box) RenewWebLease(ctx context.Context, controller string) error {
-	return companion.SetControllerLease(ctx, b.home, controller, false)
-}
-
-// ReleaseWebLease releases only this TUI's ownership; it is not a global stop.
-func (b *Box) ReleaseWebLease(ctx context.Context, controller string) error {
-	return companion.SetControllerLease(ctx, b.home, controller, true)
-}
-
-// SetWebLifecycle switches a running companion between session and keep mode.
-func (b *Box) SetWebLifecycle(ctx context.Context, mode string) error {
-	return companion.SetLifecycle(ctx, b.home, mode)
 }
 
 // StartWebServer keeps the historical API: ensure the Web Companion is up and
@@ -917,6 +900,43 @@ type ReindexDocumentCommand struct{ Selector string }
 
 func (b *Box) ReindexDocument(ctx context.Context, command ReindexDocumentCommand) error {
 	return b.service.ReindexDocument(ctx, command.Selector)
+}
+
+// RewriteDocumentCommand runs LLM readability rewrite on a Markdown document.
+// Model defaults to local qwen3:14b (mmd); pass "deepseek" for deepseek-v4-flash.
+type RewriteDocumentCommand struct {
+	Selector   string
+	Model      string // empty/local/qwen3:14b | deepseek | provider/model
+	Hint       string // optional extra instructions appended to the rewrite brief
+	DryRun     bool   // return rewritten text without writing
+	OnProgress func(RewriteProgress)
+}
+
+// RewriteProgress is one multi-chunk rewrite status update.
+type RewriteProgress struct {
+	Done   int
+	Total  int
+	Detail string
+}
+
+type RewriteDocumentResult struct {
+	DocumentID string `json:"document_id"`
+	Path       string `json:"path"`
+	Title      string `json:"title"`
+	Model      string `json:"model"`
+	Provider   string `json:"provider"`
+	Label      string `json:"label"`
+	BytesIn    int    `json:"bytes_in"`
+	BytesOut   int    `json:"bytes_out"`
+	Chunks     int    `json:"chunks"`
+	ChunkRunes int    `json:"chunk_runes"`
+	DryRun     bool   `json:"dry_run"`
+	Markdown   string `json:"markdown,omitempty"` // only when DryRun
+}
+
+// RewriteDocument improves Markdown readability via LLM and optionally SyncDocument.
+func (b *Box) RewriteDocument(ctx context.Context, command RewriteDocumentCommand) (RewriteDocumentResult, error) {
+	return rewriteDocument(ctx, b, command)
 }
 
 type IndexStatusView struct {

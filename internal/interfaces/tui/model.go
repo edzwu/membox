@@ -70,9 +70,6 @@ type App interface {
 	EnsureWebCompanion(context.Context, string) (membox.WebStatusView, error)
 	RestartWebCompanion(context.Context, string) (membox.WebStatusView, error)
 	StopWeb(context.Context) error
-	RenewWebLease(context.Context, string) error
-	ReleaseWebLease(context.Context, string) error
-	SetWebLifecycle(context.Context, string) error
 	ScanPaths(context.Context, membox.ScanPathsCommand) (membox.ScanReport, error)
 	ListPaths(context.Context) ([]membox.PathView, error)
 	GetIndexStatus(context.Context) (membox.IndexStatusView, error)
@@ -413,7 +410,7 @@ func New(ctx context.Context, app App, launcher host.Launcher) Model {
 	spin := spinner.New()
 	spin.Spinner = spinner.Dot
 	vp := viewport.New(40, 10)
-	model := Model{ctx: ctx, app: app, launcher: launcher, input: input, spinner: spin, preview: vp, searchMode: searchModeName, inputMode: inputModeSearch, mediaScope: mediaScopeAll, viewMode: viewTree, viewerMode: "leaf", summarizing: map[string]bool{}, web: webState{controllerID: newWebControllerID()}, agent: newAgentUIState()}
+	model := Model{ctx: ctx, app: app, launcher: launcher, input: input, spinner: spin, preview: vp, searchMode: searchModeName, inputMode: inputModeSearch, mediaScope: mediaScopeAll, viewMode: viewTree, viewerMode: "leaf", summarizing: map[string]bool{}, web: webState{}, agent: newAgentUIState()}
 	model.web.starting = true
 	model.preview.SetContent(previewPlaceholder("Loading documents…"))
 	return model
@@ -423,9 +420,6 @@ func Run(ctx context.Context, app App, launcher host.Launcher, programOptions ..
 	options := []tea.ProgramOption{tea.WithAltScreen()}
 	options = append(options, programOptions...)
 	model := New(ctx, app, launcher)
-	leaseCtx, stopLease := context.WithCancel(ctx)
-	defer stopLease()
-	go maintainWebLease(leaseCtx, app, model.web.controllerID, webRefreshInterval)
 	_, err := tea.NewProgram(model, options...).Run()
 	return err
 }
@@ -437,7 +431,7 @@ func (m Model) Init() tea.Cmd {
 		listDocumentsCmd(m.ctx, m.app, m.listSequence),
 		viewerModeCmd(m.ctx, m.app),
 		settingsCmd(m.ctx, m.app),
-		webEnsureCmd(m.ctx, m.app, m.web.controllerID),
+		webEnsureCmd(m.ctx, m.app),
 	)
 }
 

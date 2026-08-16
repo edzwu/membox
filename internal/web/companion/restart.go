@@ -18,7 +18,7 @@ import (
 // session instead of reusing an orphaned or ephemeral server.
 func Restart(ctx context.Context, home, lifecycle string, port int, spawn SpawnFunc) (Status, error) {
 	if lifecycle == "" {
-		lifecycle = LifecycleSession
+		lifecycle = LifecycleKeep
 	}
 	_ = stopExisting(ctx, home)
 

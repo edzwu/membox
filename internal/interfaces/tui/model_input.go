@@ -717,7 +717,7 @@ func (m Model) updateConfigPanel(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(m.spinner.Tick, webStopCmd(m.ctx, m.app))
 		}
 		m.web.starting = true
-		return m, tea.Batch(m.spinner.Tick, webEnsureCmd(m.ctx, m.app, m.web.controllerID))
+		return m, tea.Batch(m.spinner.Tick, webEnsureCmd(m.ctx, m.app))
 	}
 	return m, nil
 }

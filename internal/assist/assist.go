@@ -174,16 +174,35 @@ func (r Runner) Stream(ctx context.Context, req Request, emit EmitFunc) error {
 		return err
 	}
 
-	text, err := r.runPrompt(ctx, provider, model, BuildPrompt(req), func(delta string) error {
-		return emit(Event{Type: "delta", Mode: req.Mode, Text: delta})
-	})
-	if err != nil {
-		_ = emit(Event{Type: "error", Mode: req.Mode, Error: err.Error()})
-		return err
+	// One automatic retry on empty Pi settles. A long-lived companion sometimes
+	// hits a half-dead first Pi RPC (auth race, transient API blip) while the
+	// HTTP process itself still looks healthy — restarting companion works,
+	// but retrying the child is cheaper and fixes most cases without mm web restart.
+	var text string
+	for attempt := 0; attempt < 2; attempt++ {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			_ = emit(Event{Type: "error", Mode: req.Mode, Error: ctxErr.Error()})
+			return ctxErr
+		}
+		var runErr error
+		text, runErr = r.runPrompt(ctx, provider, model, BuildPrompt(req), func(delta string) error {
+			return emit(Event{Type: "delta", Mode: req.Mode, Text: delta})
+		})
+		err = runErr
+		if err == nil && strings.TrimSpace(text) != "" {
+			break
+		}
+		if attempt == 0 && (err == nil || isEmptyOutputErr(err)) {
+			continue // retry once with a fresh Pi child
+		}
+		if err != nil {
+			_ = emit(Event{Type: "error", Mode: req.Mode, Error: err.Error()})
+			return err
+		}
 	}
 	text = strings.TrimSpace(text)
 	if text == "" {
-		err := errors.New("model returned empty output")
+		err = fmt.Errorf("model returned empty output from %s/%s — try mm web restart", provider, model)
 		_ = emit(Event{Type: "error", Mode: req.Mode, Error: err.Error()})
 		return err
 	}
@@ -246,6 +265,8 @@ func (r Runner) runPrompt(ctx context.Context, provider, model, prompt string, o
 	reader := bufio.NewReaderSize(stdout, 64<<10)
 	accepted := false
 	var collected strings.Builder
+	var sawAssistant bool
+	var eventTrace []string
 	for {
 		frame, readErr := readRPCFrame(reader)
 		if readErr != nil {
@@ -264,6 +285,9 @@ func (r Runner) runPrompt(ctx context.Context, provider, model, prompt string, o
 		}
 		var eventType string
 		_ = json.Unmarshal(event["type"], &eventType)
+		if len(eventTrace) < 24 {
+			eventTrace = append(eventTrace, eventType)
+		}
 		switch eventType {
 		case "response":
 			var response struct {
@@ -307,6 +331,16 @@ func (r Runner) runPrompt(ctx context.Context, provider, model, prompt string, o
 					}
 				}
 			}
+		case "message_start":
+			var msg struct {
+				Message struct {
+					Role string `json:"role"`
+				} `json:"message"`
+			}
+			_ = json.Unmarshal(frame, &msg)
+			if msg.Message.Role == "assistant" {
+				sawAssistant = true
+			}
 		case "message_end":
 			if text := assistantText(frame); text != "" && collected.Len() == 0 {
 				collected.WriteString(text)
@@ -332,16 +366,32 @@ func (r Runner) runPrompt(ctx context.Context, provider, model, prompt string, o
 			}
 			out := collected.String()
 			if strings.TrimSpace(out) == "" {
-				// enabledModels pattern warnings are noise — not the selected model.
-				detail := filterPiNoise(stderr.String())
-				if detail != "" {
-					return "", fmt.Errorf("model returned empty output from %s/%s (pi: %s)", provider, model, detail)
-				}
-				return "", fmt.Errorf("model returned empty output from %s/%s — try mm web restart", provider, model)
+				return "", emptyOutputError(provider, model, stderr.String(), sawAssistant, eventTrace)
 			}
 			return out, nil
 		}
 	}
+}
+
+func emptyOutputError(provider, model, stderr string, sawAssistant bool, trace []string) error {
+	detail := filterPiNoise(stderr)
+	hint := "restart companion: mm web restart (stale web process often drops Pi streams)"
+	if !sawAssistant {
+		hint = "Pi never started an assistant turn — check deepseek auth (pi login) and network"
+	}
+	if detail != "" {
+		return fmt.Errorf("model returned empty output from %s/%s (pi: %s; events: %s) — %s",
+			provider, model, detail, strings.Join(trace, ">"), hint)
+	}
+	return fmt.Errorf("model returned empty output from %s/%s (events: %s) — %s",
+		provider, model, strings.Join(trace, ">"), hint)
+}
+
+func isEmptyOutputErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "model returned empty output")
 }
 
 // filterPiNoise drops settings.json enabledModels pattern warnings so they

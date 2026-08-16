@@ -20,12 +20,8 @@ import (
 	"membox/internal/web/backend"
 )
 
-// Lifecycle modes mirror the backend constants so callers need only this
-// package.
-const (
-	LifecycleSession = backend.CompanionLifecycleSession
-	LifecycleKeep    = backend.CompanionLifecycleKeep
-)
+// Lifecycle mode mirrors the backend constant so callers need only this package.
+const LifecycleKeep = backend.CompanionLifecycleKeep
 
 // ErrAlreadyRunning indicates another companion holds the singleton lock.
 var ErrAlreadyRunning = errors.New("a web companion is already running")
@@ -122,20 +118,21 @@ type SpawnFunc func(ctx context.Context, home, lifecycle string, port int) (int,
 // the live status and whether this call started the process. A held lock with
 // no answering server means a companion is still booting, so Ensure waits for
 // it instead of starting a second one.
+//
+// A running companion whose binary no longer matches the current executable is
+// stopped and replaced: keep-mode processes live long enough to go stale after
+// a rebuild, and reusing one was the root cause of "assist/deepseek empty" and
+// other old-binary bugs.
 func Ensure(ctx context.Context, home, lifecycle string, port int, spawn SpawnFunc) (Status, bool, error) {
 	if lifecycle == "" {
-		lifecycle = LifecycleSession
+		lifecycle = LifecycleKeep
 	}
 	if status, _ := Probe(ctx, home); status.Running {
-		// Ensure is monotonic: a caller asking for keep promotes an existing
-		// session companion, while a session caller never downgrades keep.
-		if lifecycle == LifecycleKeep && status.Mode == LifecycleSession {
-			if err := SetLifecycle(ctx, home, LifecycleKeep); err != nil {
-				return Status{}, false, fmt.Errorf("promoting web companion: %w", err)
-			}
-			status.Mode = LifecycleKeep
+		if binaryCurrent(home) {
+			return status, false, nil
 		}
-		return status, false, nil
+		// Stale binary: recycle it before returning a live status.
+		_ = stopExisting(ctx, home)
 	}
 	held := LockHeld(home)
 	if !held {
@@ -236,26 +233,4 @@ func Stop(ctx context.Context, home string) error {
 		case <-time.After(150 * time.Millisecond):
 		}
 	}
-}
-
-// SetControllerLease renews or releases one TUI controller lease.
-func SetControllerLease(ctx context.Context, home, controller string, release bool) error {
-	controller = strings.TrimSpace(controller)
-	if controller == "" {
-		return errors.New("controller id is required")
-	}
-	_, err := controlRequest(ctx, home, http.MethodPost, "/api/companion/lease", map[string]any{
-		"controller": controller,
-		"release":    release,
-	})
-	return err
-}
-
-// SetLifecycle switches a running companion between session and keep mode.
-func SetLifecycle(ctx context.Context, home, mode string) error {
-	if mode != LifecycleSession && mode != LifecycleKeep {
-		return fmt.Errorf("lifecycle must be %q or %q", LifecycleSession, LifecycleKeep)
-	}
-	_, err := controlRequest(ctx, home, http.MethodPost, "/api/companion/lifecycle", map[string]string{"mode": mode})
-	return err
 }

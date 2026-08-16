@@ -41,6 +41,29 @@ func TestCLI_WebRequiresSubcommand(t *testing.T) {
 	}
 }
 
+func TestCLI_WebStartHelpDocumentsForeground(t *testing.T) {
+	code, stdout, stderr := runTestCLI(t, "web", "start", "--help")
+	if code != 0 {
+		t.Fatalf("web start --help failed: code=%d stderr=%q", code, stderr)
+	}
+	help := stdout + stderr
+	if !strings.Contains(help, "--fg") {
+		t.Fatalf("start help should document --fg: %q", help)
+	}
+}
+
+func TestCLI_ServeIsDeprecatedAlias(t *testing.T) {
+	// Help still works; cobra marks the command deprecated toward mm web start --fg.
+	code, stdout, stderr := runTestCLI(t, "serve", "--help")
+	if code != 0 {
+		t.Fatalf("serve --help failed: code=%d stderr=%q", code, stderr)
+	}
+	help := stdout + stderr
+	if !strings.Contains(help, "web start") && !strings.Contains(help, "Deprecated") {
+		t.Fatalf("serve should point at mm web start: %q", help)
+	}
+}
+
 // TestCLI_WebLifecycle runs a real companion in-process (web run), then
 // exercises status/open discovery/stop across separate CLI invocations.
 func TestCLI_WebLifecycle(t *testing.T) {
@@ -51,7 +74,7 @@ func TestCLI_WebLifecycle(t *testing.T) {
 	runDone := make(chan int, 1)
 	go func() {
 		// Ephemeral port so the test never fights a developer's real :8787.
-		runDone <- Run(ctx, []string{"--home", home, "web", "run", "--lifecycle", "keep", "--port", "0"},
+		runDone <- Run(ctx, []string{"--home", home, "web", "run", "--port", "0"},
 			strings.NewReader(""), &strings.Builder{}, &strings.Builder{}, fakeLauncher{}, false)
 	}()
 
@@ -71,7 +94,7 @@ func TestCLI_WebLifecycle(t *testing.T) {
 	}
 
 	// A second run must refuse while the companion holds the lock.
-	code, _, stderr := runTestCLI(t, "--home", home, "web", "run", "--lifecycle", "keep", "--port", "0")
+	code, _, stderr := runTestCLI(t, "--home", home, "web", "run", "--port", "0")
 	if code == 0 || !strings.Contains(stderr, "already running") {
 		t.Fatalf("second run must refuse: code=%d stderr=%q", code, stderr)
 	}

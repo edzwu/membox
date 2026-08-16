@@ -249,7 +249,7 @@ function formatSaveError(err: unknown): string {
     return 'Extension asleep — refresh this page';
   }
   if (/failed to fetch|networkerror|load failed/i.test(raw)) {
-    return 'membox offline — open TUI / mm serve';
+    return 'membox offline — open TUI / mm web start';
   }
   if (/unauthorized/i.test(raw)) {
     return 'Token mismatch — check popup settings';

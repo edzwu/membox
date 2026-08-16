@@ -7,8 +7,6 @@ package tui
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"os/exec"
 	"runtime"
@@ -34,8 +32,6 @@ type webState struct {
 	spawnedPID int
 	// sequence guards the periodic refresh loop against duplicates.
 	sequence uint64
-	// controllerID owns one renewable lease; it is never shared by another TUI.
-	controllerID string
 }
 
 func (w webState) running() bool { return w.status.Running }
@@ -52,44 +48,13 @@ type webStatusMsg struct {
 
 const webRefreshInterval = 3 * time.Second
 
-func newWebControllerID() string {
-	var random [16]byte
-	if _, err := rand.Read(random[:]); err == nil {
-		return hex.EncodeToString(random[:])
-	}
-	return fmt.Sprintf("tui-%d", time.Now().UnixNano())
-}
-
-func webEnsureCmd(ctx context.Context, app App, controller string) tea.Cmd {
+func webEnsureCmd(ctx context.Context, app App) tea.Cmd {
 	return func() tea.Msg {
-		// TUI entry restarts the companion so an orphaned mm serve / ephemeral
+		// TUI entry restarts the companion so an orphaned foreground / ephemeral
 		// fallback from a previous session cannot steal :8787 from the extension
-		// or leave Agent workers attached to a dead control plane.
+		// or leave Agent workers attached to a stale binary.
 		view, err := app.RestartWebCompanion(ctx, "")
-		if err == nil && view.Running {
-			err = app.RenewWebLease(ctx, controller)
-		}
 		return webStatusMsg{view: view, err: err}
-	}
-}
-
-// maintainWebLease is independent of Bubble Tea's Update loop. UI refreshes
-// may be delayed by ExecProcess, rendering, or one transient probe failure;
-// none of those should let a live TUI's session lease expire.
-func maintainWebLease(ctx context.Context, app App, controller string, interval time.Duration) {
-	renew := func() {
-		_ = app.RenewWebLease(ctx, controller)
-	}
-	renew()
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			renew()
-		}
 	}
 }
 
@@ -122,24 +87,9 @@ func webStopAndQuitCmd(ctx context.Context, app App, fromPrompt bool) tea.Cmd {
 	}
 }
 
-// webReleaseAndQuitCmd releases only this TUI's lease. A session companion
-// exits when it was the last controller; another TUI's lease keeps it alive.
-func webReleaseAndQuitCmd(ctx context.Context, app App, controller string, fromPrompt bool) tea.Cmd {
+// webKeepAndQuitCmd quits while leaving the keep companion running.
+func webKeepAndQuitCmd(notify, fromPrompt bool, url string) tea.Cmd {
 	return func() tea.Msg {
-		return webQuitResultMsg{action: "release", err: app.ReleaseWebLease(ctx, controller), fromPrompt: fromPrompt}
-	}
-}
-
-// webKeepAndQuitCmd promotes first, then releases this TUI lease. Neither error
-// is ignored: an unconfirmed keep must never be followed by process exit.
-func webKeepAndQuitCmd(ctx context.Context, app App, controller string, notify, fromPrompt bool, url string) tea.Cmd {
-	return func() tea.Msg {
-		if err := app.SetWebLifecycle(ctx, "keep"); err != nil {
-			return webQuitResultMsg{action: "keep", err: err, fromPrompt: fromPrompt}
-		}
-		if err := app.ReleaseWebLease(ctx, controller); err != nil {
-			return webQuitResultMsg{action: "release", err: err, fromPrompt: fromPrompt}
-		}
 		return webQuitResultMsg{action: "keep", fromPrompt: fromPrompt, notify: notify, url: url}
 	}
 }
@@ -198,14 +148,6 @@ func (m Model) webCommandAction(tokens []string) (func() tea.Msg, string, error)
 			if err := m.app.SetSetting(m.ctx, application.SettingWebOnExit, application.OnExitKeep); err != nil {
 				return commandResultMsg{err: err}
 			}
-			// Promote a running session companion so it actually survives.
-			if view, statusErr := m.app.WebStatus(m.ctx); statusErr != nil {
-				return commandResultMsg{err: statusErr}
-			} else if view.Running {
-				if lifecycleErr := m.app.SetWebLifecycle(m.ctx, "keep"); lifecycleErr != nil {
-					return commandResultMsg{err: lifecycleErr}
-				}
-			}
 			return settingSavedMsg{key: application.SettingWebOnExit, value: application.OnExitKeep}
 		}, "web keep", nil
 	}
@@ -249,12 +191,10 @@ func (m Model) beginQuit() (tea.Model, tea.Cmd) {
 	}
 	switch m.webOnExitPolicy() {
 	case application.OnExitStop:
-		// Quit policy releases only this TUI. Another TUI's lease must keep the
-		// shared session companion alive.
-		return m, webReleaseAndQuitCmd(m.ctx, m.app, m.web.controllerID, false)
+		return m, webStopAndQuitCmd(m.ctx, m.app, false)
 	case application.OnExitKeep:
-		notify := m.web.status.Tabs > 0 && m.web.owned() && m.web.status.Mode != "keep"
-		return m, webKeepAndQuitCmd(m.ctx, m.app, m.web.controllerID, notify, false, m.web.status.URL)
+		notify := m.web.status.Tabs > 0 && m.web.owned()
+		return m, webKeepAndQuitCmd(notify, false, m.web.status.URL)
 	default: // ask
 		m.webQuitPrompt = true
 		return m, nil
@@ -267,7 +207,7 @@ func (m Model) updateWebQuitPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "k":
 		m.webQuitPrompt = false
 		notify := m.web.status.Tabs > 0 && m.web.owned()
-		return m, webKeepAndQuitCmd(m.ctx, m.app, m.web.controllerID, notify, true, m.web.status.URL)
+		return m, webKeepAndQuitCmd(notify, true, m.web.status.URL)
 	case "s":
 		m.webQuitPrompt = false
 		return m, webStopAndQuitCmd(m.ctx, m.app, true)

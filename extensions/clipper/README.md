@@ -19,10 +19,10 @@ YouTube watch/shorts/embed pages take a different path:
 
 | 进程 | 做什么 | 要不要 `npm run dev` |
 | --- | --- | --- |
-| **membox**（TUI / `mm serve`） | `127.0.0.1:8787` Miru + `/api/ingest` | **不需要** npm |
+| **membox**（TUI / `mm web start`） | `127.0.0.1:8787` Miru + `/api/ingest` | **不需要** npm |
 | **WXT 扩展开发** | 把扩展源码打成 Chrome 可加载的包 | **只有改扩展代码时**才要 |
 
-日常剪网页：只开 TUI（或 `mm serve`）+ 已安装的扩展即可。  
+日常剪网页：只开 TUI（或 `mm web start`）+ 已安装的扩展即可。  
 `npm run dev` 不是第二个 membox localhost，只是扩展热更新构建。
 
 ## Prerequisites
@@ -36,8 +36,8 @@ mm
 # 状态栏应出现 bridge http://127.0.0.1:8787
 # token 在 ~/.membox/bridge.json
 
-# 方式 B：单独挂 server（不关 TUI 时也可）
-mm serve --port 8787
+# 方式 B：单独挂 companion（前台，Ctrl+C 停；后台用 mm web start）
+mm web start --fg --port 8787
 ```
 
 ## Develop the extension (only when changing clipper code)
@@ -120,4 +120,4 @@ npm run zip
 
 ## Pairing file
 
-`mm serve` also writes `~/.membox/bridge.json` (`base_url`, `token`, `port`).
+`mm web start` / `mm web start --fg` also write `~/.membox/bridge.json` (`base_url`, `token`, `port`).

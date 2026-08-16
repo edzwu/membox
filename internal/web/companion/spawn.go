@@ -11,7 +11,7 @@ import (
 // SpawnDetached starts `mm web run` as a detached child so it survives the
 // TUI exiting (keep mode) and does not receive terminal signals (Setsid). The
 // child's output goes to companion.log for post-mortem diagnostics.
-func SpawnDetached(ctx context.Context, home, lifecycle string, port int) (int, error) {
+func SpawnDetached(ctx context.Context, home, _ string, port int) (int, error) {
 	executable, err := os.Executable()
 	if err != nil {
 		return 0, fmt.Errorf("locating membox binary: %w", err)
@@ -19,7 +19,6 @@ func SpawnDetached(ctx context.Context, home, lifecycle string, port int) (int, 
 	command, err := newDetachedCommand(ctx, executable,
 		"--home", home,
 		"web", "run",
-		"--lifecycle", lifecycle,
 		"--port", strconv.Itoa(port),
 	)
 	if err != nil {

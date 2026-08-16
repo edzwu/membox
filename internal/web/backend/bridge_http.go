@@ -30,7 +30,11 @@ type BridgeFile struct {
 	Mode        string `json:"mode,omitempty"`
 	PID         int    `json:"pid,omitempty"`
 	HostVersion string `json:"host_version,omitempty"`
-	WrittenAt   string `json:"written_at"`
+	// HostBinary is the size:mtime fingerprint of the companion binary, used to
+	// detect a stale keep process after a rebuild. Omitempty keeps older bridge
+	// files and the extension compatible.
+	HostBinary string `json:"host_binary,omitempty"`
+	WrittenAt  string `json:"written_at"`
 }
 
 // NewBridgeToken returns a random 32-byte hex token.

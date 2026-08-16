@@ -8,12 +8,12 @@ import (
 	"time"
 )
 
-// Companion lifecycle modes. "session" companions follow their parent process
-// (the TUI stops them on quit); "keep" companions stay running until the user
-// explicitly stops them.
+// Companion lifecycle mode. The companion is a long-lived keep daemon stopped
+// only by an explicit /stop request (mm web stop / TUI quit with web_on_exit=stop).
+// Session/lease lifecycle was removed: it made Miru/clipper/assist fragile
+// whenever the TUI released leases or reused a stale process.
 const (
-	CompanionLifecycleSession = "session"
-	CompanionLifecycleKeep    = "keep"
+	CompanionLifecycleKeep = "keep"
 )
 
 // tabPresence tracks one browser tab's heartbeat so the TUI can show how many
@@ -25,11 +25,9 @@ type tabPresence struct {
 
 // tabRetention is how long a silent tab stays visible before it is pruned.
 const (
-	tabRetention             = 35 * time.Second
-	maxCompanionTabs         = 256
-	presenceHeaderName       = "X-Membox-Presence"
-	controllerLeaseRetention = 12 * time.Second
-	maxControllerLeases      = 64
+	tabRetention       = 35 * time.Second
+	maxCompanionTabs   = 256
+	presenceHeaderName = "X-Membox-Presence"
 )
 
 // CompanionState aggregates the control-plane facts the status endpoint
@@ -45,17 +43,14 @@ type CompanionState struct {
 }
 
 // ConfigureCompanion marks the server as a managed Web Companion and wires the
-// control endpoints. onStop is invoked (once) when a stop request arrives;
-// onLifecycle is invoked when the lifecycle mode changes at runtime.
-func (s *Server) ConfigureCompanion(mode string, onStop func(), onLifecycle func(mode string)) {
+// stop control endpoint. onStop is invoked (once) when a stop request arrives.
+func (s *Server) ConfigureCompanion(onStop func()) {
 	s.companionMu.Lock()
 	defer s.companionMu.Unlock()
-	s.companionMode = mode
+	s.companionMode = CompanionLifecycleKeep
 	s.companionStartedAt = time.Now()
 	s.companionTabs = make(map[string]tabPresence)
-	s.companionLeases = make(map[string]time.Time)
 	s.onCompanionStop = onStop
-	s.onCompanionLifecycle = onLifecycle
 }
 
 // CompanionState returns a snapshot for status reporting. The mode is empty
@@ -156,71 +151,6 @@ func (s *Server) handleCompanionPresence(writer http.ResponseWriter, request *ht
 	_ = json.NewEncoder(writer).Encode(map[string]any{"tabs": tabs, "dirty_tabs": dirty})
 }
 
-// handleCompanionStatus reports the companion control plane to the TUI/CLI.
-// ControllerLeaseState prunes stale TUI leases and reports whether any live
-// controller remains. ever distinguishes startup grace from a crashed TUI.
-func (s *Server) ControllerLeaseState() (active int, ever bool) {
-	s.companionMu.Lock()
-	defer s.companionMu.Unlock()
-	cutoff := time.Now().Add(-controllerLeaseRetention)
-	for id, renewedAt := range s.companionLeases {
-		if renewedAt.Before(cutoff) {
-			delete(s.companionLeases, id)
-		}
-	}
-	return len(s.companionLeases), s.companionEverLeased
-}
-
-// handleCompanionLease renews or releases one TUI's controller lease. A clean
-// release immediately ends a session companion only when no other TUI owns a
-// live lease. Explicit /stop remains the sole global-stop action.
-func (s *Server) handleCompanionLease(writer http.ResponseWriter, request *http.Request) {
-	if request.Method != http.MethodPost {
-		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if !s.requireBridgeToken(writer, request) {
-		return
-	}
-	var payload struct {
-		Controller string `json:"controller"`
-		Release    bool   `json:"release"`
-	}
-	if !decodeJSON(writer, request, &payload) {
-		return
-	}
-	controller := strings.TrimSpace(payload.Controller)
-	if controller == "" || len(controller) > 128 {
-		http.Error(writer, "controller is required", http.StatusBadRequest)
-		return
-	}
-	s.companionMu.Lock()
-	if s.companionLeases == nil {
-		s.companionLeases = make(map[string]time.Time)
-	}
-	if payload.Release {
-		delete(s.companionLeases, controller)
-	} else {
-		if _, exists := s.companionLeases[controller]; !exists && len(s.companionLeases) >= maxControllerLeases {
-			s.companionMu.Unlock()
-			http.Error(writer, "too many controllers", http.StatusTooManyRequests)
-			return
-		}
-		s.companionLeases[controller] = time.Now()
-		s.companionEverLeased = true
-	}
-	remaining := len(s.companionLeases)
-	stopSession := payload.Release && remaining == 0 && s.companionMode == CompanionLifecycleSession
-	onStop := s.onCompanionStop
-	s.companionMu.Unlock()
-	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
-	writer.Header().Set("Cache-Control", "no-store")
-	_ = json.NewEncoder(writer).Encode(map[string]any{"leased": !payload.Release, "controllers": remaining})
-	if stopSession && onStop != nil {
-		go onStop()
-	}
-}
-
 func (s *Server) handleCompanionStatus(writer http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodGet {
 		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
@@ -262,39 +192,5 @@ func (s *Server) handleCompanionStop(writer http.ResponseWriter, request *http.R
 	_ = json.NewEncoder(writer).Encode(map[string]any{"stopping": true})
 	if onStop != nil {
 		go onStop()
-	}
-}
-
-// handleCompanionLifecycle switches the lifecycle mode of a running companion.
-// Keep ignores controller leases; session resumes lease-based shutdown.
-func (s *Server) handleCompanionLifecycle(writer http.ResponseWriter, request *http.Request) {
-	if request.Method != http.MethodPost {
-		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if !s.requireBridgeToken(writer, request) {
-		return
-	}
-	var payload struct {
-		Mode string `json:"mode"`
-	}
-	if !decodeJSON(writer, request, &payload) {
-		return
-	}
-	mode := strings.TrimSpace(payload.Mode)
-	if mode != CompanionLifecycleSession && mode != CompanionLifecycleKeep {
-		http.Error(writer, "mode must be session or keep", http.StatusBadRequest)
-		return
-	}
-	s.companionMu.Lock()
-	changed := s.companionMode != mode
-	s.companionMode = mode
-	onLifecycle := s.onCompanionLifecycle
-	s.companionMu.Unlock()
-	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
-	writer.Header().Set("Cache-Control", "no-store")
-	_ = json.NewEncoder(writer).Encode(map[string]any{"mode": mode})
-	if changed && onLifecycle != nil {
-		onLifecycle(mode)
 	}
 }

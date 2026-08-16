@@ -228,11 +228,11 @@ WEB ! unavailable                  start failed (see ~/.membox/companion.log)
 What happens to the companion when the TUI quits is the `web on exit` setting (`ctrl+o`, or `:web keep`): `ask` (default) shows a prompt, `stop` releases this TUI's session lease, and `keep` promotes the companion before releasing the lease. A session companion stops when its last TUI lease is released or expires, so closing one of several TUIs never disrupts the others. Choosing `[s] Stop web and quit`, `:web stop`, or `mm web stop` is an explicit global stop.
 
 ```bash
-./mm web status   # show companion state, tabs, unsaved counts
-./mm web start    # start it detached (survives the terminal)
-./mm web stop     # stop it
-./mm web open     # open the reader in the browser
-./mm serve        # run the companion in the foreground instead
+./mm web status      # show companion state, tabs, unsaved counts
+./mm web start       # start detached (survives the terminal)
+./mm web start --fg  # run in this terminal until Ctrl+C (pair clipper / debug)
+./mm web stop        # stop it
+./mm web open        # open the reader in the browser
 ```
 
 Inside the TUI, `:web status / open / start / stop / keep` do the same, and `ctrl+o` adds `o` (open reader) and `x` (stop/start). Each TUI renews an independent controller lease. Browser tabs send same-origin POST heartbeats with their unsaved state, so the badge and `mm web status` reflect what is actually open. All TUI, CLI, and Companion data mutations also share `$MEMBOX_HOME/mutation.lock`, serializing each complete file-and-index update across processes.

@@ -1,6 +1,6 @@
 # Web Ingest Extension — 设计方案
 
-> 状态：Draft · **P0/M1 已落地骨架**（`/api/ingest`、`mm serve`、`extensions/clipper`）  
+> 状态：Draft · **P0/M1 已落地骨架**（`/api/ingest`、`mm web start --fg`、`extensions/clipper`）  
 > 相关：[`development.md`](development.md)、[`user-stories.md`](user-stories.md)、MarkSnip Agent Bridge（参考实现）  
 > 目标：用 **WXT** 做浏览器扩展，把任意网页转为 Markdown，**ingest 进 membox（分配 UUID）**，并用现有 **Miru** 前端打开阅读/批注。
 
@@ -91,7 +91,7 @@ MarkSnip Agent Bridge 的合理内核是：
 │  - GET  /api/doc/:id  （已有）                               │
 │  - GET  /?id=:id      （已有 Miru）                          │
 │  - GET  /api/bridge/status                                  │
-│  - session/token 文件 或 mm serve 打印的 endpoint             │
+│  - session/token 文件 或 mm web start --fg 打印的 endpoint             │
 └─────────────────────────────────────────────────────────────┘
                                │
                                ▼
@@ -155,7 +155,7 @@ MVP 推荐 **A**，版本与 `/api/ingest` 契约一起演进。
 验收：
 
 - popup 显示 Connected / Offline  
-- Offline 时提供：如何启动 `mm serve`（或「打开 membox」按钮若 OS 集成允许）  
+- Offline 时提供：如何启动 `mm web start --fg`（或「打开 membox」按钮若 OS 集成允许）  
 - 不出现无提示的静默失败
 
 ### US-CLIP-003 — 选区剪辑（P1）
@@ -309,7 +309,7 @@ $MEMBOX_HOME/bridge.json
 }
 ```
 
-扩展 options：读取用户粘贴的 token + base URL；或 `mm serve --write-extension-config` 生成说明。
+扩展 options：读取用户粘贴的 token + base URL；或 `mm web start --fg --write-extension-config` 生成说明。
 
 ### 6.3 威胁模型（本地）
 
@@ -329,7 +329,7 @@ $MEMBOX_HOME/bridge.json
 推荐：
 
 ```bash
-mm serve          # 前台或用户服务：启动 web + bridge 配置
+mm web start --fg          # 前台或用户服务：启动 web + bridge 配置
 # 或 TUI/桌面首次 OpenDocumentWeb 时已懒启动 —— 扩展场景需要「常驻」
 ```
 
@@ -338,7 +338,7 @@ mm serve          # 前台或用户服务：启动 web + bridge 配置
 已落地策略：
 
 1. **TUI 启动时自动 `StartWebServer`**（优先 `:8787`，占用则换临时端口），并写 `~/.membox/bridge.json`  
-2. **`mm serve`** 仍可用（无 TUI 时单独挂 bridge）  
+2. **`mm web start --fg`** 仍可用（无 TUI 时单独挂 bridge）  
 3. 扩展开发才需要 `npm run dev`（构建扩展，不是 membox 的 localhost）  
 4. 后可做 login item / daemon（P2）
 
@@ -423,7 +423,7 @@ User: 点击 Save to membox
 
 - [x] 扩展：整页 Readability → MD → ingest → 打开 Miru  
 - [x] membox：`/api/ingest` + token + CORS  
-- [x] `mm serve`；popup 连接状态  
+- [x] `mm web start --fg`；popup 连接状态  
 - [x] API 测试（ingest + token）  
 - [ ] 转换 fixture 快照测试（后续）
 
@@ -496,7 +496,7 @@ Extension 或 Miru 选区 Save
 
 ## 11. 开放问题
 
-1. **常驻方式**：仅文档约定 `mm serve`，还是要 daemon/launchd？  
+1. **常驻方式**：仅文档约定 `mm web start --fg`，还是要 daemon/launchd？  
 2. **默认写入路径**：必须已 `path add` 某个 notes 根，还是 membox 提供默认 inbox 目录？  
 3. **图片**：MVP 只保留 URL，还是下载到附件目录？（建议 MVP 外链）  
 4. **付费墙/登录页**：扩展可读当前 DOM（已登录态）——产品上要在隐私说明里写清「仅本机、用户触发」。  
@@ -509,7 +509,7 @@ Extension 或 Miru 选区 Save
 1. 在 membox 实现 `POST /api/ingest`（可先无 token，用现有 CreateNote）+ 测试。  
 2. 脚手架 `extensions/clipper`（WXT），popup 一个按钮：硬编码 markdown → ingest → `tabs.create`。  
 3. 再接入 Readability/Turndown 与 token。  
-4. 文档：`mm serve` + 扩展 options 配对流程写进 `user-stories.md` 新 Epic。
+4. 文档：`mm web start --fg` + 扩展 options 配对流程写进 `user-stories.md` 新 Epic。
 
 ---
 

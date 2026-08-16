@@ -12,10 +12,10 @@ import (
 	"membox/internal/web/companion"
 )
 
-// newWebCommand groups the Web Companion controls. The companion is the one
-// process per membox home that owns the reader, the browser bridge, and
-// web-originated writes; these commands probe, start, stop, and open it
-// without needing the TUI.
+// newWebCommand is the single control plane for the Web Companion — the one
+// process per membox home that owns Miru, the browser bridge, and web-originated
+// writes. Foreground and detached are just start modes; TUI/CLI/extension all
+// share the same companion.
 func newWebCommand(runtime *runtime) *cobra.Command {
 	command := parentCommand("web", "Control the membox Web Companion", "web command is required: status, start, stop, restart, open")
 	command.AddCommand(
@@ -92,27 +92,31 @@ func formatUptime(startedAt time.Time) string {
 }
 
 func newWebStartCommand(runtime *runtime) *cobra.Command {
+	var port int
+	var foreground bool
+	var noToken bool
 	command := &cobra.Command{
 		Use:   "start",
-		Short: "Start the Web Companion if it is not running",
+		Short: "Start the Web Companion (detached by default; --fg runs in this terminal)",
 		Args:  noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if noToken {
+				foreground = true
+			}
+			if foreground {
+				return runWebForeground(cmd, runtime, port, noToken)
+			}
 			home, err := resolveHome(runtime)
 			if err != nil {
 				return err
 			}
-			before, _ := companion.Probe(cmd.Context(), home)
-			status, spawned, err := companion.Ensure(cmd.Context(), home, companion.LifecycleKeep, 0, nil)
+			status, spawned, err := companion.Ensure(cmd.Context(), home, companion.LifecycleKeep, port, nil)
 			if err != nil {
 				return err
 			}
 			out := cmd.OutOrStdout()
 			if !spawned {
-				if before.Running && before.Mode == companion.LifecycleSession && status.Mode == companion.LifecycleKeep {
-					fmt.Fprintf(out, "web companion promoted to keep mode\n  URL: %s\n", status.BaseURL)
-				} else {
-					fmt.Fprintf(out, "web companion already running\n  URL: %s\n", status.BaseURL)
-				}
+				fmt.Fprintf(out, "web companion already running\n  URL: %s\n", status.BaseURL)
 				return nil
 			}
 			fmt.Fprintf(out, "web companion started\n  URL:  %s\n", status.BaseURL)
@@ -120,7 +124,57 @@ func newWebStartCommand(runtime *runtime) *cobra.Command {
 			return nil
 		},
 	}
+	command.Flags().IntVar(&port, "port", 0, "listen port (0 = prefer 8787, else ephemeral)")
+	command.Flags().BoolVar(&foreground, "fg", false, "run in the foreground until Ctrl+C (pair clipper / debug)")
+	command.Flags().BoolVar(&noToken, "no-token", false, "disable bridge token auth (local dev only; implies --fg)")
 	return command
+}
+
+// runWebForeground blocks as the Web Companion in this process. Shared by
+// `mm web start --fg` and the deprecated `mm serve` alias.
+func runWebForeground(cmd *cobra.Command, runtime *runtime, port int, noToken bool) error {
+	home, err := resolveHome(runtime)
+	if err != nil {
+		return err
+	}
+	out := cmd.OutOrStdout()
+	// --no-token skips HTTP auth only. It cannot share a home with a
+	// companion; all data mutations still use the home mutation lock.
+	if noToken {
+		releaseOwnership, lockErr := companion.AcquireLock(home)
+		if lockErr != nil {
+			return fmt.Errorf("claiming web ownership for --no-token: %w", lockErr)
+		}
+		defer releaseOwnership()
+		box, err := runtime.get()
+		if err != nil {
+			return err
+		}
+		server := box.WebServer()
+		baseURL, startErr := server.Start(cmd.Context(), port)
+		if startErr != nil {
+			return startErr
+		}
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			_ = server.Shutdown(shutdownCtx)
+		}()
+		fmt.Fprintf(out, "web companion (foreground)\n  URL: %s\n  Auth disabled (--no-token)\nPress Ctrl+C to stop.\n", baseURL)
+		<-cmd.Context().Done()
+		return nil
+	}
+
+	if status, _ := companion.Probe(cmd.Context(), home); status.Running {
+		return fmt.Errorf("a web companion is already running: %s (stop it with: mm web stop)", status.BaseURL)
+	}
+	err = runServeForeground(cmd.Context(), runtime, port, func(format string, args ...any) {
+		fmt.Fprintf(out, format, args...)
+	})
+	if err == context.Canceled {
+		return nil
+	}
+	return err
 }
 
 func newWebRestartCommand(runtime *runtime) *cobra.Command {
@@ -134,7 +188,7 @@ func newWebRestartCommand(runtime *runtime) *cobra.Command {
 				return err
 			}
 			// Keep mode so the companion survives this CLI command exiting;
-			// the TUI applies its own session/keep policy on entry.
+			// the TUI applies its own keep/stop policy on quit.
 			status, err := companion.Restart(cmd.Context(), home, companion.LifecycleKeep, 0, nil)
 			if err != nil {
 				return err
@@ -203,11 +257,9 @@ func newWebOpenCommand(runtime *runtime) *cobra.Command {
 }
 
 // newWebRunCommand is the hidden foreground companion runner. It is what the
-// TUI spawns detached (`mm web run --lifecycle …`) and what
-// `mm serve` reuses inline.
+// TUI / `mm web start` spawn detached (`mm web run …`).
 func newWebRunCommand(runtime *runtime) *cobra.Command {
 	var port int
-	var lifecycle string
 	command := &cobra.Command{
 		Use:    "run",
 		Hidden: true,
@@ -220,7 +272,7 @@ func newWebRunCommand(runtime *runtime) *cobra.Command {
 			return companion.Run(cmd.Context(), companion.Options{
 				Home:      home,
 				Port:      port,
-				Lifecycle: lifecycle,
+				Lifecycle: companion.LifecycleKeep,
 				Version:   membox.Version,
 				OnReady: func(baseURL, token string) {
 					fmt.Fprintf(cmd.OutOrStdout(), "web companion ready\n  URL:   %s\n  Token: %s\n", baseURL, token)
@@ -229,12 +281,11 @@ func newWebRunCommand(runtime *runtime) *cobra.Command {
 		},
 	}
 	command.Flags().IntVar(&port, "port", 0, "listen port (0 = prefer 8787, else ephemeral)")
-	command.Flags().StringVar(&lifecycle, "lifecycle", companion.LifecycleSession, "lifecycle mode: session or keep")
 	return command
 }
 
 // runServeForeground blocks as the Web Companion, printing pairing info once
-// the server listens. Shared by `mm serve` (keep mode, user-facing).
+// the server listens. Used by `mm web start --fg` (and the `mm serve` alias).
 func runServeForeground(ctx context.Context, runtime *runtime, port int, out func(format string, args ...any)) error {
 	home, err := resolveHome(runtime)
 	if err != nil {
@@ -246,11 +297,11 @@ func runServeForeground(ctx context.Context, runtime *runtime, port int, out fun
 		Lifecycle: companion.LifecycleKeep,
 		Version:   membox.Version,
 		OnReady: func(baseURL, token string) {
-			out("membox serve\n")
+			out("web companion (foreground)\n")
 			out("  URL:    %s\n", baseURL)
 			out("  Token:  %s\n", token)
 			out("\nPair the browser extension with this URL and token.\n")
-			out("The TUI connects to this companion automatically while it runs.\n")
+			out("Detached alternative: mm web start\n")
 			out("Press Ctrl+C to stop.\n")
 		},
 	})

@@ -15,7 +15,7 @@ import (
 func listenerBusy(port int) bool { return listenerPID(port) > 0 }
 
 // forceFreePort terminates a leftover membox listener on port when graceful
-// companion stop is unavailable (legacy mm serve without control endpoints).
+// companion stop is unavailable (legacy foreground companion without control endpoints).
 // Non-membox processes are left alone.
 func forceFreePort(port int) {
 	if port <= 0 {
@@ -64,7 +64,7 @@ func listenerPID(port int) int {
 }
 
 func isMemboxProcess(pid int) bool {
-	// ps -p <pid> -o command=  → path containing /mm or ending with mm / "mm serve"
+	// ps -p <pid> -o command=  → path containing /mm or ending with mm
 	out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "command=").Output()
 	if err != nil {
 		return false
@@ -80,8 +80,10 @@ func isMemboxProcess(pid int) bool {
 	if strings.HasSuffix(base, "/mm") || base == "mm" || strings.HasSuffix(base, "\\mm.exe") {
 		return true
 	}
-	// Detached children appear as "mm web run …"
-	if strings.Contains(cmd, " web run") || strings.Contains(cmd, " serve") {
+	// Detached child: "mm web run …"; foreground: "mm web start --fg" / legacy "mm serve"
+	if strings.Contains(cmd, " web run") ||
+		strings.Contains(cmd, " web start") ||
+		strings.Contains(cmd, " serve") {
 		return strings.Contains(base, "mm")
 	}
 	return false

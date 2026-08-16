@@ -16,7 +16,13 @@ import (
 
 func newDocCommand(runtime *runtime) *cobra.Command {
 	doc := parentCommand("doc", "Find and operate on documents", "a doc command is required")
-	doc.AddCommand(newDocNewCommand(runtime), newDocViewCommand(runtime), newDocListCommand(runtime), newDocSearchCommand(runtime), newDocShowCommand(runtime), newDocCatCommand(runtime), newDocEditCommand(runtime), newDocOpenCommand(runtime), newDocRenameCommand(runtime), newDocDeleteCommand(runtime), newDocMarkCommand(runtime), newDocSummarizeCommand(runtime))
+	doc.AddCommand(
+		newDocNewCommand(runtime), newDocViewCommand(runtime), newDocListCommand(runtime),
+		newDocSearchCommand(runtime), newDocShowCommand(runtime), newDocCatCommand(runtime),
+		newDocEditCommand(runtime), newDocOpenCommand(runtime), newDocRenameCommand(runtime),
+		newDocDeleteCommand(runtime), newDocMarkCommand(runtime), newDocSummarizeCommand(runtime),
+		newDocRewriteCommand(runtime),
+	)
 	return doc
 }
 

@@ -304,3 +304,29 @@ func ftsBodyFor(ctx context.Context, dbPath, id string) (string, bool) {
 	}
 	return body, true
 }
+
+func TestLocateRenderedSelectionFindsMarkupStrippedText(t *testing.T) {
+	md := "# Title\n\nA sentence with **bold** and `code` and [a link](https://x).\n"
+	// browser renders: "A sentence with bold and code and a link."
+	sel := "bold and `code`" // selection as rendered? use rendered text
+	_ = sel
+	start, end, ok := LocateRenderedSelection(md, "A sentence with bold and code and a link.")
+	if !ok {
+		t.Fatal("expected to locate rendered selection")
+	}
+	got := string([]rune(md)[start:end])
+	if !strings.Contains(got, "**bold**") || !strings.Contains(got, "`code`") {
+		t.Fatalf("offsets map to wrong span: %q (start=%d end=%d)", got, start, end)
+	}
+}
+
+func TestLocateRenderedSelectionWhitespaceInsensitive(t *testing.T) {
+	md := "line one\n\nline two with  double  space\n"
+	start, end, ok := LocateRenderedSelection(md, "two with double space")
+	if !ok {
+		t.Fatal("expected whitespace-insensitive match")
+	}
+	if got := string([]rune(md)[start:end]); !strings.Contains(got, "two with  double  space") {
+		t.Fatalf("wrong span: %q", got)
+	}
+}

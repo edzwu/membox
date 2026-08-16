@@ -137,8 +137,21 @@ func (s *Server) handleAssistApply(writer http.ResponseWriter, request *http.Req
 	}
 	next, err := assist.ApplyReplacement(markdown, payload.Selection, payload.Replacement, payload.Prefix, payload.Suffix)
 	if err != nil {
-		http.Error(writer, err.Error(), http.StatusConflict)
-		return
+		// The browser sends rendered text (no ** / ` / [](), headings/list
+		// markers stripped), which cannot be found verbatim in the Markdown
+		// source. Fall back to canonical→source mapping so the user's selection
+		// is never lost between the reader and the file.
+		if start, end, ok := LocateRenderedSelection(markdown, payload.Selection); ok {
+			mdRunes := []rune(markdown)
+			if start >= 0 && end <= len(mdRunes) && start < end {
+				next = string(mdRunes[:start]) + payload.Replacement + string(mdRunes[end:])
+				err = nil
+			}
+		}
+		if err != nil {
+			http.Error(writer, err.Error(), http.StatusConflict)
+			return
+		}
 	}
 	result, err := s.service.SyncDocument(request.Context(), selector, next)
 	if err != nil {

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -92,26 +91,6 @@ func TestModel_WebRefreshRetriesAfterTransientFailureOrMissedProbe(t *testing.T)
 	}
 }
 
-func TestMaintainWebLeaseRunsIndependentlyUntilContextEnds(t *testing.T) {
-	app := &fakeApp{}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		maintainWebLease(ctx, app, "tui-controller", 5*time.Millisecond)
-		close(done)
-	}()
-	time.Sleep(18 * time.Millisecond)
-	cancel()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("lease loop did not stop with its context")
-	}
-	if app.webLeaseCalls < 2 {
-		t.Fatalf("lease renewals = %d, want at least 2", app.webLeaseCalls)
-	}
-}
-
 func TestModel_QuitWithAskPolicyShowsPrompt(t *testing.T) {
 	app := &fakeApp{webTabs: 2, webDirtyTabs: 1}
 	model := runningWebModel(app, "ask")
@@ -149,7 +128,7 @@ func TestModel_QuitPromptKeepPromotesLifecycle(t *testing.T) {
 	updated, command = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
 	model = updated.(Model)
 	if command == nil {
-		t.Fatal("keep choice must schedule a lifecycle command")
+		t.Fatal("keep choice must schedule quit")
 	}
 	result, ok := command().(webQuitResultMsg)
 	if !ok || result.err != nil {
@@ -159,9 +138,6 @@ func TestModel_QuitPromptKeepPromotesLifecycle(t *testing.T) {
 	model = updated.(Model)
 	if quitCommand == nil {
 		t.Fatal("successful keep must schedule quit")
-	}
-	if app.webLifecycle != "keep" {
-		t.Fatalf("keep choice must promote lifecycle, got %q", app.webLifecycle)
 	}
 	if app.webStopCalls != 0 {
 		t.Fatal("keep choice must not stop the companion")
@@ -203,19 +179,19 @@ func TestModel_QuitWithStopPolicyStopsWithoutPrompt(t *testing.T) {
 		t.Fatal("stop policy must not open the prompt")
 	}
 	if command == nil {
-		t.Fatal("stop policy must schedule a lease release")
+		t.Fatal("stop policy must schedule a stop command")
 	}
 	result, ok := command().(webQuitResultMsg)
 	if !ok || result.err != nil {
-		t.Fatalf("stop policy should release successfully, got %#v", result)
+		t.Fatalf("stop policy should stop successfully, got %#v", result)
 	}
 	updated, quitCommand := model.Update(result)
 	model = updated.(Model)
 	if quitCommand == nil {
-		t.Fatal("successful release must schedule quit")
+		t.Fatal("successful stop must schedule quit")
 	}
-	if app.webStopCalls != 0 || app.webReleaseCalls != 1 {
-		t.Fatalf("quit policy must release only this TUI: stop=%d release=%d", app.webStopCalls, app.webReleaseCalls)
+	if app.webStopCalls != 1 {
+		t.Fatalf("stop policy must stop the companion once, got %d", app.webStopCalls)
 	}
 }
 
@@ -229,7 +205,7 @@ func TestModel_QuitWithKeepPolicyQuitsSilently(t *testing.T) {
 		t.Fatal("keep policy must not open the prompt")
 	}
 	if command == nil {
-		t.Fatal("keep policy must promote the companion before quitting")
+		t.Fatal("keep policy must schedule quit")
 	}
 	result, ok := command().(webQuitResultMsg)
 	if !ok || result.err != nil {
@@ -242,9 +218,6 @@ func TestModel_QuitWithKeepPolicyQuitsSilently(t *testing.T) {
 	}
 	if app.webStopCalls != 0 {
 		t.Fatal("keep policy must not stop the companion")
-	}
-	if app.webLifecycle != "keep" {
-		t.Fatalf("keep policy must promote a session companion, got %q", app.webLifecycle)
 	}
 }
 
@@ -263,24 +236,6 @@ func TestModel_QuitStopFailureRestoresPrompt(t *testing.T) {
 	}
 	if !model.webQuitPrompt || model.err == nil || !strings.Contains(model.err.Error(), "stop denied") {
 		t.Fatalf("failed stop must restore prompt and show error: prompt=%v err=%v", model.webQuitPrompt, model.err)
-	}
-}
-
-func TestModel_QuitKeepFailureRestoresPrompt(t *testing.T) {
-	app := &fakeApp{webTabs: 1, webLifecycleErr: errors.New("promotion denied")}
-	model := runningWebModel(app, "ask")
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlD})
-	model = updated.(Model)
-	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
-	model = updated.(Model)
-	result := command().(webQuitResultMsg)
-	updated, quitCommand := model.Update(result)
-	model = updated.(Model)
-	if quitCommand != nil {
-		t.Fatal("failed keep promotion must not quit")
-	}
-	if !model.webQuitPrompt || model.err == nil || !strings.Contains(model.err.Error(), "promotion denied") {
-		t.Fatalf("failed keep must restore prompt and show error: prompt=%v err=%v", model.webQuitPrompt, model.err)
 	}
 }
 
@@ -394,7 +349,7 @@ func TestModel_WebStatusCommandUpdatesBadge(t *testing.T) {
 	}
 }
 
-func TestModel_WebKeepCommandSetsSettingAndLifecycle(t *testing.T) {
+func TestModel_WebKeepCommandSetsSetting(t *testing.T) {
 	app := &fakeApp{}
 	model := runningWebModel(app, "ask")
 
@@ -414,8 +369,5 @@ func TestModel_WebKeepCommandSetsSettingAndLifecycle(t *testing.T) {
 	}
 	if saved, ok := message.(settingSavedMsg); !ok || saved.key != "web_on_exit" || saved.value != "keep" {
 		t.Fatalf("web keep should save web_on_exit=keep, got %#v", message)
-	}
-	if app.webLifecycle != "keep" {
-		t.Fatalf("web keep must promote a running companion, got %q", app.webLifecycle)
 	}
 }
