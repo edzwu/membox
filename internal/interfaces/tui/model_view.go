@@ -370,7 +370,7 @@ func (m Model) visibleGraphIndices() []int {
 			continue
 		}
 		candidate := documentItems([]membox.DocumentView{doc})[0]
-		if matchesTextFilters(candidate.title, candidate.filename, candidate.match, nameFilters) && matchesDateFilters(doc, m.dateFilters) {
+		if matchesTextFilters(candidate.title, candidate.filename, candidate.match, candidate.document.ID, nameFilters) && matchesDateFilters(doc, m.dateFilters) {
 			indices = append(indices, original+1)
 		}
 	}
@@ -958,7 +958,7 @@ func searchResultItems(items []item, results []membox.SearchResult, dateFilters 
 		if hideNotes && isClippedNote(candidate.filename) {
 			continue
 		}
-		if allowed[candidate.document.ID] && matchesMediaScope(candidate.document, mediaScope) && matchesDateFilters(candidate.document, dateFilters) && matchesTextFilters(candidate.title, candidate.filename, candidate.match, nameFilters) {
+		if allowed[candidate.document.ID] && matchesMediaScope(candidate.document, mediaScope) && matchesDateFilters(candidate.document, dateFilters) && matchesTextFilters(candidate.title, candidate.filename, candidate.match, candidate.document.ID, nameFilters) {
 			filtered = append(filtered, candidate)
 		}
 	}

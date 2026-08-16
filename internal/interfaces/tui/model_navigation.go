@@ -94,10 +94,26 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.spaceSequence, m.lastKeyAt = 0, time.Time{}
 		return m, m.openInput(inputModeAgent)
 	case "tab":
-		// Tab is contextual in the file tree: PDFs convert to linked Markdown;
-		// ordinary documents keep the established tree → preview focus action.
+		// Tab is contextual in the file tree:
+		//   • unconverted PDF → start conversion
+		//   • already-converted PDF (◆) → jump to the Markdown TOC index
+		//   • ordinary documents → focus the preview pane
 		if document, ok := m.selectedDocument(); ok && document.MediaType == "application/pdf" {
 			if m.pdfConversionActive {
+				return m, nil
+			}
+			if candidate, ok := m.selectedItem(); ok && candidate.pdfConverted {
+				if index, found := m.findConvertedPDFIndex(document.ID); found {
+					m.selectDocumentID(index.ID)
+					m.statusMessage = "TOC " + shortID(index.ID) + " · " + displayTitle(index.Title, index.Path)
+					cmds := []tea.Cmd{m.loadPreview()}
+					if m.viewerMode == "web" {
+						m.loading = true
+						cmds = append(cmds, m.spinner.Tick, openDocumentWebCmd(m.ctx, m.app, m.launcher, index.ID))
+					}
+					return m, tea.Batch(cmds...)
+				}
+				m.statusMessage = "converted Markdown index not found — try rescan"
 				return m, nil
 			}
 			progressTick := m.beginPDFProgress(document.ID)
@@ -718,7 +734,7 @@ func (m *Model) refreshFilter() {
 		if m.hideNotes && isClippedNote(candidate.filename) {
 			continue
 		}
-		if matchesMediaScope(candidate.document, m.mediaScope) && matchesTextFilters(candidate.title, candidate.filename, candidate.match, nameFilters) && matchesDateFilters(candidate.document, m.dateFilters) {
+		if matchesMediaScope(candidate.document, m.mediaScope) && matchesTextFilters(candidate.title, candidate.filename, candidate.match, candidate.document.ID, nameFilters) && matchesDateFilters(candidate.document, m.dateFilters) {
 			m.filtered = append(m.filtered, candidate)
 		}
 	}
@@ -949,9 +965,9 @@ func textFilterQuery(value string) string {
 	return value
 }
 
-func matchesTextFilters(title, filename, match string, filters []textFilter) bool {
+func matchesTextFilters(title, filename, match, documentID string, filters []textFilter) bool {
 	for _, filter := range filters {
-		if !matchNameFilter(title, filename, match, filter) {
+		if !matchNameFilter(title, filename, match, documentID, filter) {
 			return false
 		}
 	}
@@ -963,10 +979,18 @@ func matchesTextFilters(title, filename, match string, filters []textFilter) boo
 // punctuation act as boundaries, so Chinese substrings still match):
 // "rust" hits "The Rust I Wanted…" but not the "Trust" inside
 // "Don't Trust the Agent". Case keeps the original casing.
-func matchNameFilter(title, filename, match string, filter textFilter) bool {
+//
+// UUID priority: queries that look like short IDs / UUID fragments (e.g.
+// "3ccf", "01a0", full UUID) match only against the document ID — never
+// title/path — so typing the 4-char selector shown in the tree does not also
+// pull every converted chapter that embeds the same hex in its filename.
+func matchNameFilter(title, filename, match, documentID string, filter textFilter) bool {
 	query := strings.TrimSpace(filter.Value)
 	if query == "" {
 		return true
+	}
+	if isUUIDFilterQuery(query) {
+		return matchDocumentIDFilter(documentID, query, filter.Case)
 	}
 	if filter.Exact {
 		// Every query word must appear as a whole word somewhere in the
@@ -982,6 +1006,52 @@ func matchNameFilter(title, filename, match string, filter textFilter) bool {
 		return wordsMatchCase(title, query) || wordsMatchCase(filename, query) || wordsMatchCase(match, query)
 	}
 	return wordsMatch(title+" "+filename+" "+match, strings.ToLower(query))
+}
+
+// isUUIDFilterQuery reports whether q is a compact document selector: 3–36
+// chars of hex with optional hyphens (covers short IDs like "3ccf" and full
+// UUIDs). Multi-word or non-hex queries stay on the title/path path.
+func isUUIDFilterQuery(q string) bool {
+	if strings.ContainsAny(q, " \t") {
+		return false
+	}
+	n := 0
+	for _, r := range q {
+		switch {
+		case r >= '0' && r <= '9', r >= 'a' && r <= 'f', r >= 'A' && r <= 'F':
+			n++
+		case r == '-':
+			// uuid separators ok
+		default:
+			return false
+		}
+	}
+	// Short IDs are 4 hex chars in the TUI; allow 3–32 hex digits (compact UUID).
+	return n >= 3 && n <= 32
+}
+
+// matchDocumentIDFilter matches query as a unique-style ID suffix against the
+// document UUID, comparing both dashed and compact forms.
+func matchDocumentIDFilter(documentID, query string, caseSensitive bool) bool {
+	id := strings.TrimSpace(documentID)
+	q := strings.TrimSpace(query)
+	if id == "" || q == "" {
+		return false
+	}
+	if !caseSensitive {
+		id = strings.ToLower(id)
+		q = strings.ToLower(q)
+	}
+	// Direct suffix on dashed UUID (shortID is last 4 chars including hex only).
+	if strings.HasSuffix(id, q) {
+		return true
+	}
+	compactID := strings.ReplaceAll(id, "-", "")
+	compactQ := strings.ReplaceAll(q, "-", "")
+	if compactQ == "" {
+		return false
+	}
+	return strings.HasSuffix(compactID, compactQ) || compactID == compactQ
 }
 
 func isWordChar(r rune) bool {

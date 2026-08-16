@@ -161,9 +161,12 @@ type Model struct {
 	// PDF conversion is one synchronous remote call. The streaming endpoint
 	// reports truthful chunk/page boundaries; upload and cache-hit phases keep
 	// the indeterminate animation instead of fabricating continuous progress.
-	pdfConversionActive    bool
-	pdfConversionID        string
-	pdfConversionStarted   time.Time
+	pdfConversionActive  bool
+	pdfConversionID      string
+	pdfConversionStarted time.Time
+	// After conversion (or Tab→TOC), select this document once the catalog
+	// refresh lands so the tree lands on the Markdown index instead of the PDF.
+	pendingSelectID        string
 	pdfProgressFrame       int
 	pdfProgressSequence    uint64
 	pdfProgressStage       string
@@ -587,7 +590,12 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				knownDocuments := m.scanKnownDocuments
 				m.items = documentItems(msg.documents)
 				m.refreshFilter()
-				if !isScanRefresh || !m.focusNewScanDocument(knownDocuments) {
+				if pending := strings.TrimSpace(m.pendingSelectID); pending != "" {
+					m.pendingSelectID = ""
+					if !m.selectDocumentID(pending) {
+						m.restoreSelection(previousID)
+					}
+				} else if !isScanRefresh || !m.focusNewScanDocument(knownDocuments) {
 					m.restoreSelection(previousID)
 				}
 				if isScanRefresh {
@@ -820,7 +828,13 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			if len(msg.result.Chapters) != 0 {
 				m.statusMessage += fmt.Sprintf(" · %d linked chapters", len(msg.result.Chapters))
 			}
+			m.statusMessage += " · Tab opens TOC"
 			m.hideInput()
+			// Land on the TOC index after catalog refresh so chapters are one
+			// Enter (or link list) away instead of staying on the PDF binary.
+			if id := strings.TrimSpace(msg.result.MarkdownDocument.ID); id != "" {
+				m.pendingSelectID = id
+			}
 			commands = append(commands, listDocumentsCmd(m.ctx, m.app, m.listSequence))
 		}
 		m.clearExecutedCommand()
@@ -893,6 +907,61 @@ func (m Model) selectedDocument() (membox.DocumentView, bool) {
 		return membox.DocumentView{}, false
 	}
 	return m.filtered[m.selected].document, true
+}
+
+func (m Model) selectedItem() (item, bool) {
+	if len(m.filtered) == 0 || m.selected >= len(m.filtered) {
+		return item{}, false
+	}
+	return m.filtered[m.selected], true
+}
+
+// findConvertedPDFIndex locates the Markdown TOC index produced by PDF→MD
+// conversion for the given PDF UUID (…-pdf-<compact>.md, no chapter suffix).
+func (m Model) findConvertedPDFIndex(pdfID string) (membox.DocumentView, bool) {
+	want := strings.ToLower(strings.TrimSpace(pdfID))
+	if want == "" {
+		return membox.DocumentView{}, false
+	}
+	for _, candidate := range m.items {
+		sourceID, ok := convertedPDFID(candidate.filename)
+		if !ok || strings.ToLower(sourceID) != want {
+			continue
+		}
+		return candidate.document, true
+	}
+	return membox.DocumentView{}, false
+}
+
+// selectDocumentID moves the tree selection onto the given document if it is
+// present in the current filtered list, else clears filters and selects it.
+func (m *Model) selectDocumentID(documentID string) bool {
+	id := strings.TrimSpace(documentID)
+	if id == "" {
+		return false
+	}
+	for index, candidate := range m.filtered {
+		if candidate.document.ID == id {
+			m.selected = index
+			m.keepSelectionVisible()
+			return true
+		}
+	}
+	// Not in the current filter (e.g. short-UUID filter on the PDF only).
+	m.textFilters = nil
+	m.dateFilters = nil
+	if m.inputVisible {
+		m.input.SetValue("")
+	}
+	m.refreshFilter()
+	for index, candidate := range m.filtered {
+		if candidate.document.ID == id {
+			m.selected = index
+			m.keepSelectionVisible()
+			return true
+		}
+	}
+	return false
 }
 
 // previewDebounce is how long we wait after the last selection change before

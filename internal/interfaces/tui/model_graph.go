@@ -277,21 +277,46 @@ func (m *Model) threadSearchCmd(query string, exact bool) tea.Cmd {
 // graphFocusCmd loads a document's link graph (with body previews) so it can
 // be walked as a thread tree or drawn as a one-hop star canvas. layout is
 // "thread" or "star".
+//
+// Source PDFs only store a single edge to the conversion index. Expand one more
+// hop through that index so link list / graph show every converted chapter.
 func graphFocusCmd(ctx context.Context, app App, selectorValue string, layout string) tea.Cmd {
 	return func() tea.Msg {
 		graph, err := app.GetDocumentGraph(ctx, membox.GetDocumentGraphQuery{Selector: selectorValue})
 		if err != nil {
 			return graphFocusMsg{err: err}
 		}
-		cards := make([]membox.DocumentView, 0, 1+len(graph.Outgoing)+len(graph.Incoming))
+		seen := map[string]bool{graph.Focus.ID: true}
+		cards := make([]membox.DocumentView, 0, 1+len(graph.Outgoing)+len(graph.Incoming)+8)
 		cards = append(cards, graph.Focus)
-		cards = append(cards, graph.Outgoing...)
-		cards = append(cards, graph.Incoming...)
+		appendUnique := func(docs ...membox.DocumentView) {
+			for _, doc := range docs {
+				if doc.ID == "" || seen[doc.ID] {
+					continue
+				}
+				seen[doc.ID] = true
+				cards = append(cards, doc)
+			}
+		}
+		appendUnique(graph.Outgoing...)
+		if graph.Focus.MediaType == "application/pdf" {
+			for _, out := range graph.Outgoing {
+				if !looksLikeConversionIndex(out) {
+					continue
+				}
+				sub, subErr := app.GetDocumentGraph(ctx, membox.GetDocumentGraphQuery{Selector: out.ID})
+				if subErr != nil {
+					continue
+				}
+				appendUnique(sub.Outgoing...)
+			}
+		}
+		appendUnique(graph.Incoming...)
 		// Load body previews so cards show content, not just filenames.
 		previews := make(map[string]string, len(cards))
 		for _, card := range cards {
 			if card.MediaType == "application/pdf" {
-				previews[card.ID] = "PDF · open with Enter"
+				previews[card.ID] = "PDF · Enter opens viewer · Tab opens TOC"
 				continue
 			}
 			if body, readErr := app.ReadDocument(ctx, membox.ReadDocumentQuery{Selector: card.ID}); readErr == nil {
@@ -302,6 +327,16 @@ func graphFocusCmd(ctx context.Context, app App, selectorValue string, layout st
 		}
 		return graphFocusMsg{documentID: graph.Focus.ID, cards: cards, incoming: len(graph.Incoming), previews: previews, layout: layout, topics: graph.Topics}
 	}
+}
+
+// looksLikeConversionIndex reports whether a document is a PDF→MD TOC index
+// (…-pdf-<32hex>.md with no chapter/part suffix).
+func looksLikeConversionIndex(doc membox.DocumentView) bool {
+	if doc.MediaType == "application/pdf" {
+		return false
+	}
+	_, ok := convertedPDFID(documentFilename(doc))
+	return ok
 }
 
 // renderCard renders a single document as a Unicode box card

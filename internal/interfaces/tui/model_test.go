@@ -13,6 +13,37 @@ import (
 	"membox"
 )
 
+func TestNameFilterShortUUIDMatchesOnlyDocumentID(t *testing.T) {
+	// Typing the 4-char short ID shown in the tree must not also match every
+	// converted Markdown file that embeds the same hex tail in its filename.
+	const pdfID = "019ffe54-a513-7da8-bfac-0ae403223ccf"
+	items := documentItems([]membox.DocumentView{
+		{ID: pdfID, Title: "AI Agents", Path: "/pdfs/book.pdf", RelativePath: "book.pdf", MediaType: "application/pdf"},
+		{ID: "index", Path: "/notes/pdf-019ffe54a5137da8bfac0ae403223ccf.md", RelativePath: "pdf-019ffe54a5137da8bfac0ae403223ccf.md", MediaType: "text/markdown"},
+		{ID: "chapter", Path: "/notes/pdf-019ffe54a5137da8bfac0ae403223ccf-chapter-001.md", RelativePath: "pdf-019ffe54a5137da8bfac0ae403223ccf-chapter-001.md", MediaType: "text/markdown"},
+		{ID: "other-3ccf-tail", Title: "unrelated", Path: "/tmp/other.md", RelativePath: "other.md"},
+	})
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.items = items
+	model.searchMode = searchModeName
+	model.inputVisible = true
+	model.input.SetValue("3ccf")
+	model.refreshFilter()
+	if len(model.filtered) != 1 || model.filtered[0].document.ID != pdfID {
+		got := make([]string, 0, len(model.filtered))
+		for _, it := range model.filtered {
+			got = append(got, it.document.ID)
+		}
+		t.Fatalf("short UUID filter 3ccf = %v, want only %s", got, pdfID)
+	}
+	// Non-hex queries still match title/path.
+	model.input.SetValue("Agents")
+	model.refreshFilter()
+	if len(model.filtered) != 1 || model.filtered[0].document.ID != pdfID {
+		t.Fatalf("title filter Agents = %+v", model.filtered)
+	}
+}
+
 func TestDocumentItemsMarksPDFWhenStableConvertedIndexExists(t *testing.T) {
 	const pdfID = "019ffe54-a513-7da8-bfac-0ae403223ccf"
 	documents := []membox.DocumentView{
@@ -814,6 +845,41 @@ func TestModel_LinkListShowsGraphFocusCardsByDirection(t *testing.T) {
 	model = updated.(Model)
 	if model.graphFocusID != "" || model.viewMode != viewTree {
 		t.Fatalf("q did not leave graph focus: focus=%s mode=%s", model.graphFocusID, model.viewMode)
+	}
+}
+
+func TestGraphFocusCmdExpandsPDFConversionChapters(t *testing.T) {
+	const pdfID = "019ffe54-a513-7da8-bfac-0ae403223ccf"
+	const indexID = "index-doc"
+	index := membox.DocumentView{
+		ID: indexID, Title: "TOC", Path: "/notes/book-pdf-019ffe54a5137da8bfac0ae403223ccf.md",
+		RelativePath: "book-pdf-019ffe54a5137da8bfac0ae403223ccf.md", MediaType: "text/markdown",
+	}
+	ch1 := membox.DocumentView{ID: "ch1", Title: "Chapter 1", Path: "/notes/ch1.md", MediaType: "text/markdown"}
+	ch2 := membox.DocumentView{ID: "ch2", Title: "Chapter 2", Path: "/notes/ch2.md", MediaType: "text/markdown"}
+	app := &fakeApp{
+		graph: membox.DocumentGraphView{
+			Focus:    membox.DocumentView{ID: pdfID, Title: "Book PDF", Path: "/pdfs/book.pdf", MediaType: "application/pdf"},
+			Outgoing: []membox.DocumentView{index},
+		},
+		graphs: map[string]membox.DocumentGraphView{
+			indexID: {
+				Focus:    index,
+				Outgoing: []membox.DocumentView{ch1, ch2},
+			},
+		},
+	}
+	msg := graphFocusCmd(context.Background(), app, pdfID, "thread")().(graphFocusMsg)
+	if msg.err != nil {
+		t.Fatalf("graphFocusCmd err: %v", msg.err)
+	}
+	ids := make([]string, 0, len(msg.cards))
+	for _, card := range msg.cards {
+		ids = append(ids, card.ID)
+	}
+	want := []string{pdfID, indexID, "ch1", "ch2"}
+	if !reflect.DeepEqual(ids, want) {
+		t.Fatalf("PDF link list cards=%v want %v", ids, want)
 	}
 }
 

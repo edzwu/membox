@@ -29,6 +29,7 @@ type fakeApp struct {
 	webOpened          []string
 	scanCount          int
 	graph              membox.DocumentGraphView
+	graphs             map[string]membox.DocumentGraphView
 	searchResults      []membox.SearchResult
 	documents          []membox.DocumentView
 	renamedTo          string
@@ -165,7 +166,18 @@ func (f *fakeApp) UnlinkDocuments(context.Context, membox.UnlinkDocumentsCommand
 }
 func (f *fakeApp) GetDocumentGraph(_ context.Context, query membox.GetDocumentGraphQuery) (membox.DocumentGraphView, error) {
 	graph := f.graph
-	graph.Focus = membox.DocumentView{ID: query.Selector, Title: "Focus", Path: "/tmp/focus.md"}
+	if graph.Focus.ID == "" {
+		graph.Focus = membox.DocumentView{ID: query.Selector, Title: "Focus", Path: "/tmp/focus.md"}
+	} else if query.Selector != "" && query.Selector != graph.Focus.ID {
+		// Secondary hop (e.g. PDF → index → chapters): prefer a pre-seeded
+		// graph keyed by the requested selector when present.
+		if f.graphs != nil {
+			if nested, ok := f.graphs[query.Selector]; ok {
+				return nested, nil
+			}
+		}
+		graph.Focus.ID = query.Selector
+	}
 	return graph, nil
 }
 func (f *fakeApp) ToggleDocumentPin(_ context.Context, command membox.ToggleDocumentPinCommand) (membox.ToggleDocumentPinResult, error) {

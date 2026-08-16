@@ -658,8 +658,52 @@ func TestModel_PDFConvertCommandUsesSelectedPDF(t *testing.T) {
 	}
 	updated, _ = model.Update(converted)
 	model = updated.(Model)
-	if model.statusMessage != "PDF Markdown created: "+shortID(converted.result.MarkdownDocument.ID) || model.inputVisible {
+	wantStatus := "PDF Markdown created: " + shortID(converted.result.MarkdownDocument.ID) + " · Tab opens TOC"
+	if model.statusMessage != wantStatus || model.inputVisible {
 		t.Fatalf("unexpected conversion completion state: status=%q input=%v", model.statusMessage, model.inputVisible)
+	}
+	if model.pendingSelectID != converted.result.MarkdownDocument.ID {
+		t.Fatalf("pendingSelectID=%q want TOC index", model.pendingSelectID)
+	}
+}
+
+func TestModel_TabOnConvertedPDFOpensTOCIndex(t *testing.T) {
+	const pdfID = "019ffe54-a513-7da8-bfac-0ae403223ccf"
+	const indexID = "019fff46-e442-7de6-b54f-046273b919f6"
+	app := &fakeApp{}
+	model := New(context.Background(), app, fakeLauncher{})
+	model.width, model.height = 100, 30
+	model.viewerMode = "native"
+	model.items = documentItems([]membox.DocumentView{
+		{ID: pdfID, Title: "AI Agents", Path: "/pdfs/book.pdf", RelativePath: "book.pdf", MediaType: "application/pdf"},
+		{ID: indexID, Title: "深入理解 AI Agent", Path: "/notes/AI-Agents-in-Depth-zh-CN-pdf-019ffe54a5137da8bfac0ae403223ccf.md", RelativePath: "AI-Agents-in-Depth-zh-CN-pdf-019ffe54a5137da8bfac0ae403223ccf.md", MediaType: "text/markdown"},
+		{ID: "chapter", Title: "Ch1", Path: "/notes/AI-Agents-in-Depth-zh-CN-pdf-019ffe54a5137da8bfac0ae403223ccf-chapter-001.md", RelativePath: "AI-Agents-in-Depth-zh-CN-pdf-019ffe54a5137da8bfac0ae403223ccf-chapter-001.md", MediaType: "text/markdown"},
+	})
+	model.refreshFilter()
+	// Select the PDF (has ◆ because index exists).
+	for i, it := range model.filtered {
+		if it.document.ID == pdfID {
+			model.selected = i
+			break
+		}
+	}
+	if !model.filtered[model.selected].pdfConverted {
+		t.Fatal("PDF should be marked converted")
+	}
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	model = updated.(Model)
+	if model.pdfConversionActive || app.pdfConverted != "" {
+		t.Fatalf("Tab on converted PDF started reconversion: active=%v selector=%q", model.pdfConversionActive, app.pdfConverted)
+	}
+	if doc, ok := model.selectedDocument(); !ok || doc.ID != indexID {
+		got := ""
+		if ok {
+			got = doc.ID
+		}
+		t.Fatalf("Tab did not land on TOC index: selected=%q want %q", got, indexID)
+	}
+	if command == nil {
+		t.Fatal("expected preview load command")
 	}
 }
 
