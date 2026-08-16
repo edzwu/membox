@@ -148,6 +148,15 @@ CREATE TABLE IF NOT EXISTS annotation_notes (
     updated_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS annotation_notes_target ON annotation_notes(target_document_id);
+CREATE TABLE IF NOT EXISTS card_schedule (
+    note_document_id TEXT PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
+    due_at INTEGER NOT NULL DEFAULT 0,
+    interval_days INTEGER NOT NULL DEFAULT 0,
+    ease REAL NOT NULL DEFAULT 2.5,
+    reps INTEGER NOT NULL DEFAULT 0,
+    lapses INTEGER NOT NULL DEFAULT 0,
+    last_reviewed_at INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS document_read_state (
     document_id TEXT PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
     progress_y INTEGER NOT NULL DEFAULT 0,

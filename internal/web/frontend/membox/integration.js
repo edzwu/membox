@@ -38,6 +38,7 @@ import { initDictionary } from './dictionary.js';
 import { initSeriesNav } from './series-nav.js';
 import { initWikiLinks } from './wiki-links.js';
 import { initAssist } from './assist.js';
+import { initReview } from './review.js';
 import { initReadingState, isRestoring, scheduleReadingStateSave } from './reading-state.js';
 import { autoCreateForAnnotations, syncToMembox } from './sync.js';
 import { checkStatus } from './api.js';
@@ -63,6 +64,7 @@ initDictionary();
 initSeriesNav();
 initWikiLinks();
 initAssist();
+initReview();
 
 // User edits make the in-memory annotation set authoritative for deletions on
 // the next save. During a restore the model is incomplete; the restore flow

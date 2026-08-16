@@ -970,3 +970,247 @@ dt > .membox-translation {
     animation: none;
   }
 }
+
+/* ---- Review feed (X-style note cards) ---- */
+.membox-review {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  background: var(--paper-raised);
+  color: var(--muted);
+}
+.membox-review svg { width: 19px; height: 19px; }
+.membox-review:hover { color: var(--accent); }
+
+#review-feed {
+  position: relative;
+  z-index: 60;
+  max-width: 680px;
+  margin: 0 auto;
+  padding: 20px 16px 80px;
+  background: var(--paper);
+}
+#review-feed[hidden] { display: none; }
+
+.review-head {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 4px 12px;
+  background: var(--paper);
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 16px;
+}
+.review-back {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--paper-raised);
+  color: var(--muted);
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 15px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.review-back:hover { color: var(--accent); }
+.review-title { font-weight: 700; font-size: 16px; color: var(--ink); }
+.review-stats { margin-left: auto; font-size: 12px; color: var(--muted); }
+
+.review-list { display: flex; flex-direction: column; gap: 14px; }
+.review-loading, .review-empty { color: var(--muted); font-size: 13px; padding: 24px 8px; text-align: center; }
+
+.review-card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--paper-raised);
+  padding: 14px 16px 10px;
+  box-shadow: 0 1px 3px var(--shadow);
+}
+.review-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.review-card-meta a { color: var(--accent); text-decoration: none; }
+.review-card-meta a:hover { text-decoration: underline; }
+.review-kind {
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 10px;
+  letter-spacing: 0.02em;
+}
+.review-kind-qa {
+  color: #6b4fb3;
+  background: color-mix(in srgb, #6b4fb3 14%, transparent);
+}
+.review-badge-new {
+  color: var(--accent);
+  font-weight: 700;
+  border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent);
+  padding: 0 5px;
+  border-radius: 8px;
+  font-size: 10px;
+}
+.review-badge-due {
+  color: #b3402f;
+  font-weight: 700;
+  border: 1px solid color-mix(in srgb, #b3402f 45%, transparent);
+  padding: 0 5px;
+  border-radius: 8px;
+  font-size: 10px;
+}
+
+.review-quote {
+  margin: 0 0 8px;
+  padding: 8px 12px;
+  border-left: 3px solid var(--accent);
+  background: color-mix(in srgb, var(--accent-soft) 24%, transparent);
+  border-radius: 0 6px 6px 0;
+  color: var(--ink);
+  font-size: 15px;
+  line-height: 1.5;
+}
+.review-card-body {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--ink-soft);
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin-bottom: 8px;
+  /* Long posts collapse to a fixed height with a fade; click to expand. */
+  max-height: 168px;
+  overflow: hidden;
+  position: relative;
+  cursor: default;
+  transition: max-height 0.18s ease;
+}
+.review-card-body.is-expanded {
+  max-height: none;
+  overflow: visible;
+}
+.review-card-body.is-truncated::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 56px;
+  background: linear-gradient(to bottom, transparent, var(--paper-raised));
+  pointer-events: none;
+}
+.review-card-body.can-expand {
+  cursor: pointer;
+}
+.review-card-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+.review-actions { display: inline-flex; gap: 6px; }
+.review-grade {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 14px;
+  cursor: pointer;
+}
+.review-grade:hover { border-color: var(--accent); color: var(--accent); }
+.review-grade:disabled { opacity: 0.45; cursor: default; }
+.review-grade-again:hover { border-color: #b3402f; color: #b3402f; }
+.review-grade-hard:hover { border-color: #b3862f; color: #b3862f; }
+.review-grade-good:hover { border-color: #3d9a5f; color: #3d9a5f; }
+
+.review-reply-toggle {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  width: 26px;
+  height: 26px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+}
+.review-reply-toggle:hover { color: var(--accent); background: var(--accent-soft); }
+.review-reply-count {
+  font-size: 11px;
+  color: var(--muted);
+}
+.review-card-grades {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--muted);
+}
+.review-open {
+  font-size: 12px;
+  color: var(--accent);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.review-open:hover { text-decoration: underline; }
+
+.review-reply-box {
+  margin-top: 10px;
+  border-top: 1px dashed var(--line);
+  padding-top: 10px;
+}
+.review-reply-box[hidden] { display: none; }
+.review-reply-input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  padding: 8px 10px;
+  resize: vertical;
+  outline: none;
+}
+.review-reply-input:focus { border-color: var(--accent); }
+.review-reply-actions { display: flex; justify-content: flex-end; margin-top: 6px; }
+.review-reply-send {
+  appearance: none;
+  border: 0;
+  background: var(--accent);
+  color: var(--paper);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 14px;
+  border-radius: 14px;
+  cursor: pointer;
+}
+.review-reply-send:disabled { opacity: 0.5; cursor: default; }
+
+/* While reviewing: hide the reading column so the feed is the whole view. */
+body.is-reviewing .reading-surface,
+body.is-reviewing .empty,
+body.is-reviewing .main { display: none; }
+body.is-reviewing .toc { display: none; }
+body.is-reviewing #review-feed { margin-top: 8px; }

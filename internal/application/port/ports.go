@@ -150,6 +150,31 @@ type DocumentReadState struct {
 	FinishedAt time.Time
 }
 
+// ReviewCard joins an annotation note with its source document and spaced-
+// review schedule. Produced by the store for the review feed.
+type ReviewCard struct {
+	NoteDocumentID   string
+	TargetDocumentID string
+	Kind             string
+	Highlight        bool
+	Underline        bool
+	Strikethrough    bool
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+	Schedule         CardSchedule
+}
+
+// CardSchedule is the spaced-review state for one note card.
+type CardSchedule struct {
+	NoteDocumentID string
+	DueAt          int64 // ms epoch; 0 = new card
+	IntervalDays   int64
+	Ease           float64
+	Reps           int64
+	Lapses         int64
+	LastReviewedAt int64 // ms epoch; 0 = never
+}
+
 // RecentDocument is a compact picker-oriented view ordered by the last time a
 // document was opened in the reader.
 type RecentDocument struct {
@@ -244,6 +269,10 @@ type CatalogStore interface {
 		noteDocumentID catalog.DocumentID,
 	) (AnnotationNoteRecord, bool, error)
 	DeleteAnnotationNote(ctx context.Context, noteDocumentID catalog.DocumentID) error
+	// Review queue: all active note cards + spaced-review schedules.
+	ListReviewCards(ctx context.Context) ([]ReviewCard, error)
+	SaveCardSchedule(ctx context.Context, schedule CardSchedule) error
+	ListScheduledCardIDs(ctx context.Context) (map[string]bool, error)
 	SaveDocumentReadState(ctx context.Context, state DocumentReadState) error
 	GetDocumentReadState(
 		ctx context.Context,
