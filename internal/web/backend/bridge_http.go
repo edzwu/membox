@@ -309,7 +309,12 @@ func normalizeSourceURL(raw string) string {
 		u.RawQuery = q.Encode()
 	}
 	u.Path = path.Clean("/" + strings.TrimPrefix(u.Path, "/"))
-	if u.Path != "/" {
+	// Origin-only URLs must not keep a trailing slash. Go's url.URL.String()
+	// renders Path "/" as "https://host/", which used to disagree with older
+	// clips stored as "https://host" and broke page-clip idempotency.
+	if u.Path == "/" {
+		u.Path = ""
+	} else {
 		u.Path = strings.TrimRight(u.Path, "/")
 	}
 	return u.String()

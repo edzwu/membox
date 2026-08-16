@@ -55,6 +55,9 @@ func (s *Store) UpsertDocumentSource(ctx context.Context, documentID catalog.Doc
 	if documentID == "" || sourceURLNorm == "" {
 		return fmt.Errorf("document id and source url are required")
 	}
+	// Keep origin URLs slash-free so lookups stay stable across browsers that
+	// send "https://host" vs "https://host/".
+	sourceURLNorm = strings.TrimRight(sourceURLNorm, "/")
 	clipMode = strings.TrimSpace(clipMode)
 	_, err := s.db.ExecContext(ctx, `
 INSERT INTO document_sources(document_id, source_url, source_url_norm, clip_mode, created_at)
@@ -75,9 +78,11 @@ func (s *Store) ListDocumentsBySourceURL(ctx context.Context, sourceURLNorm stri
 	if sourceURLNorm == "" {
 		return nil, nil
 	}
+	// rtrim matches legacy rows that stored origin URLs with a trailing slash
+	// (https://host/) against the canonical no-slash form (https://host).
 	query := documentSelect + `
 JOIN document_sources ds ON ds.document_id = d.id
-WHERE l.status='active' AND ` + notTrashedClause + ` AND ds.source_url_norm=?
+WHERE l.status='active' AND ` + notTrashedClause + ` AND rtrim(ds.source_url_norm, '/') = rtrim(?, '/')
 `
 	args := []any{sourceURLNorm}
 	if selectionNotesOnly {

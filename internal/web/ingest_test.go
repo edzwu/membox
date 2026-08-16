@@ -80,6 +80,44 @@ func TestServerIngestPageOverwriteKeepsUUID(t *testing.T) {
 	}
 }
 
+func TestServerIngestPageIdempotentAcrossOriginTrailingSlash(t *testing.T) {
+	// Browsers/tab URLs disagree on https://host vs https://host/. Both must
+	// hit the same page clip instead of creating title-2.md style duplicates.
+	baseURL, _, _ := startServer(t)
+	first := postJSON(t, baseURL+"/api/ingest", map[string]any{
+		"title": "Origin", "body": "# Origin\n\nv1\n", "source_url": "https://pi-from-scratch.vercel.app", "clip_mode": "page",
+	})
+	var created struct {
+		ID      string `json:"id"`
+		Created bool   `json:"created"`
+	}
+	mustUnmarshal(t, first, &created)
+	if created.ID == "" || !created.Created {
+		t.Fatalf("first ingest: %+v", created)
+	}
+	data, _ := json.Marshal(map[string]any{
+		"title": "Origin again", "body": "# Origin\n\nv2\n", "source_url": "https://pi-from-scratch.vercel.app/", "clip_mode": "page",
+	})
+	resp, err := http.Post(baseURL+"/api/ingest", "application/json", strings.NewReader(string(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("expected 409 for trailing-slash variant, got %d %s", resp.StatusCode, body)
+	}
+	var conflict struct {
+		Existing struct {
+			ID string `json:"id"`
+		} `json:"existing"`
+	}
+	mustUnmarshal(t, body, &conflict)
+	if conflict.Existing.ID != created.ID {
+		t.Fatalf("conflict id=%q want %q (%s)", conflict.Existing.ID, created.ID, body)
+	}
+}
+
 func TestIngestAfterTrashingPreviousClipCreatesFreshDocument(t *testing.T) {
 	// Regression: a trashed page clip kept its document_sources row, so a new
 	// save of the same URL was blocked by clip_exists pointing into the trash.
