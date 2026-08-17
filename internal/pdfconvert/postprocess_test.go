@@ -299,3 +299,52 @@ Item 3: Third Lesson 25
 		t.Fatal("chapter 2 lost its body")
 	}
 }
+
+// Chinese dot-leader TOCs glue the page number directly to the leader with no
+// space (第1章 标题....3), and section entries (13.5 本章小结....448) must not
+// be misread as "Chapter 13" when "13." looks like a chapter number.
+func TestPostprocessMarkdownSplitsChineseDotLeaderTOCWithoutSpaces(t *testing.T) {
+	markdown := `# 样书
+
+## 目录
+
+第1部分 简介....1
+第1章 温故而知新....3
+1.1 从 Hello 说起....4
+1.2 本章小结....9
+第2章 编译和链接....37
+2.1 被隐藏的过程....38
+2.2 本章小结....53
+
+## 序言
+
+` + strings.Repeat("序言内容 ", 60) + `
+
+# 温故而知新
+
+` + strings.Repeat("第一章正文 ", 200) + `
+
+# 编译和链接
+
+` + strings.Repeat("第二章正文 ", 200) + `
+`
+	result := PostprocessMarkdown(markdown, "book.md")
+	var ch1, ch2 string
+	for _, chapter := range result.Chapters {
+		if chapter.Title == "第1章、温故而知新" {
+			ch1 = chapter.Markdown
+		}
+		if chapter.Title == "第2章、编译和链接" {
+			ch2 = chapter.Markdown
+		}
+		if strings.Contains(chapter.Title, "本章小结") {
+			t.Fatalf("section entry became a chapter: %q", chapter.Title)
+		}
+	}
+	if ch1 == "" || ch2 == "" {
+		t.Fatalf("expected 第1章/第2章 boundaries, got %+v", result.Chapters)
+	}
+	if !strings.Contains(ch1, "第一章正文") || !strings.Contains(ch2, "第二章正文") {
+		t.Fatal("chapter bodies missing")
+	}
+}

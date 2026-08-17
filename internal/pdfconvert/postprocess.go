@@ -20,14 +20,19 @@ var (
 	chineseChapterPattern    = regexp.MustCompile(`^第\s*([0-9０-９一二三四五六七八九十百千〇零两]+)\s*章(?:\s*[:：]?\s*)(.*)$`)
 	englishChapterPattern    = regexp.MustCompile(`(?i)^chapter\s+([0-9ivxlcdm]+)\b(?:\s*[:：.-]?\s*)(.*)$`)
 	ancillaryPattern         = regexp.MustCompile(`(?i)^(引言|前言|序言|序|导言|绪论|后记|结语|附录|preface|introduction|epilogue|afterword|appendix)(?:\s*[:：.-]?\s*.*)?$`)
-	tocChapterPattern        = regexp.MustCompile(`(?i)^(?:第\s*)?([0-9０-９一二三四五六七八九十百千〇零两]+)\s*章\s*[、,:：.．-]?\s*(.*?)\s+(?:[ivxlcdm]+|\d+(?:\.\d+)*)\s*$`)
-	englishTOCChapterPattern = regexp.MustCompile(`(?i)^([a-z]+|[0-9]+|[ivxlcdm]+)\s*[:：.)-]\s*(.*?)\s+(?:[ivxlcdm]+|\d+(?:\.\d+)*)\s*$`)
-	tocEntryPattern          = regexp.MustCompile(`(?i)^(.*?)\s+(?:[ivxlcdm]+|\d+(?:\.\d+)*)\s*$`)
+	// Page number may directly follow the dot leader with no space (....3).
+	tocChapterPattern        = regexp.MustCompile(`(?i)^(?:第\s*)?([0-9０-９一二三四五六七八九十百千〇零两]+)\s*章\s*[、,:：.．-]?\s*(.*?)\s*(?:[ivxlcdm]+|\d+(?:\.\d+)*)\s*$`)
+	englishTOCChapterPattern = regexp.MustCompile(`(?i)^([a-z]+|[0-9]+|[ivxlcdm]+)\s*[:：.)-]\s*(.*?)\s*(?:[ivxlcdm]+|\d+(?:\.\d+)*)\s*$`)
+	tocEntryPattern          = regexp.MustCompile(`(?i)^(.*?)\s*(?:[ivxlcdm]+|\d+(?:\.\d+)*)\s*$`)
 	// Ordered-list chapter lines lose their "1." marker to goldmark's list
 	// parser, so list-item first lines match on dot leader + page number only.
 	tocDotLeaderChapterPattern = regexp.MustCompile(`(?i)^(.*?)\s*(?:\.\s*){2,}\s*(?:[ivxlcdm]+|\d+(?:\.\d+)*)\s*$`)
 	tocTrailingPagePattern     = regexp.MustCompile(`(?i)\s*(?:[.…]\s*)*\s*(?:[ivxlcdm]+|\d+(?:\.\d+)*)\s*$`)
 	tocDotLeaderPattern        = regexp.MustCompile(`\s*(?:\.\s*){2,}\s*$`)
+	// A list-item first line that still starts with digits is the remainder
+	// of a section entry ("13.5 本章小结" lost its "13." marker to the list
+	// parser), never a chapter title.
+	tocResidualSectionPattern = regexp.MustCompile(`^\d+[\s.．]`)
 )
 
 type ChapterMarkdown struct {
@@ -497,14 +502,18 @@ func parseTOCChapters(firstTOCHeading ast.Node, source []byte) ([]tocChapter, as
 				}
 				if match := englishTOCChapterPattern.FindStringSubmatch(line); len(match) != 0 {
 					number, title := strings.TrimSpace(match[1]), cleanTOCDotLeader(strings.TrimSpace(match[2]))
-					if _, ok := parseChapterNumber(number); ok && title != "" {
+					// A "chapter" whose title still starts with digits is really a
+					// section entry ("13.5 本章小结": "13." looked like the number).
+					if _, ok := parseChapterNumber(number); ok && title != "" && !tocResidualSectionPattern.MatchString(title) {
 						chapters = append(chapters, tocChapter{number: number, title: title, english: true})
 						continue
 					}
 				}
 				// Ordered-list item starts are chapter candidates: goldmark ate
-				// the "1." marker, so number them by list position.
-				if tocLine.itemStart {
+				// the "1." marker, so number them by list position. Lines that
+				// still begin with digits are section-entry remainders ("13.5"
+				// lost "13."), not chapters.
+				if tocLine.itemStart && !tocResidualSectionPattern.MatchString(line) {
 					title := ""
 					if match := tocDotLeaderChapterPattern.FindStringSubmatch(line); len(match) != 0 {
 						title = cleanTOCDotLeader(strings.TrimSpace(match[1]))
