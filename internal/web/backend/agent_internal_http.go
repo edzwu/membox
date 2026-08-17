@@ -86,6 +86,36 @@ func (s *Server) handleAgentInternalSearch(writer http.ResponseWriter, request *
 	writeAgentJSON(writer, http.StatusOK, map[string]any{"v": agentAPIVersion, "hits": hits})
 }
 
+func (s *Server) handleAgentInternalGrep(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	handle, ok := s.requireAgentWorker(writer, request)
+	if !ok {
+		return
+	}
+	var body struct {
+		Pattern string `json:"pattern"`
+		Limit   int    `json:"limit"`
+	}
+	if err := decodeJSONBody(request, &body); err != nil {
+		writeAgentError(writer, agent.NewInvalid(err.Error()))
+		return
+	}
+	tools := handle.Manager.ToolsFor()
+	if tools == nil {
+		writeAgentError(writer, agent.NewInvalid("tools unavailable"))
+		return
+	}
+	hits, err := tools.GrepDocuments(request.Context(), body.Pattern, body.Limit)
+	if err != nil {
+		writeAgentError(writer, err)
+		return
+	}
+	writeAgentJSON(writer, http.StatusOK, map[string]any{"v": agentAPIVersion, "hits": hits})
+}
+
 func (s *Server) handleAgentInternalRead(writer http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodPost {
 		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)

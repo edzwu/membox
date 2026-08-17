@@ -39,6 +39,7 @@ func (s *Server) registerAgentRoutes(mux *http.ServeMux) {
 	// Internal worker-only endpoints (no CORS, bearer+worker binding).
 	mux.HandleFunc("/api/agent/internal/context", s.handleAgentInternalContext)
 	mux.HandleFunc("/api/agent/internal/tools/search", s.handleAgentInternalSearch)
+	mux.HandleFunc("/api/agent/internal/tools/grep", s.handleAgentInternalGrep)
 	mux.HandleFunc("/api/agent/internal/tools/read", s.handleAgentInternalRead)
 	mux.HandleFunc("/api/agent/internal/tools/get", s.handleAgentInternalGet)
 	mux.HandleFunc("/api/agent/internal/tools/related", s.handleAgentInternalRelated)

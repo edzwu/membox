@@ -19,6 +19,7 @@ const defaultReadLimit = 12000
 // gated by Manager.WriteToolsEnabled.
 type DocumentTools interface {
 	SearchDocuments(ctx context.Context, query string, limit int) ([]DocumentHit, error)
+	GrepDocuments(ctx context.Context, pattern string, limit int) ([]DocumentHit, error)
 	ReadDocument(ctx context.Context, id string, cursor string, limit int) (DocumentChunk, error)
 	GetDocument(ctx context.Context, id string) (DocumentView, error)
 	ListRelated(ctx context.Context, id string) (RelatedView, error)
@@ -124,6 +125,31 @@ func (t *ServiceDocumentTools) SearchDocuments(ctx context.Context, query string
 		limit = 50
 	}
 	hits, err := t.Service.Search(ctx, query, limit, false)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]DocumentHit, 0, len(hits))
+	for _, hit := range hits {
+		out = append(out, DocumentHit{
+			ID:      string(hit.DocumentID),
+			Title:   hit.Title,
+			Snippet: hit.Snippet,
+			Path:    hit.Path,
+		})
+	}
+	return out, nil
+}
+
+// GrepDocuments is literal substring search (rg -i semantics) for rare
+// keywords and code identifiers that FTS tokenization would miss.
+func (t *ServiceDocumentTools) GrepDocuments(ctx context.Context, pattern string, limit int) ([]DocumentHit, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	if limit > 50 {
+		limit = 50
+	}
+	hits, err := t.Service.Grep(ctx, pattern, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -373,6 +399,7 @@ func documentRevision(doc *catalog.Document) string {
 func ToolNamesReadOnly() []string {
 	return []string{
 		"membox_search_documents",
+		"membox_grep_documents",
 		"membox_read_document",
 		"membox_list_related",
 		"membox_get_document",

@@ -281,6 +281,7 @@ type CatalogStore interface {
 	ListRecentDocuments(ctx context.Context, limit int) ([]RecentDocument, error)
 	ListRecentlyModifiedDocuments(ctx context.Context, limit int) ([]ModifiedDocument, error)
 	Search(ctx context.Context, query string, limit int, exact bool) ([]SearchHit, error)
+	GrepDocuments(ctx context.Context, pattern string, limit int) ([]SearchHit, error)
 	SuggestDocuments(ctx context.Context, query string, limit int) ([]SearchHit, error)
 	SetDocumentReadStatus(
 		ctx context.Context,

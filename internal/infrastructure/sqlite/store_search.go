@@ -36,6 +36,40 @@ ORDER BY bm25(document_fts,5.0,2.0,1.0) LIMIT ?`, ftsQuery, limit)
 	return hits, rows.Err()
 }
 
+// GrepDocuments performs case-insensitive literal substring matching over
+// indexed document bodies (plus titles and paths), the way `rg -i` scans
+// files. Unlike FTS Search it does not tokenize: camelCase identifiers such
+// as ChatServiceImpl match, and multi-word input is one literal needle, not
+// an AND of terms. Meant for rare literal keywords (names, identifiers).
+func (s *Store) GrepDocuments(ctx context.Context, pattern string, limit int) ([]port.SearchHit, error) {
+	needle := strings.TrimSpace(pattern)
+	if needle == "" {
+		return nil, errors.New("grep pattern is required")
+	}
+	rows, err := s.db.QueryContext(ctx, `WITH n(v) AS (VALUES(lower(?)))
+SELECT f.document_id,f.title,f.path,substr(f.body,max(1,instr(lower(f.body),n.v)-60),160)
+FROM document_fts f JOIN document_locations l ON l.document_id=f.document_id, n
+WHERE l.status='active'
+  AND f.document_id NOT IN (SELECT document_id FROM document_trash)
+  AND (instr(lower(f.body),n.v)>0 OR instr(lower(f.title),n.v)>0 OR instr(lower(f.path),n.v)>0)
+ORDER BY instr(lower(COALESCE(f.title,'')),n.v)=0, bm25(document_fts,5.0,2.0,1.0)
+LIMIT ?`, needle, limit)
+	if err != nil {
+		return nil, fmt.Errorf("grepping documents: %w", err)
+	}
+	defer rows.Close()
+	var hits []port.SearchHit
+	for rows.Next() {
+		var hit port.SearchHit
+		if err := rows.Scan(&hit.DocumentID, &hit.Title, &hit.Path, &hit.Snippet); err != nil {
+			return nil, err
+		}
+		hit.Snippet = strings.Join(strings.Fields(hit.Snippet), " ")
+		hits = append(hits, hit)
+	}
+	return hits, rows.Err()
+}
+
 // SuggestDocuments performs literal substring matching for picker UIs. UUIDs
 // are not part of FTS, so this deliberately searches document identity and
 // metadata rather than document bodies.

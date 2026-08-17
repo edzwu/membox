@@ -56,6 +56,21 @@ func (s *Service) Search(ctx context.Context, query string, limit int, exact boo
 	return s.store.Search(ctx, query, limit, exact)
 }
 
+// Grep finds documents containing a literal substring (rg -i semantics).
+func (s *Service) Grep(ctx context.Context, pattern string, limit int) ([]port.SearchHit, error) {
+	pattern = strings.TrimSpace(pattern)
+	if pattern == "" {
+		return nil, errors.New("grep pattern is required")
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		return nil, errors.New("grep limit cannot exceed 100")
+	}
+	return s.store.GrepDocuments(ctx, pattern, limit)
+}
+
 // SuggestDocuments finds active documents by UUID, title, or path substring.
 // Unlike full-text Search, it is intended for compact picker/autocomplete UIs.
 func (s *Service) SuggestDocuments(ctx context.Context, query string, limit int) ([]port.SearchHit, error) {

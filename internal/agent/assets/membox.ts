@@ -80,6 +80,8 @@ membox is a document identity/catalog, not a general coding repository.
 Rules:
 - Prefer Document UUIDs over file paths. Paths can change; UUIDs are stable.
 - Use only membox_* tools. You have no shell and no arbitrary filesystem access.
+- For rare literal keywords, names, or code identifiers (ChatService, runAgent), call membox_grep_documents FIRST with the single rarest keyword. membox_search_documents ANDs every word, so multi-keyword queries hide rare terms.
+- If any search returns 0 hits, retry with fewer / different terms before concluding nothing matches.
 - Read the latest revision before proposing edits.
 - Never claim a document was modified unless a write tool returned success.
 - Cite documents as membox://doc/<uuid>.
@@ -112,7 +114,10 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "membox_search_documents",
     label: "Search documents",
-    description: "Full-text/title search over the membox catalog. Returns stable Document UUIDs, titles, and snippets.",
+    description:
+      "Full-text search over the membox catalog (tokenized, multi-word queries are AND-ed: every word must appear). " +
+      "Good for conceptual/semantic queries. Returns stable Document UUIDs, titles, and snippets. " +
+      "For rare literal keywords or code identifiers (ChatService, runAgent, OAuth2), use membox_grep_documents instead.",
     parameters: Type.Object({
       query: Type.String({ description: "Search query" }),
       limit: Type.Optional(Type.Number({ description: "Max results (default 10, max 50)" })),
@@ -122,6 +127,30 @@ export default function (pi: ExtensionAPI) {
         const body = await internalFetch("/api/agent/internal/tools/search", {
           method: "POST",
           body: JSON.stringify({ query: params.query, limit: params.limit ?? 10 }),
+        });
+        return toolText(body);
+      } catch (err) {
+        return toolError(err);
+      }
+    },
+  });
+
+  pi.registerTool({
+    name: "membox_grep_documents",
+    label: "Grep documents",
+    description:
+      "Literal substring search over all document bodies (rg -i semantics: case-insensitive, no tokenization, " +
+      "multi-word input is one literal phrase). Use this FIRST for rare keywords, names, and code identifiers " +
+      "(e.g. ChatService, LangGraph, HTTP2). If FTS search returns 0 hits, retry here with the single rarest keyword.",
+    parameters: Type.Object({
+      pattern: Type.String({ description: "Literal substring to find (one keyword or short phrase)" }),
+      limit: Type.Optional(Type.Number({ description: "Max results (default 10, max 50)" })),
+    }),
+    async execute(_toolCallId, params) {
+      try {
+        const body = await internalFetch("/api/agent/internal/tools/grep", {
+          method: "POST",
+          body: JSON.stringify({ pattern: params.pattern, limit: params.limit ?? 10 }),
         });
         return toolText(body);
       } catch (err) {
