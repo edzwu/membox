@@ -2,11 +2,14 @@ package pdfconvert
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 type fakeClient struct {
@@ -284,7 +287,84 @@ func TestWorkflowRunsPlannerForLargeUnstructuredMarkdown(t *testing.T) {
 	if !spy.called {
 		t.Fatal("planner must run for large unstructured documents")
 	}
-	if len(workspace.publications) != 3 { // index + 2 chapters
-		t.Fatalf("expected index plus two chapters: %+v", workspace.publications)
+	if len(workspace.publications) != 4 { // whole bundle (phase 1) + 2 chapters + index
+		t.Fatalf("expected whole bundle, two chapters, and index: got %d publications", len(workspace.publications))
+	}
+}
+
+type slowPlanner struct{ delay time.Duration }
+
+func (p slowPlanner) PlanChapters(_ context.Context, _ PlanRequest) ([]ChapterPlan, error) {
+	time.Sleep(p.delay)
+	return nil, fmt.Errorf("planner too slow")
+}
+
+type staticPlanner struct{ plans []ChapterPlan }
+
+func (p staticPlanner) PlanChapters(_ context.Context, _ PlanRequest) ([]ChapterPlan, error) {
+	return p.plans, nil
+}
+
+// When the deterministic splitter fails and the planner is slow, the whole
+// converted bundle must be published anyway — visibility must not wait on the
+// local model.
+func TestWorkflowPublishesWholeBundleBeforeSlowPlanner(t *testing.T) {
+	// No chapter headings, over the planner size gate.
+	markdown := "# Blob\n\n" + strings.Repeat("lorem ipsum dolor sit amet\n\n", 4000)
+	client := &fakeClient{result: RemoteResult{Filename: "blob-pdf-0000000000000000000000000000000f.md", Markdown: markdown, MarkdownSHA256: "sha"}}
+	workflow := NewWorkflow(client, NewConfigStore(t.TempDir()))
+	workflow.SetStructurePlanner(slowPlanner{delay: 150 * time.Millisecond})
+	workspace := &fakeWorkspace{source: Source{DocumentID: "pdf-1", Filename: "blob.pdf", MediaType: "application/pdf", Body: io.NopCloser(strings.NewReader("%PDF-1.4"))}}
+
+	result, err := workflow.Convert(context.Background(), workspace, "pdf-1", "http://192.168.1.10:8000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Chapters) != 0 {
+		t.Fatalf("expected whole-doc result, got %d chapters", len(result.Chapters))
+	}
+	// Exactly one publication (the whole bundle), and it carries the full body.
+	if len(workspace.publications) != 1 {
+		t.Fatalf("expected exactly 1 publication, got %d", len(workspace.publications))
+	}
+	if workspace.publications[0].body != markdown {
+		t.Fatal("whole bundle was not published with the full markdown")
+	}
+}
+
+// A successful planner upgrades the early whole-bundle publication into
+// index+chapters (the index publishes last, overwriting the whole body).
+func TestWorkflowUpgradesWholeBundleWhenPlannerSplits(t *testing.T) {
+	markdown := "# Blob\n\n" + strings.Repeat("alpha beta gamma\n\n", 4000)
+	// Planner line numbers must exist in the sampled structure sketch.
+	_, sketchLines := BuildStructureSketch(markdown, 0)
+	lineNumbers := make([]int, 0, len(sketchLines))
+	for line := range sketchLines {
+		lineNumbers = append(lineNumbers, line)
+	}
+	sort.Ints(lineNumbers)
+	if len(lineNumbers) < 2 {
+		t.Fatalf("sketch too small: %v", lineNumbers)
+	}
+	plans := []ChapterPlan{{Title: "Part A", Line: lineNumbers[0]}, {Title: "Part B", Line: lineNumbers[len(lineNumbers)/2]}}
+
+	client := &fakeClient{result: RemoteResult{Filename: "blob-pdf-0000000000000000000000000000000f.md", Markdown: markdown, MarkdownSHA256: "sha"}}
+	workflow := NewWorkflow(client, NewConfigStore(t.TempDir()))
+	workflow.SetStructurePlanner(staticPlanner{plans: plans})
+	workspace := &fakeWorkspace{source: Source{DocumentID: "pdf-1", Filename: "blob.pdf", MediaType: "application/pdf", Body: io.NopCloser(strings.NewReader("%PDF-1.4"))}}
+
+	result, err := workflow.Convert(context.Background(), workspace, "pdf-1", "http://192.168.1.10:8000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Chapters) < 2 {
+		t.Fatalf("expected planned chapters, got %d", len(result.Chapters))
+	}
+	// Phase 1 whole-bundle publish happened before the chapter publications.
+	if len(workspace.publications) < 3 {
+		t.Fatalf("expected whole + chapters publications, got %d", len(workspace.publications))
+	}
+	if workspace.publications[0].body != markdown {
+		t.Fatal("phase 1 publication was not the whole bundle")
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 )
@@ -121,9 +122,21 @@ func (w *Workflow) Resplit(ctx context.Context, workspace Workspace, sourceDocum
 	return w.publishProcessed(ctx, workspace, source, filename, markdown, nil, sha, nil)
 }
 
+// plannerTimeout bounds the local-model structure analysis. A wedged or
+// overloaded mmd must never hold the converted Markdown hostage: on timeout
+// the planner errors out and the document stays published whole. Generous on
+// purpose — phase-1 publish already made the document readable, and large
+// structure sketches take minutes of prefill on a local 14B model.
+const plannerTimeout = 10 * time.Minute
+
 // publishProcessed is the shared tail of Convert and Resplit: split the
 // converted Markdown into chapters (deterministic first, LLM planner as
 // fallback for large documents), publish each part, and link the graph.
+//
+// When the deterministic pass cannot split and the LLM planner will be
+// consulted, the whole bundle is published FIRST so the converted Markdown is
+// immediately readable; a successful split then upgrades the same document
+// into the chapter index in place.
 func (w *Workflow) publishProcessed(ctx context.Context, workspace Workspace, source Source, filename, markdown string, assets []Asset, markdownSHA256 string, onProgress func(Progress)) (Result, error) {
 	planner := w.planner
 	// LLM planning is only worth a local-model turn for documents large
@@ -132,11 +145,32 @@ func (w *Workflow) publishProcessed(ctx context.Context, workspace Workspace, so
 	if planner != nil && len(markdown) < minPlannerMarkdownBytes {
 		planner = nil
 	}
+	if planner != nil {
+		planner = plannerWithTimeout{inner: planner, timeout: plannerTimeout}
+	}
 	if planner != nil && onProgress != nil {
 		planner = progressStructurePlanner{inner: planner, onProgress: onProgress}
 	}
+
+	wholePublished := PublishedMarkdown{}
+	if _, deterministicChapters := markdownSections(markdown); deterministicChapters < 2 && planner != nil {
+		// Phase 1: the planner may take minutes of local-model time — make the
+		// converted Markdown visible now, upgrade to chapters in phase 2.
+		published, err := workspace.PublishBundle(ctx, source.DocumentID, filename, markdown, assets)
+		if err != nil {
+			return Result{}, fmt.Errorf("publishing converted PDF bundle: %w", err)
+		}
+		if err := workspace.LinkDocuments(ctx, source.DocumentID, published.DocumentID); err != nil {
+			return Result{}, fmt.Errorf("linking PDF to converted Markdown: %w", err)
+		}
+		wholePublished = published
+	}
+
 	processed := PostprocessMarkdownWithPlanner(ctx, markdown, filename, planner)
 	if len(processed.Chapters) == 0 {
+		if wholePublished.DocumentID != "" {
+			return conversionResult(source, filename, markdownSHA256, wholePublished, nil), nil
+		}
 		published, err := workspace.PublishBundle(ctx, source.DocumentID, filename, processed.IndexMarkdown, assets)
 		if err != nil {
 			return Result{}, fmt.Errorf("publishing converted PDF bundle: %w", err)
@@ -200,6 +234,18 @@ func rewriteAssetReferences(markdown, sourceDocumentID string, assets []Asset) s
 		markdown = strings.ReplaceAll(markdown, asset.RelativePath, prefix+strings.Join(segments, "/"))
 	}
 	return markdown
+}
+
+// plannerWithTimeout cancels a planner that outlives its budget.
+type plannerWithTimeout struct {
+	inner   StructurePlanner
+	timeout time.Duration
+}
+
+func (p plannerWithTimeout) PlanChapters(ctx context.Context, request PlanRequest) ([]ChapterPlan, error) {
+	ctx, cancel := context.WithTimeout(ctx, p.timeout)
+	defer cancel()
+	return p.inner.PlanChapters(ctx, request)
 }
 
 // progressStructurePlanner surfaces the LLM analysis step in CLI/TUI
