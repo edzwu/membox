@@ -133,6 +133,96 @@ func (b *Box) ConvertPDF(ctx context.Context, command ConvertPDFCommand) (Conver
 	}, nil
 }
 
+// ResplitPDFCommand re-runs only the Markdown postprocessing (chapter split,
+// publish, graph links) for an already-converted PDF bundle. Selector may be
+// the source PDF or the converted Markdown document; nothing is uploaded.
+type ResplitPDFCommand struct {
+	Selector string
+}
+
+// ResplitPDF applies the current splitter to the stored converted Markdown.
+// Useful when splitting improved after the original conversion, or when the
+// first pass fell back to a whole-book bundle.
+func (b *Box) ResplitPDF(ctx context.Context, command ResplitPDFCommand) (ConvertPDFResult, error) {
+	selector := strings.TrimSpace(command.Selector)
+	if selector == "" {
+		return ConvertPDFResult{}, errors.New("document selector is required")
+	}
+	document, absPath, err := b.service.ResolveDocument(ctx, selector)
+	if err != nil {
+		return ConvertPDFResult{}, err
+	}
+	if document.Status != catalog.DocumentActive {
+		return ConvertPDFResult{}, fmt.Errorf("document %s is %s at %s", document.ID, document.Status, absPath)
+	}
+
+	sourceID := ""
+	markdownID := string(document.ID)
+	markdownPath := absPath
+	if document.Index.MediaType == "application/pdf" {
+		sourceID = string(document.ID)
+		identity := strings.ToLower(strings.ReplaceAll(sourceID, "-", ""))
+		bundle, bundlePath, found, findErr := b.service.FindMarkdownByFilenameSuffix(ctx, "pdf-"+identity+".md")
+		if findErr != nil {
+			return ConvertPDFResult{}, findErr
+		}
+		if !found {
+			return ConvertPDFResult{}, fmt.Errorf("no converted Markdown bundle found for PDF %s", sourceID)
+		}
+		markdownID = string(bundle.ID)
+		markdownPath = bundlePath
+	} else {
+		// Best-effort owner recovery from the generated bundle filename; the
+		// PDF→index link already exists from the original conversion, so a
+		// miss here only skips re-adding it.
+		base := strings.ToLower(filepath.Base(markdownPath))
+		if marker := strings.LastIndex(base, "pdf-"); marker >= 0 {
+			hexPart := strings.TrimSuffix(base[marker+4:], ".md")
+			if len(hexPart) >= 32 {
+				h := hexPart[:32]
+				sourceID = h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:32]
+			}
+		}
+		if sourceID == "" {
+			return ConvertPDFResult{}, fmt.Errorf("%s is not a generated PDF bundle filename", filepath.Base(markdownPath))
+		}
+	}
+
+	body, err := b.service.ReadDocumentText(ctx, markdownID)
+	if err != nil {
+		return ConvertPDFResult{}, fmt.Errorf("reading converted Markdown: %w", err)
+	}
+	workspace := boxPDFConvertWorkspace{service: b.service}
+	result, err := b.pdfConverterWorkflow().Resplit(ctx, workspace, sourceID, filepath.Base(markdownPath), string(body))
+	if err != nil {
+		return ConvertPDFResult{}, err
+	}
+	indexDocument, indexPath, err := b.service.ResolveDocument(ctx, result.MarkdownDocumentID)
+	if err != nil {
+		return ConvertPDFResult{}, fmt.Errorf("resolving converted Markdown: %w", err)
+	}
+	chapters := make([]ConvertedPDFChapterView, 0, len(result.Chapters))
+	for _, chapter := range result.Chapters {
+		chapterDocument, chapterPath, resolveErr := b.service.ResolveDocument(ctx, chapter.DocumentID)
+		if resolveErr != nil {
+			return ConvertPDFResult{}, fmt.Errorf("resolving converted chapter %q: %w", chapter.Title, resolveErr)
+		}
+		chapters = append(chapters, ConvertedPDFChapterView{
+			Title: chapter.Title, Filename: chapter.Filename, Document: documentView(chapterDocument, chapterPath),
+			Path: chapter.Path, Created: chapter.Created,
+		})
+	}
+	return ConvertPDFResult{
+		SourceDocumentID: result.SourceDocumentID,
+		MarkdownDocument: documentView(indexDocument, indexPath),
+		MarkdownPath:     result.MarkdownPath,
+		MarkdownFilename: result.MarkdownFilename,
+		MarkdownSHA256:   result.MarkdownSHA256,
+		Created:          result.Created,
+		Chapters:         chapters,
+	}, nil
+}
+
 type boxPDFConvertWorkspace struct {
 	service *application.Service
 }

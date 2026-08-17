@@ -2,6 +2,7 @@ package pdfconvert
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"net/url"
@@ -101,36 +102,59 @@ func (w *Workflow) ConvertWithProgress(ctx context.Context, workspace Workspace,
 		return Result{}, fmt.Errorf("resolving stable converted filename: %w", err)
 	}
 	remote.Markdown = rewriteAssetReferences(remote.Markdown, source.DocumentID, remote.Assets)
+	return w.publishProcessed(ctx, workspace, source, filename, remote.Markdown, remote.Assets, remote.MarkdownSHA256, onProgress)
+}
+
+// Resplit re-runs only the Markdown postprocessing (chapter split, publish,
+// link) for an already-converted bundle — no converter upload. Used when the
+// splitter improved after the original conversion, or the first run fell back
+// to a whole-book bundle.
+func (w *Workflow) Resplit(ctx context.Context, workspace Workspace, sourceDocumentID, filename, markdown string) (Result, error) {
+	if workspace == nil {
+		return Result{}, errors.New("PDF converter workspace is unavailable")
+	}
+	if strings.TrimSpace(markdown) == "" {
+		return Result{}, errors.New("converted Markdown is empty")
+	}
+	source := Source{DocumentID: sourceDocumentID, Filename: filename, MediaType: pdfMediaType}
+	sha := fmt.Sprintf("%x", sha256.Sum256([]byte(markdown)))
+	return w.publishProcessed(ctx, workspace, source, filename, markdown, nil, sha, nil)
+}
+
+// publishProcessed is the shared tail of Convert and Resplit: split the
+// converted Markdown into chapters (deterministic first, LLM planner as
+// fallback for large documents), publish each part, and link the graph.
+func (w *Workflow) publishProcessed(ctx context.Context, workspace Workspace, source Source, filename, markdown string, assets []Asset, markdownSHA256 string, onProgress func(Progress)) (Result, error) {
 	planner := w.planner
 	// LLM planning is only worth a local-model turn for documents large
 	// enough to benefit from splitting; small PDFs stay on the deterministic
 	// path (or whole) without spending a minute of model time.
-	if planner != nil && len(remote.Markdown) < minPlannerMarkdownBytes {
+	if planner != nil && len(markdown) < minPlannerMarkdownBytes {
 		planner = nil
 	}
 	if planner != nil && onProgress != nil {
 		planner = progressStructurePlanner{inner: planner, onProgress: onProgress}
 	}
-	processed := PostprocessMarkdownWithPlanner(ctx, remote.Markdown, filename, planner)
+	processed := PostprocessMarkdownWithPlanner(ctx, markdown, filename, planner)
 	if len(processed.Chapters) == 0 {
-		published, err := workspace.PublishBundle(ctx, source.DocumentID, filename, processed.IndexMarkdown, remote.Assets)
+		published, err := workspace.PublishBundle(ctx, source.DocumentID, filename, processed.IndexMarkdown, assets)
 		if err != nil {
 			return Result{}, fmt.Errorf("publishing converted PDF bundle: %w", err)
 		}
 		if err := workspace.LinkDocuments(ctx, source.DocumentID, published.DocumentID); err != nil {
 			return Result{}, fmt.Errorf("linking PDF to converted Markdown: %w", err)
 		}
-		return conversionResult(source, filename, remote.MarkdownSHA256, published, nil), nil
+		return conversionResult(source, filename, markdownSHA256, published, nil), nil
 	}
 
 	publishedChapters := make([]PublishedChapter, 0, len(processed.Chapters))
 	filenameToID := make(map[string]string, len(processed.Chapters)+1)
 	for index, chapter := range processed.Chapters {
-		assets := []Asset(nil)
+		chapterAssets := []Asset(nil)
 		if index == 0 {
-			assets = remote.Assets
+			chapterAssets = assets
 		}
-		published, err := workspace.PublishBundle(ctx, source.DocumentID, chapter.Filename, chapter.Markdown, assets)
+		published, err := workspace.PublishBundle(ctx, source.DocumentID, chapter.Filename, chapter.Markdown, chapterAssets)
 		if err != nil {
 			return Result{}, fmt.Errorf("publishing converted PDF chapter %q: %w", chapter.Title, err)
 		}
@@ -161,7 +185,7 @@ func (w *Workflow) ConvertWithProgress(ctx context.Context, workspace Workspace,
 			return Result{}, fmt.Errorf("linking converted Markdown chapter %q to index: %w", chapter.Title, err)
 		}
 	}
-	return conversionResult(source, filename, remote.MarkdownSHA256, indexDocument, publishedChapters), nil
+	return conversionResult(source, filename, markdownSHA256, indexDocument, publishedChapters), nil
 }
 
 func rewriteAssetReferences(markdown, sourceDocumentID string, assets []Asset) string {

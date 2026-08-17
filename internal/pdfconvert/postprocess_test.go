@@ -233,3 +233,69 @@ func TestParseChapterNumber(t *testing.T) {
 		}
 	}
 }
+
+// O'Reilly-style dot-leader TOCs ("1. Title.......... 12") parse as Markdown
+// ordered lists: goldmark consumes the "1." marker, so the old paragraph-only
+// scan found zero chapters and the whole book stayed one blob.
+func TestPostprocessMarkdownSplitsDotLeaderOrderedListTOC(t *testing.T) {
+	markdown := `# Sample Book
+
+## Table of Contents
+
+Preface.................... xi
+1. Getting Started.................... 1
+Item 1: First Lesson 1
+Item 2: Second Lesson 7
+2. Going Deeper.................... 25
+Item 3: Third Lesson 25
+
+## Preface
+
+` + strings.Repeat("preface body ", 80) + `
+
+# Getting Started
+
+## Item 1: First Lesson
+
+` + strings.Repeat("chapter one body ", 200) + `
+
+## Item 2: Second Lesson
+
+` + strings.Repeat("more chapter one ", 120) + `
+
+# Going Deeper
+
+## Item 3: Third Lesson
+
+` + strings.Repeat("chapter two body ", 200) + `
+`
+	result := PostprocessMarkdown(markdown, "book.md")
+	if len(result.Chapters) < 2 {
+		t.Fatalf("expected dot-leader list TOC to split, got %d chapters", len(result.Chapters))
+	}
+	titles := make([]string, len(result.Chapters))
+	for i, chapter := range result.Chapters {
+		titles[i] = chapter.Title
+	}
+	if !strings.Contains(strings.Join(titles, "|"), "Chapter 1: Getting Started") {
+		t.Fatalf("missing chapter 1 in %v", titles)
+	}
+	if !strings.Contains(strings.Join(titles, "|"), "Chapter 2: Going Deeper") {
+		t.Fatalf("missing chapter 2 in %v", titles)
+	}
+	var ch1, ch2 string
+	for _, chapter := range result.Chapters {
+		if chapter.Title == "Chapter 1: Getting Started" {
+			ch1 = chapter.Markdown
+		}
+		if chapter.Title == "Chapter 2: Going Deeper" {
+			ch2 = chapter.Markdown
+		}
+	}
+	if !strings.Contains(ch1, "chapter one body") {
+		t.Fatal("chapter 1 lost its body")
+	}
+	if !strings.Contains(ch2, "chapter two body") {
+		t.Fatal("chapter 2 lost its body")
+	}
+}

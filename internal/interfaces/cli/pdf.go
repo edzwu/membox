@@ -18,9 +18,41 @@ func newPDFCommand(runtime *runtime) *cobra.Command {
 		newPDFImportCommand(runtime), newPDFListCommand(runtime), newPDFSearchCommand(runtime),
 		newPDFShowCommand(runtime), newPDFUpdateCommand(runtime), newPDFOpenCommand(runtime),
 		newPDFRenameCommand(runtime), newPDFDeleteCommand(runtime), newPDFRestoreCommand(runtime),
-		newPDFConvertCommand(runtime), newPDFServerCommand(runtime),
+		newPDFConvertCommand(runtime), newPDFServerCommand(runtime), newPDFResplitCommand(runtime),
 	)
 	return pdf
+}
+
+func newPDFResplitCommand(runtime *runtime) *cobra.Command {
+	var jsonOutput bool
+	command := &cobra.Command{
+		Use:   "resplit <document-id>",
+		Short: "Re-run chapter splitting on an already-converted PDF bundle (no converter upload)",
+		Args:  exactArgs(1, "document ID"),
+	}
+	command.Flags().BoolVar(&jsonOutput, "json", false, "output JSON")
+	command.RunE = func(cmd *cobra.Command, args []string) error {
+		// Unlike convert, resplit also accepts the converted Markdown bundle.
+		box, err := runtime.get()
+		if err != nil {
+			return err
+		}
+		result, err := box.ResplitPDF(cmd.Context(), membox.ResplitPDFCommand{Selector: args[0]})
+		if err != nil {
+			return err
+		}
+		if jsonOutput {
+			return writeJSON(cmd, result)
+		}
+		if len(result.Chapters) == 0 {
+			fmt.Fprintf(cmd.OutOrStdout(), "No chapter boundaries found; %s left as a single document.\n", result.MarkdownPath)
+			return nil
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "Split %s into %d linked chapter document(s); index %s: %s\n",
+			result.SourceDocumentID, len(result.Chapters), result.MarkdownDocument.ID, result.MarkdownPath)
+		return nil
+	}
+	return command
 }
 
 func newPDFImportCommand(runtime *runtime) *cobra.Command {

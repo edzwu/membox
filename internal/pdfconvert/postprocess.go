@@ -23,6 +23,11 @@ var (
 	tocChapterPattern        = regexp.MustCompile(`(?i)^(?:第\s*)?([0-9０-９一二三四五六七八九十百千〇零两]+)\s*章\s*[、,:：.．-]?\s*(.*?)\s+(?:[ivxlcdm]+|\d+(?:\.\d+)*)\s*$`)
 	englishTOCChapterPattern = regexp.MustCompile(`(?i)^([a-z]+|[0-9]+|[ivxlcdm]+)\s*[:：.)-]\s*(.*?)\s+(?:[ivxlcdm]+|\d+(?:\.\d+)*)\s*$`)
 	tocEntryPattern          = regexp.MustCompile(`(?i)^(.*?)\s+(?:[ivxlcdm]+|\d+(?:\.\d+)*)\s*$`)
+	// Ordered-list chapter lines lose their "1." marker to goldmark's list
+	// parser, so list-item first lines match on dot leader + page number only.
+	tocDotLeaderChapterPattern = regexp.MustCompile(`(?i)^(.*?)\s*(?:\.\s*){2,}\s*(?:[ivxlcdm]+|\d+(?:\.\d+)*)\s*$`)
+	tocTrailingPagePattern     = regexp.MustCompile(`(?i)\s*(?:[.…]\s*)*\s*(?:[ivxlcdm]+|\d+(?:\.\d+)*)\s*$`)
+	tocDotLeaderPattern        = regexp.MustCompile(`\s*(?:\.\s*){2,}\s*$`)
 )
 
 type ChapterMarkdown struct {
@@ -419,6 +424,53 @@ func tocMarkdownSections(document ast.Node, source []byte) []sectionBoundary {
 	return boundaries
 }
 
+// tocLine is one logical TOC text line; itemStart marks the first line of an
+// ordered-list item (goldmark consumed its "1." marker, which is itself the
+// chapter-number signal for dot-leader TOCs like O'Reilly books).
+type tocLine struct {
+	text      string
+	itemStart bool
+}
+
+// tocNodeLines flattens paragraph and (possibly nested) list nodes into TOC
+// text lines, marking each list item's first line.
+func tocNodeLines(node ast.Node, source []byte) []tocLine {
+	var lines []tocLine
+	switch node.Kind() {
+	case ast.KindParagraph, ast.KindTextBlock:
+		segs := node.Lines()
+		for index := 0; index < segs.Len(); index++ {
+			segment := segs.At(index)
+			lines = append(lines, tocLine{text: string(segment.Value(source))})
+		}
+	case ast.KindList:
+		for item := node.FirstChild(); item != nil; item = item.NextSibling() {
+			first := true
+			for block := item.FirstChild(); block != nil; block = block.NextSibling() {
+				for _, line := range tocNodeLines(block, source) {
+					line.itemStart = first
+					first = false
+					lines = append(lines, line)
+				}
+			}
+		}
+	}
+	return lines
+}
+
+// cleanTOCListTitle strips the trailing page number and dot leader from an
+// ordered-list chapter line (marker already consumed by the list parser).
+func cleanTOCListTitle(line string) string {
+	title := tocTrailingPagePattern.ReplaceAllString(strings.TrimSpace(line), "")
+	return strings.TrimSpace(tocDotLeaderPattern.ReplaceAllString(title, ""))
+}
+
+// cleanTOCDotLeader drops trailing dot leaders from paragraph-form chapter
+// titles captured with their leaders attached (e.g. "Type Design....").
+func cleanTOCDotLeader(title string) string {
+	return strings.TrimSpace(tocDotLeaderPattern.ReplaceAllString(title, ""))
+}
+
 func parseTOCChapters(firstTOCHeading ast.Node, source []byte) ([]tocChapter, ast.Node) {
 	chapters := make([]tocChapter, 0)
 	lastTOCHeading := firstTOCHeading
@@ -430,25 +482,41 @@ func parseTOCChapters(firstTOCHeading ast.Node, source []byte) ([]tocChapter, as
 				nextHeading = node
 				break
 			}
-			if node.Kind() != ast.KindParagraph {
+			if node.Kind() != ast.KindParagraph && node.Kind() != ast.KindList {
 				continue
 			}
-			lines := node.Lines()
-			for index := 0; index < lines.Len(); index++ {
-				segment := lines.At(index)
-				line := strings.TrimSpace(string(segment.Value(source)))
+			for _, tocLine := range tocNodeLines(node, source) {
+				line := strings.TrimSpace(tocLine.text)
 				line = strings.TrimSpace(strings.TrimSuffix(line, "  "))
 				if match := tocChapterPattern.FindStringSubmatch(line); len(match) != 0 {
-					title := strings.TrimSpace(match[2])
+					title := cleanTOCDotLeader(strings.TrimSpace(match[2]))
 					if title != "" {
 						chapters = append(chapters, tocChapter{number: match[1], title: title})
 					}
 					continue
 				}
 				if match := englishTOCChapterPattern.FindStringSubmatch(line); len(match) != 0 {
-					number, title := strings.TrimSpace(match[1]), strings.TrimSpace(match[2])
+					number, title := strings.TrimSpace(match[1]), cleanTOCDotLeader(strings.TrimSpace(match[2]))
 					if _, ok := parseChapterNumber(number); ok && title != "" {
 						chapters = append(chapters, tocChapter{number: number, title: title, english: true})
+						continue
+					}
+				}
+				// Ordered-list item starts are chapter candidates: goldmark ate
+				// the "1." marker, so number them by list position.
+				if tocLine.itemStart {
+					title := ""
+					if match := tocDotLeaderChapterPattern.FindStringSubmatch(line); len(match) != 0 {
+						title = cleanTOCDotLeader(strings.TrimSpace(match[1]))
+					} else {
+						title = cleanTOCListTitle(line)
+					}
+					if title != "" {
+						chapters = append(chapters, tocChapter{
+							number:  strconv.Itoa(len(chapters) + 1),
+							title:   title,
+							english: true,
+						})
 						continue
 					}
 				}
@@ -456,7 +524,7 @@ func parseTOCChapters(firstTOCHeading ast.Node, source []byte) ([]tocChapter, as
 					continue
 				}
 				if match := tocEntryPattern.FindStringSubmatch(line); len(match) != 0 {
-					title := strings.TrimSpace(match[1])
+					title := cleanTOCDotLeader(strings.TrimSpace(match[1]))
 					if title != "" {
 						last := len(chapters) - 1
 						chapters[last].entries = append(chapters[last].entries, title)
