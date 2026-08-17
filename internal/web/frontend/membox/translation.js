@@ -10,6 +10,7 @@ import { showToast } from '../js/ui/feedback.js';
 import { streamTranslation } from './api.js';
 import { onRender } from './events.js';
 import { session } from './session.js';
+import { getStatusExtras, setStatusExtrasPinned } from './status.js';
 
 const TARGET_SELECTOR = 'h1, h2, h3, h4, h5, h6, p, li, dt, dd, figcaption, th, td';
 const TRANSLATION_CLASS = 'membox-translation';
@@ -38,10 +39,9 @@ function createButton() {
     if (active) stopTranslation();
     else void startTranslation();
   });
-  // Join the existing bottom-left pill (status dot · notes · + · 译) instead
-  // of floating as a separate button.
-  const cluster = document.querySelector('.membox-status-cluster');
-  (cluster || document.body).appendChild(value);
+  // Low-frequency tray inside the bottom-left pill (collapsed until hover).
+  const extras = getStatusExtras();
+  (extras || document.body).appendChild(value);
   return value;
 }
 
@@ -60,6 +60,7 @@ function renderButton() {
     : 'Immersive translation · qwen3:14b';
   const progress = button.querySelector('.membox-translate-progress');
   progress.textContent = active && total ? `${completed}/${total}` : '';
+  setStatusExtrasPinned('translate', active);
 }
 
 function sourceText(element) {

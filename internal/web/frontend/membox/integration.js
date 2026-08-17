@@ -34,12 +34,14 @@ import { initRelated, handleOpenShortcut } from './related.js';
 import { initPresence } from './presence.js';
 import { initPDFImport } from './pdf-import.js';
 import { initTranslation } from './translation.js';
+import { initDocSummarize } from './doc-summarize.js';
 import { initDictionary } from './dictionary.js';
 import { initSeriesNav } from './series-nav.js';
 import { initWikiLinks } from './wiki-links.js';
 import { initAssist } from './assist.js';
 import { initSelectionSummarize } from './summarize.js';
 import { initReview } from './review.js';
+import { initAgentSearch } from './agent/search.js';
 import { initReadingState, isRestoring, scheduleReadingStateSave } from './reading-state.js';
 import { autoCreateForAnnotations, syncToMembox } from './sync.js';
 import { checkStatus } from './api.js';
@@ -61,12 +63,14 @@ initReadingState();
 initPresence();
 initPDFImport();
 initTranslation();
+initDocSummarize();
 initDictionary();
 initSeriesNav();
 initWikiLinks();
 initAssist();
 initSelectionSummarize();
 initReview();
+initAgentSearch();
 
 // User edits make the in-memory annotation set authoritative for deletions on
 // the next save. During a restore the model is incomplete; the restore flow

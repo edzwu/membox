@@ -238,24 +238,76 @@
   cursor: wait;
 }
 
-/* Immersive translation joins the bottom-left pill as its last action. It
-   streams one paragraph at a time through mmd → Pi → qwen3:14b. */
-.membox-translate {
+/* Immersive translation — low-frequency action inside .membox-status-extras.
+   Streams one paragraph at a time through mmd → Pi → qwen3:14b. */
+/* Full-document summarize — low-frequency action inside .membox-status-extras,
+   leftmost segment. Map-reduce through mmd → qwen3:14b into a linked note. */
+.membox-doc-summarize {
   appearance: none;
-  min-width: 42px;
-  height: 34px;
+  min-width: 32px;
+  height: 30px;
   padding: 0 8px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
+  gap: 3px;
   flex: 0 0 auto;
   border: 0;
-  border-left: 1px solid var(--line);
+  border-left: 1px solid color-mix(in srgb, var(--line) 85%, transparent);
   background: transparent;
   color: var(--muted);
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.membox-doc-summarize[hidden] { display: none; }
+
+.membox-doc-summarize:hover,
+.membox-doc-summarize:focus-visible {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent-soft) 62%, transparent);
+  outline: none;
+}
+
+.membox-doc-summarize[data-running="true"] {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent-soft) 55%, transparent);
+}
+
+.membox-doc-summarize[data-running="true"] .membox-doc-summarize-glyph {
+  animation: membox-pulse 0.75s ease-in-out infinite alternate;
+}
+
+.membox-doc-summarize-progress {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.membox-doc-summarize[data-running="true"] .membox-doc-summarize-progress {
+  color: var(--accent);
+}
+
+.membox-translate {
+  appearance: none;
+  min-width: 32px;
+  height: 30px;
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  flex: 0 0 auto;
+  border: 0;
+  border-left: 1px solid color-mix(in srgb, var(--line) 85%, transparent);
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: 12.5px;
   font-weight: 500;
   cursor: pointer;
   transition: color 0.15s ease, background 0.15s ease;
@@ -272,6 +324,7 @@
 
 .membox-translate[data-active="true"] {
   color: var(--accent);
+  background: color-mix(in srgb, var(--accent-soft) 55%, transparent);
 }
 
 .membox-translate[data-running="true"] .membox-translate-glyph {
@@ -321,15 +374,25 @@ dt > .membox-translation {
   to { transform: rotate(360deg); }
 }
 
-/* Bottom-left document status cluster: visible only while connected. A hollow
-   circle saves pending changes; after persistence it fills and copies the
-   document ID. Hovering a saved circle reveals only its five-character suffix.
-   The + button adds a related document. */
-.membox-status-cluster {
+/* Bottom-left document status dock: larger invisible hit area so low-frequency
+   extras (译 / search) expand when the pointer nears. The visual pill lives in
+   .membox-status-cluster. Visible only while connected. */
+.membox-status-dock {
   position: fixed;
   left: 24px;
   bottom: 24px;
   z-index: 70;
+  /* Proximity pad — expands hover target without shifting the pill. */
+  padding: 20px 22px;
+  margin: -20px -22px;
+}
+
+.membox-status-dock[hidden] {
+  display: none;
+}
+
+.membox-status-cluster {
+  position: relative;
   display: flex;
   align-items: center;
   border: 1px solid var(--line);
@@ -339,8 +402,21 @@ dt > .membox-translation {
   overflow: hidden;
 }
 
-.membox-status-cluster[hidden] {
-  display: none;
+/* Low-frequency tray: collapsed by default, opens on dock hover / focus / pin. */
+.membox-status-extras {
+  display: flex;
+  align-items: center;
+  max-width: 0;
+  opacity: 0;
+  overflow: hidden;
+  transition: max-width 0.2s ease, opacity 0.16s ease;
+}
+
+.membox-status-dock:hover .membox-status-extras,
+.membox-status-dock:focus-within .membox-status-extras,
+.membox-status-dock.is-extras-open .membox-status-extras {
+  max-width: 120px;
+  opacity: 1;
 }
 
 .membox-doc-status {
@@ -416,9 +492,11 @@ dt > .membox-translation {
 }
 
 @media (max-width: 768px) {
-  .membox-status-cluster {
+  .membox-status-dock {
     left: 12px;
     bottom: 12px;
+    padding: 16px 18px;
+    margin: -16px -18px;
   }
 }
 
@@ -525,6 +603,7 @@ dt > .membox-translation {
   align-items: center;
   justify-content: center;
   border: 0;
+  border-left: 1px solid color-mix(in srgb, var(--line) 85%, transparent);
   background: transparent;
   color: var(--muted);
   font-family: var(--font-sans);
@@ -1282,4 +1361,378 @@ body.is-reviewing #review-feed { margin-top: 8px; }
 }
 @keyframes membox-summarize-spin {
   to { transform: rotate(360deg); }
+}
+
+/* --------------------------------------------------------------------------
+   Agentic search — low-frequency action inside .membox-status-extras
+   -------------------------------------------------------------------------- */
+.membox-agent-search {
+  appearance: none;
+  width: 32px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-left: 1px solid color-mix(in srgb, var(--line) 85%, transparent);
+  border-radius: 0 999px 999px 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.membox-agent-search:hover,
+.membox-agent-search:focus-visible {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent-soft) 62%, transparent);
+  outline: none;
+}
+
+.membox-agent-search.is-open {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent-soft) 70%, transparent);
+}
+
+.membox-agent-search.is-busy svg {
+  animation: membox-agent-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes membox-agent-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+.membox-agent-search-panel {
+  position: fixed;
+  left: 24px;
+  bottom: 64px;
+  z-index: 85;
+  width: min(400px, calc(100vw - 32px));
+  height: min(480px, calc(100vh - 110px));
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--paper-raised);
+  box-shadow: 0 16px 40px var(--shadow);
+  overflow: hidden;
+}
+
+.membox-agent-search-panel[hidden] {
+  display: none;
+}
+
+.membox-agent-search-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 11px 10px 9px 14px;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+}
+
+.membox-agent-search-title {
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--ink);
+}
+
+.membox-agent-search-close {
+  appearance: none;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.membox-agent-search-close:hover,
+.membox-agent-search-close:focus-visible {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--line) 55%, transparent);
+  outline: none;
+}
+
+.membox-agent-search-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.membox-agent-search-history {
+  appearance: none;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.membox-agent-search-history:hover,
+.membox-agent-search-history:focus-visible {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent-soft) 62%, transparent);
+  outline: none;
+}
+
+.membox-agent-search-history.is-open {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent-soft) 70%, transparent);
+}
+
+.membox-agent-history-item {
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--paper) 70%, transparent);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.membox-agent-history-item:hover,
+.membox-agent-history-item:focus-visible {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent-soft) 45%, transparent);
+  outline: none;
+}
+
+.membox-agent-history-query {
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--ink);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+.membox-agent-history-when {
+  font-family: var(--font-sans);
+  font-size: 10.5px;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+
+.membox-agent-search-status {
+  margin: 0;
+  padding: 7px 14px 0;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  letter-spacing: 0.01em;
+  color: var(--muted);
+}
+
+.membox-agent-search-status.is-error {
+  color: #b3402f;
+}
+
+.membox-agent-search-transcript {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 14px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.membox-agent-empty {
+  margin: 4px 0 0;
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.membox-agent-empty code {
+  font-size: 11.5px;
+  color: var(--ink-soft);
+}
+
+.membox-agent-line.is-user {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.membox-agent-bubble {
+  max-width: 92%;
+  padding: 7px 11px;
+  border-radius: 12px 12px 4px 12px;
+  background: color-mix(in srgb, var(--accent) 14%, var(--paper));
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.membox-agent-line.is-tool {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.membox-agent-tool {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+  background: color-mix(in srgb, var(--paper) 75%, transparent);
+}
+
+.membox-agent-line.is-system {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--muted);
+  font-style: italic;
+}
+
+.membox-agent-line.is-error {
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  color: #b3402f;
+  white-space: pre-wrap;
+}
+
+.membox-agent-md {
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--ink);
+  word-break: break-word;
+}
+
+.membox-agent-md > :first-child { margin-top: 0; }
+.membox-agent-md > :last-child { margin-bottom: 0; }
+
+.membox-agent-md p,
+.membox-agent-md ul,
+.membox-agent-md ol {
+  margin: 0.4em 0;
+}
+
+.membox-agent-md ul,
+.membox-agent-md ol {
+  padding-left: 1.2em;
+}
+
+.membox-agent-md a,
+a.membox-agent-doc-link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.membox-agent-md code {
+  font-size: 0.92em;
+  padding: 0.05em 0.28em;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--line) 45%, transparent);
+}
+
+.membox-agent-cursor {
+  display: inline-block;
+  width: 0.4em;
+  height: 0.95em;
+  margin-left: 1px;
+  vertical-align: text-bottom;
+  background: var(--accent);
+  animation: membox-agent-cursor 1s steps(1) infinite;
+}
+
+@keyframes membox-agent-cursor {
+  50% { opacity: 0; }
+}
+
+.membox-agent-search-composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 10px 12px 12px;
+  border-top: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+  background: color-mix(in srgb, var(--paper) 50%, var(--paper-raised));
+}
+
+.membox-agent-search-input {
+  flex: 1;
+  min-width: 0;
+  appearance: none;
+  resize: none;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.4;
+  padding: 8px 10px;
+  outline: none;
+  max-height: 100px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.membox-agent-search-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-soft) 58%, transparent);
+}
+
+.membox-agent-search-send {
+  appearance: none;
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--accent);
+  color: var(--paper);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.membox-agent-search-send:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+
+.membox-agent-search-send:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+@media (max-width: 768px) {
+  .membox-agent-search-panel {
+    left: 12px;
+    right: 12px;
+    bottom: 56px;
+    width: auto;
+    height: min(68vh, calc(100vh - 88px));
+  }
 }

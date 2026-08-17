@@ -185,6 +185,41 @@ export async function streamAssist(documentID, payload, onEvent, signal) {
   if (buffer.trim()) consume(buffer.replace(/\r$/, ''));
 }
 
+// Full-document summarize — NDJSON progress stream from the local mmd model.
+export async function streamDocSummarize(documentID, onEvent, signal) {
+  const response = await fetch(`/api/doc/${encodeURIComponent(documentID)}/summarize-document`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Membox-Miru': '1' },
+    body: '{}',
+    cache: 'no-store',
+    signal,
+  });
+  if (!response.ok) throw new Error((await response.text()).trim() || `HTTP ${response.status}`);
+  if (!response.body) throw new Error('Summarize stream unavailable');
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  const consume = (line) => {
+    if (!line.trim()) return;
+    const event = JSON.parse(line);
+    onEvent(event);
+    if (event.type === 'error') throw new Error(event.text || 'Summarize failed');
+  };
+  while (true) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+    let newline = buffer.indexOf('\n');
+    while (newline >= 0) {
+      const line = buffer.slice(0, newline).replace(/\r$/, '');
+      buffer = buffer.slice(newline + 1);
+      consume(line);
+      newline = buffer.indexOf('\n');
+    }
+    if (done) break;
+  }
+  if (buffer.trim()) consume(buffer.replace(/\r$/, ''));
+}
+
 // Free Dictionary lookup — same source as ~/repo/lookup.
 export async function fetchLookup(word, { signal } = {}) {
   const response = await request(`/api/lookup?q=${encodeURIComponent(word)}`, { signal });

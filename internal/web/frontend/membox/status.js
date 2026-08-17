@@ -1,7 +1,10 @@
 /* Bottom-left status cluster: save/copy badge and the add-related button,
    plus the download button's connected-mode wording. The badge's hollow dot
    means there are changes to save; a filled dot means the document is durable
-   and the badge copies its UUID. */
+   and the badge copies its UUID.
+
+   Low-frequency actions (search, translate) live in a collapsible extras tray
+   that expands when the pointer nears the dock, on focus, or while pinned. */
 
 import { elements } from '../js/dom.js';
 import { showToast, writeClipboard } from '../js/ui/feedback.js';
@@ -12,16 +15,40 @@ import { getDocumentNavigation } from './document.js';
 import { renderBrowseNotesButton, setBrowseNotesVisible } from './notes.js';
 import { hideRelatedPanel, loadRelated, openRelatedModal } from './related.js';
 
+let statusDock = null;
 let statusCluster = null;
+let statusExtras = null;
 let statusBadge = null;
 let addRelatedButton = null;
+/** @type {Set<string>} */
+const extrasPins = new Set();
 
-function createStatusCluster() {
+function createStatusDock() {
+  const dock = document.createElement('div');
+  dock.className = 'membox-status-dock';
+  dock.hidden = true;
+
   const cluster = document.createElement('div');
   cluster.className = 'membox-status-cluster';
-  cluster.hidden = true;
-  document.body.appendChild(cluster);
-  return cluster;
+  cluster.setAttribute('role', 'group');
+  cluster.setAttribute('aria-label', 'Document status');
+
+  const extras = document.createElement('div');
+  extras.className = 'membox-status-extras';
+  extras.dataset.collapsed = 'true';
+
+  dock.appendChild(cluster);
+  document.body.appendChild(dock);
+  statusCluster = cluster;
+  statusExtras = extras;
+  // extras is appended after primary controls in initStatus
+  return dock;
+}
+
+function syncExtrasPinClass() {
+  if (!statusDock) return;
+  statusDock.classList.toggle('is-extras-open', extrasPins.size > 0);
+  if (statusExtras) statusExtras.dataset.collapsed = extrasPins.size > 0 ? 'false' : 'true';
 }
 
 function createStatusBadge() {
@@ -76,14 +103,14 @@ export function setDownloadMeaning() {
 export function renderDocStatus() {
   if (!session.connected) {
     getDocumentNavigation().hidden = true;
-    statusCluster.hidden = true;
+    if (statusDock) statusDock.hidden = true;
     statusBadge.hidden = true;
     addRelatedButton.hidden = true;
     setBrowseNotesVisible(false);
     hideRelatedPanel();
     return;
   }
-  statusCluster.hidden = false;
+  if (statusDock) statusDock.hidden = false;
   statusBadge.hidden = false;
   const saved = Boolean(session.documentID) && !session.annotationsDirty;
   const saving = session.syncing || session.saveInFlight;
@@ -114,10 +141,29 @@ export function renderDocStatus() {
   }
 }
 
+/** Visual pill inside the bottom-left dock. */
+export function getStatusCluster() {
+  return statusCluster;
+}
+
+/** Collapsible tray for low-frequency actions (search, translate). */
+export function getStatusExtras() {
+  return statusExtras;
+}
+
+/** Keep extras expanded while a low-frequency tool is in use. */
+export function setStatusExtrasPinned(reason, pinned) {
+  const key = String(reason || '').trim() || 'default';
+  if (pinned) extrasPins.add(key);
+  else extrasPins.delete(key);
+  syncExtrasPinClass();
+}
+
 export function initStatus() {
-  statusCluster = createStatusCluster();
+  statusDock = createStatusDock();
   statusBadge = createStatusBadge();
   addRelatedButton = createAddRelatedButton();
+  statusCluster.appendChild(statusExtras);
 
   // Miru updates this title when annotations change; connected mode owns its
   // sync wording, so immediately re-apply it after those generic updates.
