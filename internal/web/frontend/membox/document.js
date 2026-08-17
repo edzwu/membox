@@ -13,6 +13,7 @@ import { emitRender } from './events.js';
 import { fetchDocument, renameDocument } from './api.js';
 import { convertedDisplayLabel, documentDisplayLabel } from './labels.js';
 import { cancelPendingSaves, resetReadingSession, restoreReadingState } from './reading-state.js';
+import { scheduleNotePreviewPass } from './notes.js';
 import { hideSeriesNav, loadSeriesNav } from './series-nav.js';
 
 let documentNavigation = null;
@@ -171,6 +172,9 @@ export async function loadFromMembox() {
     // Notes before progress: note cards change the layout, so the saved
     // scroll position only means something once they are in place.
     await restoreReadingState(session.documentID, markdown);
+    // Restore is silent (notify:false) — clamp long rail cards explicitly,
+    // otherwise they stay expanded until the first edit or window resize.
+    scheduleNotePreviewPass();
     // Apply AFTER restore: the annotation sidecar can rewrite .doc-title with
     // a previously saved long conversion stem. Also shorten a body H1 that is
     // just the raw -pdf-<uuid> filename so the page matches the TUI tree.

@@ -129,6 +129,14 @@ function scheduleLongNotePreviews() {
   }, 0);
 }
 
+// Restore applies notes with notify:false, so no miru-annotations-changed
+// fires after a page load and long cards would stay expanded until the first
+// edit or resize. document.js calls this once the restore has landed so the
+// height clamp runs on the initial paint too.
+export function scheduleNotePreviewPass() {
+  scheduleLongNotePreviews();
+}
+
 export function renderBrowseNotesButton() {
   const count = noteCount();
   const countBadge = browseNotesButton.querySelector('.membox-notes-count');
