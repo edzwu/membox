@@ -186,11 +186,11 @@ export async function streamAssist(documentID, payload, onEvent, signal) {
 }
 
 // Full-document summarize — NDJSON progress stream from the local mmd model.
-export async function streamDocSummarize(documentID, onEvent, signal) {
+export async function streamDocSummarize(documentID, { force = false } = {}, onEvent, signal) {
   const response = await fetch(`/api/doc/${encodeURIComponent(documentID)}/summarize-document`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Membox-Miru': '1' },
-    body: '{}',
+    body: JSON.stringify({ force }),
     cache: 'no-store',
     signal,
   });

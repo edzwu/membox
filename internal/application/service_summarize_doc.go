@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"unicode/utf8"
+
+	"membox/internal/domain/catalog"
 )
 
 // Full-document summarization: dynamic-window map-reduce over the local mmd
@@ -51,6 +53,9 @@ type SummarizeDocumentResult struct {
 	Title    string
 	Segments int
 	Chars    int
+	// Existing is true when a prior summary note was reused without any
+	// model work (idempotent re-trigger).
+	Existing bool
 }
 
 type summarizeSegment struct {
@@ -205,12 +210,55 @@ func dedupeAnchors(all []string, cap int) []string {
 	return out
 }
 
+// findSummaryNote locates an existing summary note for the document: an
+// active outgoing link whose Markdown front matter carries kind "summary"
+// and this document's source_document_id. The newest match wins.
+func (s *Service) findSummaryNote(ctx context.Context, document *catalog.Document) (noteID, notePath, noteTitle string, found bool) {
+	_, graph, err := s.GetDocumentGraph(ctx, string(document.ID))
+	if err != nil {
+		return "", "", "", false
+	}
+	marker := `source_document_id: "` + string(document.ID) + `"`
+	var best *catalog.Document
+	var bestLinkPath string
+	for _, link := range graph.Outgoing {
+		candidate := link.Document
+		if candidate == nil || candidate.Status != catalog.DocumentActive {
+			continue
+		}
+		if candidate.Index.MediaType != "text/markdown" {
+			continue
+		}
+		body, readErr := s.ReadDocumentText(ctx, string(candidate.ID))
+		if readErr != nil {
+			continue
+		}
+		head := string(body)
+		if len(head) > 2048 {
+			head = head[:2048]
+		}
+		if !strings.Contains(head, marker) || !strings.Contains(head, `kind: "summary"`) {
+			continue
+		}
+		if best == nil || candidate.CreatedAt.After(best.CreatedAt) {
+			best = candidate
+			bestLinkPath = link.Path
+		}
+	}
+	if best == nil {
+		return "", "", "", false
+	}
+	return string(best.ID), bestLinkPath, best.Index.Title, true
+}
+
 // SummarizeDocument map-reduces the document body into a ≤1000-rune Chinese
 // Markdown summary via the local model, stores it as a note linked to the
-// original document, and streams stage progress.
+// original document, and streams stage progress. Unless force is set, an
+// existing summary note is reused without any model calls.
 func (s *Service) SummarizeDocument(
 	ctx context.Context,
 	selector string,
+	force bool,
 	complete func(context.Context, string) (string, error),
 	progress func(SummarizeProgress),
 ) (SummarizeDocumentResult, error) {
@@ -220,6 +268,11 @@ func (s *Service) SummarizeDocument(
 	document, _, err := s.ResolveDocument(ctx, selector)
 	if err != nil {
 		return SummarizeDocumentResult{}, err
+	}
+	if !force {
+		if noteID, notePath, noteTitle, found := s.findSummaryNote(ctx, document); found {
+			return SummarizeDocumentResult{NoteID: noteID, Path: notePath, Title: noteTitle, Existing: true}, nil
+		}
 	}
 	body, err := s.ReadDocumentText(ctx, string(document.ID))
 	if err != nil {

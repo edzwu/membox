@@ -23,12 +23,12 @@ function createButton() {
   value.innerHTML =
     '<span class="membox-doc-summarize-glyph" aria-hidden="true">摘</span>' +
     '<span class="membox-doc-summarize-progress" aria-hidden="true"></span>';
-  value.addEventListener('click', () => {
+  value.addEventListener('click', (event) => {
     if (running) {
       controller?.abort();
       return;
     }
-    void startSummarize();
+    void startSummarize(Boolean(event?.altKey));
   });
   // Leftmost of the low-frequency tray: [摘] [译] [search]
   const extras = getStatusExtras();
@@ -60,13 +60,13 @@ function renderButton(progressText = '') {
   button.setAttribute('aria-pressed', String(running));
   button.title = running
     ? `Summarizing… ${progressText} · click to stop`
-    : 'Summarize document · local model';
+    : 'Summarize document · local model · Alt-click to regenerate';
   button.setAttribute('aria-label', running ? `Summarizing ${progressText}, click to stop` : 'Summarize document');
   if (labelEl) labelEl.textContent = progressText;
   setStatusExtrasPinned('doc-summarize', running);
 }
 
-async function startSummarize() {
+async function startSummarize(force = false) {
   if (!session.connected) {
     showToast('Connect to membox before summarizing');
     return;
@@ -81,7 +81,7 @@ async function startSummarize() {
   renderButton('…');
   try {
     let done = null;
-    await streamDocSummarize(documentID, (event) => {
+    await streamDocSummarize(documentID, { force }, (event) => {
       if (event.type === 'progress') {
         renderButton(stageText(event));
       } else if (event.type === 'done') {
@@ -91,7 +91,7 @@ async function startSummarize() {
     running = false;
     renderButton('');
     if (done?.id) {
-      showToast(`Summary saved · ${done.chars || ''}字`);
+      showToast(done.existing ? 'Summary already exists — opening' : `Summary saved · ${done.chars || ''}字`);
       replaceDocumentID(done.id);
       await loadFromMembox();
     } else {

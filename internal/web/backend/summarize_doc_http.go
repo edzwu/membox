@@ -34,6 +34,13 @@ func (s *Server) handleDocumentSummarize(writer http.ResponseWriter, request *ht
 		http.Error(writer, "local model (mmd) is not configured", http.StatusServiceUnavailable)
 		return
 	}
+	var payload struct {
+		Force bool `json:"force"`
+	}
+	if request.Body != nil {
+		// Empty body is fine; force defaults to false.
+		_ = json.NewDecoder(request.Body).Decode(&payload)
+	}
 	if !docSummarizeMu.TryLock() {
 		http.Error(writer, "another document summary is running", http.StatusConflict)
 		return
@@ -56,6 +63,7 @@ func (s *Server) handleDocumentSummarize(writer http.ResponseWriter, request *ht
 	result, err := s.service.SummarizeDocument(
 		request.Context(),
 		selector,
+		payload.Force,
 		s.summarizer.Complete,
 		func(p application.SummarizeProgress) {
 			emit(map[string]any{
@@ -83,5 +91,6 @@ func (s *Server) handleDocumentSummarize(writer http.ResponseWriter, request *ht
 		"title":    result.Title,
 		"segments": result.Segments,
 		"chars":    result.Chars,
+		"existing": result.Existing,
 	})
 }
