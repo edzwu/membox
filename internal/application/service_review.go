@@ -350,6 +350,14 @@ func (s *Service) reviewCardView(ctx context.Context, card port.ReviewCard) (Rev
 	fm, rest := splitFrontMatter(text)
 	quote := firstQuote(rest)
 	sourceURL, sourceTitle := frontMatterFields(fm)
+	// Summary cards are ≤140 chars and meant to be read inline: the excerpt
+	// blockquote is only a restore anchor in the note file, so drop it from the
+	// feed (quote + body) to avoid showing the quote twice.
+	bodyText := strings.TrimSpace(rest)
+	if card.Kind == "summary" {
+		quote = ""
+		bodyText = strings.TrimSpace(stripBlockquoteExcerpt(bodyText))
+	}
 
 	view := ReviewCardView{
 		NoteID:        card.NoteDocumentID,
@@ -358,7 +366,7 @@ func (s *Service) reviewCardView(ctx context.Context, card port.ReviewCard) (Rev
 		Underline:     card.Underline,
 		Strikethrough: card.Strikethrough,
 		Quote:         quote,
-		Body:          strings.TrimSpace(rest),
+		Body:          bodyText,
 		SourceURL:     sourceURL,
 		SourceTitle:   sourceTitle,
 		TargetID:      card.TargetDocumentID,
@@ -376,6 +384,32 @@ func (s *Service) reviewCardView(ctx context.Context, card port.ReviewCard) (Rev
 		view.TargetTitle = target.Index.Title
 	}
 	return view, nil
+}
+
+// stripBlockquoteExcerpt removes the leading blockquote excerpt from a note
+// body (the anchor copy kept in *-note.md files). Everything after the quote
+// — the actual note/summary prose — is preserved.
+func stripBlockquoteExcerpt(body string) string {
+	lines := strings.Split(body, "\n")
+	var out []string
+	inQuote := false
+	for _, line := range lines {
+		trim := strings.TrimSpace(line)
+		if strings.HasPrefix(trim, ">") {
+			if !inQuote {
+				inQuote = true
+			}
+			continue
+		}
+		if inQuote {
+			if trim == "" {
+				continue
+			}
+			inQuote = false
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
 }
 
 // splitFrontMatter returns the YAML block (with --- fences) and the rest.

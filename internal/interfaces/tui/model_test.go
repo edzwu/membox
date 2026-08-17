@@ -1238,3 +1238,39 @@ func TestModel_FilterMatchesUUIDSuffixAndUnicodeFilename(t *testing.T) {
 		t.Fatalf("Unicode filename did not match: %+v", model.filtered)
 	}
 }
+
+func TestModel_UnpinMovesCursorToNextPinnedDocument(t *testing.T) {
+	app := &fakeApp{pins: map[string]bool{"p1": true, "p2": true, "p3": true}}
+	model := New(context.Background(), app, fakeLauncher{})
+	model.width, model.height = 100, 20
+	model.items = documentItems([]membox.DocumentView{
+		{ID: "p1", Path: "/tmp/p1.md", Pinned: true},
+		{ID: "p2", Path: "/tmp/p2.md", Pinned: true},
+		{ID: "p3", Path: "/tmp/p3.md", Pinned: true},
+		{ID: "u1", Path: "/tmp/u1.md"},
+	})
+	model.refreshFilter()
+	// select p1 (index 0), unpin it → cursor should move to p2 (still pinned).
+	model.selected = 0
+	message := togglePinCmd(context.Background(), app, "p1")().(pinMsg)
+	updated, _ := model.Update(message)
+	model = updated.(Model)
+	if model.filtered[model.selected].document.ID != "p2" {
+		t.Fatalf("unpin should move cursor to next pinned p2, got %q (selected=%d)",
+			model.filtered[model.selected].document.ID, model.selected)
+	}
+	// Unpin p2 too → cursor should move to p3.
+	message = togglePinCmd(context.Background(), app, "p2")().(pinMsg)
+	updated, _ = model.Update(message)
+	model = updated.(Model)
+	if model.filtered[model.selected].document.ID != "p3" {
+		t.Fatalf("unpin p2 should move cursor to p3, got %q", model.filtered[model.selected].document.ID)
+	}
+	// Unpin the last pinned doc → no pinned left, cursor stays where it is.
+	message = togglePinCmd(context.Background(), app, "p3")().(pinMsg)
+	updated, _ = model.Update(message)
+	model = updated.(Model)
+	if model.filtered[model.selected].document.ID != "p3" {
+		t.Fatalf("last unpin should keep cursor on p3, got %q", model.filtered[model.selected].document.ID)
+	}
+}

@@ -916,14 +916,37 @@ func (m *Model) applyPinnedState(documentID string, pinned bool) {
 		}
 	}
 	m.sortFiltered()
-	for index, candidate := range m.filtered {
-		if candidate.document.ID == documentID {
-			m.selected = index
-			break
-		}
-	}
 	if pinned {
+		// Pinning jumps the cursor to the newly pinned row (top of the list).
+		for index, candidate := range m.filtered {
+			if candidate.document.ID == documentID {
+				m.selected = index
+				break
+			}
+		}
 		m.scrollTop = 0
+	} else {
+		// Unpinning: don't follow the file as it sinks into the unpinned region.
+		// Move to the next still-pinned document (first pinned row) so the
+		// cursor stays in the pinned group; if none remain, keep the original
+		// document selected (restore by id, since sortFiltered reordered rows).
+		next := -1
+		for index, candidate := range m.filtered {
+			if candidate.document.Pinned {
+				next = index
+				break
+			}
+		}
+		if next >= 0 {
+			m.selected = next
+		} else {
+			for index, candidate := range m.filtered {
+				if candidate.document.ID == documentID {
+					m.selected = index
+					break
+				}
+			}
+		}
 	}
 	m.keepSelectionVisible()
 	if m.viewMode == viewBoard {
