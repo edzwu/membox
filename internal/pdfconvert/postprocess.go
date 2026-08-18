@@ -85,6 +85,7 @@ func PostprocessMarkdown(markdown, baseFilename string) PostprocessResult {
 // real document lines, and only then splits. Any failure keeps the document
 // whole; the LLM can never rewrite or drop content silently.
 func PostprocessMarkdownWithPlanner(ctx context.Context, markdown, baseFilename string, planner StructurePlanner) PostprocessResult {
+	markdown = normalizeBareCodeBlocks(markdown)
 	markdown = normalizeHTMLTables(markdown)
 	boundaries, chapterCount := markdownSections(markdown)
 	if chapterCount < 2 && planner != nil {
