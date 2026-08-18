@@ -13,13 +13,18 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
 
 const (
+	// PDFCONV_TIMEOUT (minutes) overrides the per-request conversion deadline.
+	// Default 30 min is fine for most PDFs; multi-hundred-page books split into
+	// many small VLM-safe chunks can take well over an hour.
 	defaultConversionTimeout = 30 * time.Minute
 	maxErrorBody             = 64 << 10
 	maxZIPResponse           = 512 << 20
@@ -45,7 +50,11 @@ type HTTPClient struct {
 }
 
 func NewHTTPClient() *HTTPClient {
-	return &HTTPClient{HTTP: newLANHTTPClient(), ConversionTimeout: defaultConversionTimeout}
+	timeout := defaultConversionTimeout
+	if minutes, err := strconv.Atoi(strings.TrimSpace(os.Getenv("PDFCONV_TIMEOUT"))); err == nil && minutes > 0 {
+		timeout = time.Duration(minutes) * time.Minute
+	}
+	return &HTTPClient{HTTP: newLANHTTPClient(), ConversionTimeout: timeout}
 }
 
 func newLANHTTPClient() *http.Client {
