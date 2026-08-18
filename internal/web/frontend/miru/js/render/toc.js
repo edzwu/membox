@@ -88,11 +88,25 @@ function makeTocLink(heading) {
 // "10.1 多 Agent…" → 2, "10.1.1 维度一" → 3, "第 10 章" → null.
 // PDF conversions often flatten every section to ## while keeping the printed
 // outline in the title text — without this, progressive disclosure cannot nest.
+//
+// Reject false positives that blow up nesting + progressive disclosure:
+//   "2001 年：…" / "2026 年的…" — years, not section 2001
+//   bare integers with 3+ digits — not realistic chapter indexes
 export function outlineDepth(label) {
   const text = String(label || '').trim();
   const match = text.match(/^(\d+(?:\.\d+)*)\b/);
   if (!match) return null;
-  return match[1].split('.').length;
+
+  // "2001 年…" / "2026年…" — calendar years, never outline numbers.
+  const after = text.slice(match[0].length);
+  if (/^\s*年/.test(after)) return null;
+
+  const parts = match[1].split('.');
+  // Each outline segment is a small index (1, 10, 99). Years (2001) and other
+  // large bare integers fail this check and fall back to HTML heading levels.
+  if (parts.some((part) => part.length > 2)) return null;
+
+  return parts.length;
 }
 
 function tocNestLevel(heading, label, stack) {

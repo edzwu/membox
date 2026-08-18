@@ -15,6 +15,24 @@ describe('htmlToMarkdown', () => {
     expect(markdown).not.toContain('window.bad');
   });
 
+  // Regression: body-only tables (no <th>) used to be kept as raw HTML by
+  // turndown-plugin-gfm. Miru html:false then shows the tags as source text.
+  it('serializes body-only tables without a heading row', () => {
+    const markdown = htmlToMarkdown(`
+      <table><tbody>
+        <tr><td>L1 cache reference</td><td>0.5 ns</td></tr>
+        <tr><td>Compress 1K bytes with Zippy</td><td>10,000 ns</td><td>0.01 ms</td></tr>
+        <tr><td>Send packet CA-&gt;Netherlands-&gt;CA</td><td>150,000,000 ns</td><td>150 ms</td></tr>
+      </tbody></table>
+    `);
+
+    expect(markdown).not.toContain('<table');
+    expect(markdown).toContain('| L1 cache reference | 0.5 ns |  |');
+    expect(markdown).toContain('| Compress 1K bytes with Zippy | 10,000 ns | 0.01 ms |');
+    expect(markdown).toContain('CA->Netherlands->CA');
+    expect(markdown).toMatch(/^\| --- \| --- \| --- \|$/m);
+  });
+
   it('preserves br newlines and chooses a safe code fence', () => {
     const markdown = htmlToMarkdown(
       '<pre><code class="language-markdown">first<br>```nested```<br>last</code></pre>',

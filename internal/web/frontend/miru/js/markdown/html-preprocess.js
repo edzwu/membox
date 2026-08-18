@@ -13,6 +13,7 @@
      <a href>…</a>             →  [text](href)
      <b>/<strong>              →  **text**
      <br>                      →  line break
+     <table>…</table>          →  GFM pipe table (blank header if no <th>)
      lone <div>/</div> lines   →  removed
 
    Copy-paste from Word/WeChat/chat apps also turns straight quotes into
@@ -89,7 +90,71 @@ function convertInlineHtml(text) {
   // <br> → newline
   out = out.replace(/<br\s*\/?>/gi, '\n');
 
+  // Superscripts common in unit glosses (10<sup>-9</sup>).
+  out = out.replace(/<sup\b[^>]*>([\s\S]*?)<\/sup>/gi, '^$1');
+  out = out.replace(/<sub\b[^>]*>([\s\S]*?)<\/sub>/gi, '~$1');
+
   return out;
+}
+
+function decodeBasicEntities(text) {
+  return String(text || '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)));
+}
+
+function cellTextFromHtml(inner) {
+  const withBreaks = String(inner || '').replace(/<br\s*\/?>/gi, ' ');
+  // Drop residual tags inside a cell (spans, etc.) after inline conversions.
+  const converted = convertInlineHtml(withBreaks).replace(/<[^>]+>/g, '');
+  return decodeBasicEntities(converted).replace(/\s+/g, ' ').trim().replace(/\|/g, '\\|');
+}
+
+// HTML tables that survived clip/paste (turndown keeps body-only tables as
+// raw HTML). Rewrite to GFM so markdown-it (html:false) can render them.
+function convertHtmlTables(text) {
+  return text.replace(/<table\b[^>]*>[\s\S]*?<\/table>/gi, (tableHtml) => {
+    const rows = [];
+    let headed = false;
+    const rowRe = /<tr\b[^>]*>([\s\S]*?)<\/tr>/gi;
+    let rowMatch;
+    while ((rowMatch = rowRe.exec(tableHtml)) !== null) {
+      const rowHtml = rowMatch[1];
+      const cells = [];
+      const cellRe = /<t([dh])\b[^>]*>([\s\S]*?)<\/t\1>/gi;
+      let cellMatch;
+      let rowHasTh = false;
+      while ((cellMatch = cellRe.exec(rowHtml)) !== null) {
+        if (cellMatch[1].toLowerCase() === 'h') rowHasTh = true;
+        cells.push(cellTextFromHtml(cellMatch[2]));
+      }
+      if (!cells.length) continue;
+      if (rows.length === 0 && rowHasTh) headed = true;
+      rows.push(cells);
+    }
+    if (!rows.length) return tableHtml;
+
+    const colCount = Math.max(...rows.map((r) => r.length));
+    const pad = (row) => {
+      if (row.length >= colCount) return row.slice(0, colCount);
+      return row.concat(Array(colCount - row.length).fill(''));
+    };
+
+    const bodyRows = headed ? rows.slice(1) : rows;
+    const header = headed ? pad(rows[0]) : Array(colCount).fill('');
+    const lines = [
+      `| ${header.join(' | ')} |`,
+      `| ${header.map(() => '---').join(' | ')} |`,
+      ...bodyRows.map((row) => `| ${pad(row).join(' | ')} |`),
+    ];
+    return `\n\n${lines.join('\n')}\n\n`;
+  });
 }
 
 export function preprocessHtml(text) {
@@ -129,6 +194,27 @@ export function preprocessHtml(text) {
 
   // Lone <div …> / </div> lines are pure layout wrappers — drop them.
   out = out.replace(/^[ \t]*<\/?div\b[^>]*>[ \t]*$/gim, '');
+
+  // Raw HTML tables (common leftover from clippers / pasted pages).
+  out = convertHtmlTables(out);
+
+  // <ul>/<ol> with simple <li> children — common under truncated clips.
+  out = out.replace(/<(ul|ol)\b[^>]*>([\s\S]*?)<\/\1>/gi, (whole, type, inner) => {
+    const ordered = String(type).toLowerCase() === 'ol';
+    let i = 0;
+    const items = [];
+    const liRe = /<li\b[^>]*>([\s\S]*?)<\/li>/gi;
+    let m;
+    while ((m = liRe.exec(inner)) !== null) {
+      i += 1;
+      const item = convertInlineHtml(m[1]).replace(/<[^>]+>/g, '');
+      const text = decodeBasicEntities(item).replace(/\s+/g, ' ').trim();
+      if (!text) continue;
+      items.push(ordered ? `${i}. ${text}` : `- ${text}`);
+    }
+    if (!items.length) return whole;
+    return `\n\n${items.join('\n')}\n\n`;
+  });
 
   protectedSpans.forEach(({ placeholder, content }) => {
     out = out.replace(placeholder, content);

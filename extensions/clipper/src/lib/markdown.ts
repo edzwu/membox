@@ -27,6 +27,15 @@ function makeTurndown(): TurndownService {
   });
   turndown.use(gfm);
 
+  // turndown-plugin-gfm only converts tables whose first row is <th>, and
+  // keeps every other <table> as raw HTML. Miru renders with html:false, so
+  // those leftovers show up as escaped source. Convert body-only tables too
+  // (common on hand-written pages like Jeff Dean latency numbers).
+  turndown.addRule('tableWithoutHeading', {
+    filter: (node) => isTableWithoutHeading(node),
+    replacement: (_content, node) => tableToMarkdown(node as HTMLTableElement),
+  });
+
   // Selection clips do not pass through the article extractor, so keep this
   // safety boundary in the serializer as well.
   turndown.addRule('dropNonContent', {
@@ -78,6 +87,60 @@ export function isLatexMathElement(node: Node): boolean {
   return (
     element.localName?.toLowerCase() === 'math' && element.hasAttribute?.('data-latex') === true
   );
+}
+
+function isTableWithoutHeading(node: Node): boolean {
+  if (node.nodeName !== 'TABLE') return false;
+  const table = node as HTMLTableElement;
+  const first = table.rows?.[0];
+  if (!first) return false;
+  return !rowIsHeading(first);
+}
+
+function rowIsHeading(row: HTMLTableRowElement): boolean {
+  const parent = row.parentElement;
+  if (!parent) return false;
+  if (parent.nodeName === 'THEAD') return true;
+  if (parent.firstElementChild !== row) return false;
+  if (parent.nodeName !== 'TABLE' && parent.nodeName !== 'TBODY') return false;
+  // GFM heading row: every cell is <th>.
+  const cells = Array.from(row.cells);
+  return cells.length > 0 && cells.every((cell) => cell.nodeName === 'TH');
+}
+
+/** Serialize any HTML table to a GFM pipe table (synthetic blank header if needed). */
+export function tableToMarkdown(table: HTMLTableElement): string {
+  const rows = Array.from(table.rows).map((row) =>
+    Array.from(row.cells).map((cell) => cellTextForMarkdown(cell)),
+  );
+  if (!rows.length) return '';
+
+  const colCount = Math.max(0, ...rows.map((row) => row.length));
+  if (colCount === 0) return '';
+
+  const pad = (row: string[]): string[] => {
+    if (row.length >= colCount) return row.slice(0, colCount);
+    return row.concat(Array(colCount - row.length).fill(''));
+  };
+
+  const first = table.rows[0];
+  const headed = first ? rowIsHeading(first) : false;
+  const bodyRows = headed ? rows.slice(1) : rows;
+  const header = headed ? pad(rows[0]) : Array(colCount).fill('');
+
+  const lines = [
+    `| ${header.join(' | ')} |`,
+    `| ${header.map(() => '---').join(' | ')} |`,
+    ...bodyRows.map((row) => `| ${pad(row).join(' | ')} |`),
+  ];
+  return `\n\n${lines.join('\n')}\n\n`;
+}
+
+function cellTextForMarkdown(cell: HTMLTableCellElement): string {
+  // Prefer structured text (keeps <br> as spaces after normalize) without
+  // pulling in nested table noise — rare and not worth recursive conversion.
+  const text = elementText(cell).replace(/\s+/g, ' ').trim();
+  return text.replace(/\|/g, '\\|');
 }
 
 function cleanConversionHtml(html: string): string {
