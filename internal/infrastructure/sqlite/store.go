@@ -456,7 +456,66 @@ CREATE TABLE IF NOT EXISTS document_trash (
 	if err := s.migrateAnnotationNoteKind(); err != nil {
 		return err
 	}
+	if err := s.migrateQuestions(); err != nil {
+		return err
+	}
 	return s.migrateAgentSessions()
+}
+
+// migrateQuestions creates the question accumulation table and adds inbox-scan
+// provenance / canonical-dedupe columns used by /api/questions/ingest.
+func (s *Store) migrateQuestions() error {
+	_, err := s.db.Exec(`
+CREATE TABLE IF NOT EXISTS questions (
+    id TEXT PRIMARY KEY,
+    body TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','answered','archived')),
+    answer TEXT NOT NULL DEFAULT '',
+    source_document_id TEXT REFERENCES documents(id) ON DELETE SET NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    answered_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS questions_status ON questions(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS questions_source ON questions(source_document_id);
+`)
+	if err != nil {
+		return fmt.Errorf("migrating questions: %w", err)
+	}
+	for _, column := range []struct{ name, def string }{
+		{"canonical_body", "TEXT NOT NULL DEFAULT ''"},
+		{"source_file", "TEXT NOT NULL DEFAULT ''"},
+		{"source_line", "TEXT NOT NULL DEFAULT ''"},
+		{"source_commit", "TEXT NOT NULL DEFAULT ''"},
+	} {
+		var has int
+		err := s.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('questions') WHERE name=?`, column.name).Scan(&has)
+		if err != nil {
+			return fmt.Errorf("inspecting questions.%s: %w", column.name, err)
+		}
+		if has == 0 {
+			if _, err := s.db.Exec(`ALTER TABLE questions ADD COLUMN ` + column.name + ` ` + column.def); err != nil {
+				return fmt.Errorf("adding questions.%s: %w", column.name, err)
+			}
+		}
+	}
+	// Backfill canonical keys for rows created before inbox ingest existed.
+	// Keep it SQL-simple (trim + lower); application-layer normalize is richer
+	// for new writes and is what Ingest uses for dedupe going forward.
+	if _, err := s.db.Exec(`UPDATE questions
+SET canonical_body = lower(trim(body))
+WHERE canonical_body = '' AND trim(body) != ''`); err != nil {
+		return fmt.Errorf("backfilling questions.canonical_body: %w", err)
+	}
+	if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS questions_canonical_body
+ON questions(canonical_body) WHERE canonical_body != ''`); err != nil {
+		return fmt.Errorf("indexing questions.canonical_body: %w", err)
+	}
+	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS questions_source_file
+ON questions(source_file) WHERE source_file != ''`); err != nil {
+		return fmt.Errorf("indexing questions.source_file: %w", err)
+	}
+	return nil
 }
 
 // migrateAnnotationNoteKind adds annotation_notes.kind so assist Q&A notes

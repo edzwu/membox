@@ -323,6 +323,8 @@ type CatalogStore interface {
 	Status(ctx context.Context) (StatusSnapshot, error)
 	GetSetting(ctx context.Context, key string) (string, error)
 	SetSetting(ctx context.Context, key, value string) error
+	// Questions exposes the personal question accumulation store.
+	Questions() QuestionStore
 }
 
 // DocumentSourceRecord is a document that was ingested from a web URL.
@@ -376,6 +378,66 @@ type ResourceAssessment struct {
 	Score     float64 `json:"score"`
 	Reason    string  `json:"reason"`
 	UpdatedAt time.Time
+}
+
+// Question accumulation: personal open questions with optional answers,
+// linked to the document they arose from. Persisted in the same SQLite DB.
+// CanonicalBody is the stable dedupe key (like resources.canonical_url).
+type Question struct {
+	ID               string    `json:"id"`
+	Body             string    `json:"body"`
+	CanonicalBody    string    `json:"canonical_body,omitempty"`
+	Status           string    `json:"status"` // QuestionOpen | QuestionAnswered | QuestionArchived
+	Answer           string    `json:"answer,omitempty"`
+	SourceDocumentID string    `json:"source_document_id,omitempty"`
+	SourceFile       string    `json:"source_file,omitempty"`
+	SourceLine       string    `json:"source_line,omitempty"`
+	SourceCommit     string    `json:"source_commit,omitempty"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+	AnsweredAt       time.Time `json:"answered_at,omitempty"`
+}
+
+const (
+	QuestionOpen     = "open"
+	QuestionAnswered = "answered"
+	QuestionArchived = "archived"
+)
+
+type QuestionListQuery struct {
+	Status           string
+	SourceDocumentID string
+	SourceFile       string
+	Limit            int
+}
+
+type QuestionInsert struct {
+	ID               string
+	Body             string
+	CanonicalBody    string
+	SourceDocumentID string
+	SourceFile       string
+	SourceLine       string
+	SourceCommit     string
+	CreatedAt        time.Time
+}
+
+type QuestionIngestRecord struct {
+	Question Question
+	Inserted bool
+}
+
+// QuestionStore persists questions. Resolve accepts the full ID or a unique
+// short suffix; Delete requires a full ID to avoid accidental suffix matches.
+// Ingest is the idempotent inbox-scan path (canonical_body dedupe).
+type QuestionStore interface {
+	Add(ctx context.Context, q Question) (Question, error)
+	Ingest(ctx context.Context, questions []QuestionInsert) ([]QuestionIngestRecord, error)
+	List(ctx context.Context, query QuestionListQuery) ([]Question, error)
+	Resolve(ctx context.Context, selector string) (Question, error)
+	Update(ctx context.Context, q Question) (Question, error)
+	Delete(ctx context.Context, id string) error
+	Count(ctx context.Context) (map[string]int, error)
 }
 
 type StatusSnapshot struct {

@@ -120,6 +120,8 @@ func (s *Server) Start(ctx context.Context, port int) (string, error) {
 	mux.HandleFunc("/api/resources/ingest", s.handleResourceIngest)
 	mux.HandleFunc("/api/resources/assess", s.handleResourceAssess)
 	mux.HandleFunc("/api/resources/scan", s.handleResourceScan)
+	mux.HandleFunc("/api/questions", s.handleQuestions)
+	mux.HandleFunc("/api/questions/ingest", s.handleQuestionIngest)
 	mux.HandleFunc("/api/review/queue", s.handleReviewQueue)
 	mux.HandleFunc("/api/review/rate", s.handleReviewRate)
 	mux.HandleFunc("/api/review/reply", s.handleReviewReply)

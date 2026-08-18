@@ -307,3 +307,102 @@ func looksLikeUUID(id string) bool {
 	}
 	return true
 }
+
+// handleAgentInternalListQuestions is a read-only question listing tool.
+func (s *Server) handleAgentInternalListQuestions(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	handle, ok := s.requireAgentWorker(writer, request)
+	if !ok {
+		return
+	}
+	var body struct {
+		Status string `json:"status"`
+		Limit  int    `json:"limit"`
+	}
+	if err := decodeJSONBody(request, &body); err != nil {
+		writeAgentError(writer, agent.NewInvalid(err.Error()))
+		return
+	}
+	tools := handle.Manager.ToolsFor()
+	if tools == nil {
+		writeAgentError(writer, agent.NewInvalid("tools unavailable"))
+		return
+	}
+	questions, err := tools.ListQuestions(request.Context(), body.Status, body.Limit)
+	if err != nil {
+		writeAgentError(writer, err)
+		return
+	}
+	writeAgentJSON(writer, http.StatusOK, map[string]any{"v": agentAPIVersion, "questions": questions})
+}
+
+// handleAgentInternalQuestionWrite handles add/answer/delete question tools
+// through the same approval-gated write path as the document write tools.
+func (s *Server) handleAgentInternalQuestionWrite(writer http.ResponseWriter, request *http.Request, kind string) {
+	if request.Method != http.MethodPost {
+		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	handle, ok := s.requireAgentWorker(writer, request)
+	if !ok {
+		return
+	}
+	if !handle.Manager.WriteToolsEnabled() {
+		writeAgentError(writer, agent.NewWriteDisabled())
+		return
+	}
+	tools := handle.Manager.ToolsFor()
+	if tools == nil {
+		writeAgentError(writer, agent.NewInvalid("tools unavailable"))
+		return
+	}
+	ctx := request.Context()
+	switch kind {
+	case "add":
+		var body agent.AddQuestionCommand
+		if err := decodeJSONBody(request, &body); err != nil {
+			writeAgentError(writer, agent.NewInvalid(err.Error()))
+			return
+		}
+		if body.SourceDocumentID != "" && !looksLikeUUID(body.SourceDocumentID) {
+			writeAgentError(writer, agent.NewInvalid("source_document_id must be a UUID"))
+			return
+		}
+		result, err := tools.AddQuestion(ctx, body)
+		if err != nil {
+			writeAgentError(writer, err)
+			return
+		}
+		writeAgentJSON(writer, http.StatusOK, map[string]any{"v": agentAPIVersion, "result": result})
+	case "answer":
+		var body agent.AnswerQuestionCommand
+		if err := decodeJSONBody(request, &body); err != nil {
+			writeAgentError(writer, agent.NewInvalid(err.Error()))
+			return
+		}
+		result, err := tools.AnswerQuestion(ctx, body)
+		if err != nil {
+			writeAgentError(writer, err)
+			return
+		}
+		writeAgentJSON(writer, http.StatusOK, map[string]any{"v": agentAPIVersion, "result": result})
+	case "delete":
+		var body struct {
+			Selector string `json:"selector"`
+		}
+		if err := decodeJSONBody(request, &body); err != nil {
+			writeAgentError(writer, agent.NewInvalid(err.Error()))
+			return
+		}
+		if err := tools.DeleteQuestion(ctx, strings.TrimSpace(body.Selector)); err != nil {
+			writeAgentError(writer, err)
+			return
+		}
+		writeAgentJSON(writer, http.StatusOK, map[string]any{"v": agentAPIVersion, "deleted": true})
+	default:
+		writeAgentError(writer, agent.NewInvalid("unknown question tool"))
+	}
+}

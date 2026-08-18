@@ -221,6 +221,29 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
+  pi.registerTool({
+    name: "membox_list_questions",
+    label: "List questions",
+    description:
+      "List the user's accumulated questions (status: open|answered|archived, default all, open first). " +
+      "Use this before answering a question so the answer records the original wording.",
+    parameters: Type.Object({
+      status: Type.Optional(Type.String({ description: "Filter by status: open | answered | archived" })),
+      limit: Type.Optional(Type.Number({ description: "Max results (default 50)" })),
+    }),
+    async execute(_toolCallId, params) {
+      try {
+        const body = await internalFetch("/api/agent/internal/tools/questions", {
+          method: "POST",
+          body: JSON.stringify({ status: params.status ?? "", limit: params.limit ?? 50 }),
+        });
+        return toolText(body);
+      } catch (err) {
+        return toolError(err);
+      }
+    },
+  });
+
   // Write tools are registered only when the Companion enables them (Phase 4).
   // The Go manager passes --tools without write names in V1, so even if present
   // they would not be callable; keep definitions behind an env flag for safety.
@@ -323,6 +346,88 @@ export default function (pi: ExtensionAPI) {
             return toolText({ denied: true, reason: "user_denied" });
           }
           const body = await internalFetch("/api/agent/internal/tools/link", {
+            method: "POST",
+            body: JSON.stringify(params),
+          });
+          return toolText(body);
+        } catch (err) {
+          return toolError(err);
+        }
+      },
+    });
+
+    pi.registerTool({
+      name: "membox_add_question",
+      label: "Add question",
+      description:
+        "Record a user question in the personal question backlog, optionally linked to the document it arose from. " +
+        "Requires user confirmation.",
+      parameters: Type.Object({
+        body: Type.String({ description: "Question text" }),
+        source_document_id: Type.Optional(Type.String({ description: "Optional document UUID the question came from" })),
+      }),
+      async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+        try {
+          const preview = `Add question: ${params.body.slice(0, 120)}` + (params.source_document_id ? ` (doc ${params.source_document_id})` : "");
+          const ok = await ctx.ui.confirm("Allow adding question?", preview);
+          if (!ok) {
+            return toolText({ denied: true, reason: "user_denied" });
+          }
+          const body = await internalFetch("/api/agent/internal/tools/question/add", {
+            method: "POST",
+            body: JSON.stringify(params),
+          });
+          return toolText(body);
+        } catch (err) {
+          return toolError(err);
+        }
+      },
+    });
+
+    pi.registerTool({
+      name: "membox_answer_question",
+      label: "Answer question",
+      description:
+        "Record an answer for a question (selector: full ID or unique suffix). " +
+        "Sets status to answered. Requires user confirmation.",
+      parameters: Type.Object({
+        selector: Type.String({ description: "Question ID or unique suffix" }),
+        answer: Type.Optional(Type.String({ description: "Answer text; records it as answered" })),
+        status: Type.Optional(Type.String({ description: "Optional: 'archived' to close without an answer" })),
+      }),
+      async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+        try {
+          const preview = `Answer question ${params.selector}`;
+          const ok = await ctx.ui.confirm("Allow updating question?", preview);
+          if (!ok) {
+            return toolText({ denied: true, reason: "user_denied" });
+          }
+          const body = await internalFetch("/api/agent/internal/tools/question/answer", {
+            method: "POST",
+            body: JSON.stringify(params),
+          });
+          return toolText(body);
+        } catch (err) {
+          return toolError(err);
+        }
+      },
+    });
+
+    pi.registerTool({
+      name: "membox_delete_question",
+      label: "Delete question",
+      description: "Permanently delete a question (selector: full ID or unique suffix). Requires user confirmation.",
+      parameters: Type.Object({
+        selector: Type.String({ description: "Question ID or unique suffix" }),
+      }),
+      async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+        try {
+          const preview = `Delete question ${params.selector}`;
+          const ok = await ctx.ui.confirm("Allow deleting question?", preview);
+          if (!ok) {
+            return toolText({ denied: true, reason: "user_denied" });
+          }
+          const body = await internalFetch("/api/agent/internal/tools/question/delete", {
             method: "POST",
             body: JSON.stringify(params),
           });

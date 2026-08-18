@@ -292,6 +292,51 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
+  // Open questions are also a membox concern (personal question backlog).
+  // Extraction + canonical dedupe live in the Go backend; this is a thin adapter.
+  pi.registerTool({
+    name: "membox_question_ingest",
+    label: "Ingest questions",
+    description:
+      "Extract open questions from source lines (Q:/问:/… or lines ending with ?/？) " +
+      "and persist canonical, deduplicated questions in membox.",
+    parameters: Type.Object({
+      lines: Type.Array(Type.String()),
+      source_document_id: Type.Optional(Type.String()),
+      source_file: Type.Optional(Type.String()),
+      source_commit: Type.Optional(Type.String()),
+    }),
+    async execute(_toolCallId, params) {
+      const out = await memboxAPI("/api/questions/ingest", {
+        method: "POST", body: JSON.stringify(params),
+      });
+      const text = `Found ${out.found ?? 0} question(s): ${out.inserted ?? 0} inserted, ${out.existing ?? 0} existing.`;
+      return { content: [{ type: "text", text }], details: out };
+    },
+  });
+
+  pi.registerTool({
+    name: "membox_question_list",
+    label: "List questions",
+    description: "List personal questions from membox (open first). Optional status/source_file filters.",
+    parameters: Type.Object({
+      status: Type.Optional(StringEnum(["open", "answered", "archived"] as const)),
+      source_file: Type.Optional(Type.String()),
+      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
+    }),
+    async execute(_toolCallId, params) {
+      const qs = new URLSearchParams();
+      if (params.status) qs.set("status", params.status);
+      if (params.source_file) qs.set("source_file", params.source_file);
+      qs.set("limit", String(params.limit ?? 50));
+      const out = await memboxAPI(`/api/questions?${qs.toString()}`);
+      const rows = (out.questions || []).map((q: any) =>
+        `${q.id} [${q.status}] ${q.body}${q.answer ? ` → ${q.answer}` : ""}`,
+      );
+      return { content: [{ type: "text", text: rows.join("\n") || "No questions." }], details: out };
+    },
+  });
+
   pi.registerCommand("resources", {
     description: "membox URL resources: list | scan",
     handler: async (args, ctx) => {

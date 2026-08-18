@@ -351,7 +351,9 @@ mm web start --fg          # 前台或用户服务：启动 web + bridge 配置
 | GET/POST | `/api/resources*` | URL resource 入库、去重、分类、列表与 review 游标 |
 | 现有 | `/api/sync`、`/api/doc/…`、`/` | 不变 |
 
-`/api/resources/ingest` 接收来源行，或读取 `source_document_id` / 已索引的 `source_file`，并在 Membox 内执行 URL 提取与 canonical 去重；它不会读取任意未索引路径。`/api/resources/assess` 写知识价值分类；`/api/resources` 返回排名。Pi/Timension extension 只做命令适配和 agent 交互，不直接写 SQLite。
+`/api/resources/ingest` 接收来源行，或读取 `source_document_id` / 已索引的 `source_file`，并在 Membox 内执行 URL 提取与 canonical 去重；它不会读取任意未索引路径。`/api/resources/assess` 写知识价值分类；`/api/resources` 返回排名。
+
+`/api/questions/ingest` 同构：从来源行确定性抽取 open question（`Q:`/`问：` 前缀，或足够长的 `?`/`？` 结尾行），按 `canonical_body` 去重入库；`/api/questions` 返回问题清单（可按 `source_file` 过滤）。Timension `/inbox scan` 在 URL 旁路之外并行调用 question ingest。Pi/Timension extension 只做命令适配和 agent 交互，不直接写 SQLite。
 
 Application 层：优先复用 `CreateNote`；可选把 `source_url` 记入 metadata 表（若尚无字段，MVP 只进 front matter）。
 

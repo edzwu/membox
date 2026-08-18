@@ -81,6 +81,8 @@ also provide it explicitly:
 | `membox_resource_list` | Companion `/api/resources` | knowledge-value ranking |
 | `membox_resource_assess` | Companion `/api/resources/assess` | H/M/L + score + reason |
 | `membox_resource_scan` | Companion `/api/resources/scan` | review cursor |
+| `membox_question_ingest` | Companion `/api/questions/ingest` | deterministic open-question capture |
+| `membox_question_list` | Companion `/api/questions` | personal question backlog |
 | `membox_video_summarize` | `mm video summarize` → `mmd` → `echo-bp` | download one lecture, summarize it, and upsert `<course>-lec<N>.md` |
 
 Document and PDF tools call the corresponding `mm doc` / `mm pdf` CLI commands;

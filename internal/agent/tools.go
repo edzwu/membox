@@ -23,11 +23,16 @@ type DocumentTools interface {
 	ReadDocument(ctx context.Context, id string, cursor string, limit int) (DocumentChunk, error)
 	GetDocument(ctx context.Context, id string) (DocumentView, error)
 	ListRelated(ctx context.Context, id string) (RelatedView, error)
+	// Question accumulation tools.
+	ListQuestions(ctx context.Context, status string, limit int) ([]QuestionHit, error)
 	// Write tools (Phase 4) — registered only when write tools are enabled.
 	CreateNote(ctx context.Context, cmd CreateNoteCommand) (MutationResult, error)
 	UpdateDocument(ctx context.Context, cmd UpdateDocumentCommand) (MutationResult, error)
 	RenameDocument(ctx context.Context, cmd RenameDocumentCommand) (MutationResult, error)
 	LinkDocuments(ctx context.Context, cmd LinkDocumentsCommand) (MutationResult, error)
+	AddQuestion(ctx context.Context, cmd AddQuestionCommand) (QuestionResult, error)
+	AnswerQuestion(ctx context.Context, cmd AnswerQuestionCommand) (QuestionResult, error)
+	DeleteQuestion(ctx context.Context, selector string) error
 }
 
 // DocumentHit is one search result.
@@ -64,6 +69,37 @@ type DocumentView struct {
 	PageCount int    `json:"page_count,omitempty"`
 	Pinned    bool   `json:"pinned"`
 	Path      string `json:"path,omitempty"`
+}
+
+// QuestionHit is one question record for agent tool results.
+type QuestionHit struct {
+	ID               string `json:"id"`
+	Body             string `json:"body"`
+	Status           string `json:"status"`
+	Answer           string `json:"answer,omitempty"`
+	SourceDocumentID string `json:"source_document_id,omitempty"`
+}
+
+// AddQuestionCommand records a new question (agent-facing).
+type AddQuestionCommand struct {
+	Body             string `json:"body"`
+	SourceDocumentID string `json:"source_document_id,omitempty"`
+}
+
+// AnswerQuestionCommand answers or archives a question.
+type AnswerQuestionCommand struct {
+	Selector string `json:"selector"`
+	Answer   string `json:"answer,omitempty"`
+	Status   string `json:"status,omitempty"` // answered | archived
+}
+
+// QuestionResult reports a question mutation.
+type QuestionResult struct {
+	ID      string `json:"id"`
+	Body    string `json:"body,omitempty"`
+	Status  string `json:"status"`
+	Answer  string `json:"answer,omitempty"`
+	Deleted bool   `json:"deleted,omitempty"`
 }
 
 // RelatedView summarizes neighborhood links.
@@ -163,6 +199,48 @@ func (t *ServiceDocumentTools) GrepDocuments(ctx context.Context, pattern string
 		})
 	}
 	return out, nil
+}
+
+func (t *ServiceDocumentTools) ListQuestions(ctx context.Context, status string, limit int) ([]QuestionHit, error) {
+	questions, err := t.Service.ListQuestions(ctx, status, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]QuestionHit, 0, len(questions))
+	for _, q := range questions {
+		out = append(out, QuestionHit{
+			ID: q.ID, Body: q.Body, Status: q.Status, Answer: q.Answer,
+			SourceDocumentID: q.SourceDocumentID,
+		})
+	}
+	return out, nil
+}
+
+func (t *ServiceDocumentTools) AddQuestion(ctx context.Context, cmd AddQuestionCommand) (QuestionResult, error) {
+	question, err := t.Service.AddQuestion(ctx, application.AddQuestionCommand{
+		Body:             cmd.Body,
+		SourceDocumentID: cmd.SourceDocumentID,
+	})
+	if err != nil {
+		return QuestionResult{}, err
+	}
+	return QuestionResult{ID: question.ID, Body: question.Body, Status: question.Status}, nil
+}
+
+func (t *ServiceDocumentTools) AnswerQuestion(ctx context.Context, cmd AnswerQuestionCommand) (QuestionResult, error) {
+	question, err := t.Service.AnswerQuestion(ctx, application.AnswerQuestionCommand{
+		Selector: cmd.Selector,
+		Answer:   cmd.Answer,
+		Status:   cmd.Status,
+	})
+	if err != nil {
+		return QuestionResult{}, err
+	}
+	return QuestionResult{ID: question.ID, Body: question.Body, Status: question.Status, Answer: question.Answer}, nil
+}
+
+func (t *ServiceDocumentTools) DeleteQuestion(ctx context.Context, selector string) error {
+	return t.Service.DeleteQuestion(ctx, selector)
 }
 
 func (t *ServiceDocumentTools) GetDocument(ctx context.Context, id string) (DocumentView, error) {
@@ -403,6 +481,7 @@ func ToolNamesReadOnly() []string {
 		"membox_read_document",
 		"membox_list_related",
 		"membox_get_document",
+		"membox_list_questions",
 	}
 }
 
@@ -413,6 +492,9 @@ func ToolNamesAll() []string {
 		"membox_update_document",
 		"membox_rename_document",
 		"membox_link_documents",
+		"membox_add_question",
+		"membox_answer_question",
+		"membox_delete_question",
 	)
 }
 
