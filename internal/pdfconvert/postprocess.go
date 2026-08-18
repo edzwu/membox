@@ -24,6 +24,9 @@ var (
 	tocChapterPattern        = regexp.MustCompile(`(?i)^(?:第\s*)?([0-9０-９一二三四五六七八九十百千〇零两]+)\s*章\s*[、,:：.．-]?\s*(.*?)\s*(?:[ivxlcdm]+|\d+(?:\.\d+)*)\s*$`)
 	englishTOCChapterPattern = regexp.MustCompile(`(?i)^([a-z]+|[0-9]+|[ivxlcdm]+)\s*[:：.)-]\s*(.*?)\s*(?:[ivxlcdm]+|\d+(?:\.\d+)*)\s*$`)
 	tocEntryPattern          = regexp.MustCompile(`(?i)^(.*?)\s*(?:[ivxlcdm]+|\d+(?:\.\d+)*)\s*$`)
+	// Brief contents lines like "Chapter 1 The Tar Pit .... 3" (chapter word,
+	// number, title, dot leader, page — no colon after the number).
+	contentsChapterPattern = regexp.MustCompile(`(?i)^chapter\s+([0-9]+|[ivxlcdm]+)\s+(.+?)\s*(?:\.{2,}|…)\s*(?:[ivxlcdm]+|\d+)\s*$`)
 	// Ordered-list chapter lines lose their "1." marker to goldmark's list
 	// parser, so list-item first lines match on dot leader + page number only.
 	tocDotLeaderChapterPattern = regexp.MustCompile(`(?i)^(.*?)\s*(?:\.\s*){2,}\s*(?:[ivxlcdm]+|\d+(?:\.\d+)*)\s*$`)
@@ -260,12 +263,52 @@ func markdownSections(markdown string) ([]sectionBoundary, int) {
 		return ast.WalkContinue, nil
 	})
 	if chapterCount >= 2 {
-		return boundaries, chapterCount
+		if chapterBoundariesSpread(boundaries, len(markdown)) || !hasTOCHeading(document, source) {
+			return boundaries, chapterCount
+		}
+		// All "chapter" headings cluster in one narrow region of a book that
+		// HAS a contents section — almost certainly an in-book outline (e.g. a
+		// propositions/summary chapter repeating "## Chapter N. Title" as
+		// subheadings). Prefer the TOC.
+		if tocBoundaries := tocMarkdownSections(document, source); len(tocBoundaries) >= 2 {
+			return tocBoundaries, len(tocBoundaries)
+		}
+		return nil, 0
 	}
 	if tocBoundaries := tocMarkdownSections(document, source); len(tocBoundaries) >= 2 {
 		return tocBoundaries, len(tocBoundaries)
 	}
 	return boundaries, chapterCount
+}
+
+// hasTOCHeading reports whether the document has a top-level contents section.
+func hasTOCHeading(document ast.Node, source []byte) bool {
+	for node := document.FirstChild(); node != nil; node = node.NextSibling() {
+		if node.Kind() == ast.KindHeading && isTOCHeading(string(node.(*ast.Heading).Text(source))) {
+			return true
+		}
+	}
+	return false
+}
+
+// chapterBoundariesSpread reports whether chapter boundaries span a plausible
+// share of the document. Real chapters cover most of a book; a cluster inside
+// a small region means the pattern matched an outline section, not chapters.
+func chapterBoundariesSpread(boundaries []sectionBoundary, documentLength int) bool {
+	first, last := -1, -1
+	for _, boundary := range boundaries {
+		if !boundary.chapter {
+			continue
+		}
+		if first < 0 {
+			first = boundary.start
+		}
+		last = boundary.start
+	}
+	if first < 0 || documentLength <= 0 {
+		return false
+	}
+	return last-first >= int(float64(documentLength)*0.4)
 }
 
 func tocMarkdownSections(document ast.Node, source []byte) []sectionBoundary {
@@ -308,9 +351,11 @@ func tocMarkdownSections(document ast.Node, source []byte) []sectionBoundary {
 	cursor := 0
 	for chapterIndex, chapter := range chapters {
 		want := normalizeTOCTitle(chapter.title)
+		wantLoose := normalizeChapterTitle(chapter.title)
 		found := -1
 		for headingIndex := cursor; headingIndex < len(headings); headingIndex++ {
-			if normalizeTOCTitle(headings[headingIndex].title) != want {
+			got := normalizeTOCTitle(headings[headingIndex].title)
+			if got != want && normalizeChapterTitle(headings[headingIndex].title) != wantLoose {
 				continue
 			}
 			found = headingIndex
@@ -493,6 +538,13 @@ func parseTOCChapters(firstTOCHeading ast.Node, source []byte) ([]tocChapter, as
 			for _, tocLine := range tocNodeLines(node, source) {
 				line := strings.TrimSpace(tocLine.text)
 				line = strings.TrimSpace(strings.TrimSuffix(line, "  "))
+				if match := contentsChapterPattern.FindStringSubmatch(line); len(match) != 0 {
+					number, title := strings.TrimSpace(match[1]), cleanTOCDotLeader(strings.TrimSpace(match[2]))
+					if _, ok := parseChapterNumber(number); ok && title != "" && !tocResidualSectionPattern.MatchString(title) {
+						chapters = append(chapters, tocChapter{number: number, title: title, english: true})
+						continue
+					}
+				}
 				if match := tocChapterPattern.FindStringSubmatch(line); len(match) != 0 {
 					title := cleanTOCDotLeader(strings.TrimSpace(match[2]))
 					if title != "" {
@@ -581,6 +633,12 @@ func normalizeTOCTitle(value string) string {
 		}
 		return -1
 	}, value)
+}
+
+// normalizeChapterTitle additionally strips leading digits so a body heading
+// "1 The Tar Pit" matches the contents entry "The Tar Pit".
+func normalizeChapterTitle(value string) string {
+	return strings.TrimLeft(normalizeTOCTitle(value), "0123456789０-９")
 }
 
 func headingOffsets(source []byte, heading *ast.Heading) (int, int) {

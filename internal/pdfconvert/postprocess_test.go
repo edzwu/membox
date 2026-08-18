@@ -348,3 +348,38 @@ func TestPostprocessMarkdownSplitsChineseDotLeaderTOCWithoutSpaces(t *testing.T)
 		t.Fatal("chapter bodies missing")
 	}
 }
+
+// A chapter that reprints the whole book as an outline (propositions/summary
+// chapter with "## Chapter N. Title" subheadings) must not become the chapter
+// boundaries: those headings cluster in one narrow region. The brief contents
+// ("Chapter 1 The Tar Pit .... 3") maps to real numbered body headings.
+func TestPostprocessMarkdownIgnoresInBookChapterOutline(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("# Sample Essays\n\n## Contents\n\nChapter 1 Alpha .... 3\nChapter 2 Beta .... 13\nChapter 3 Gamma .... 29\n\n")
+	b.WriteString("## Preface\n\n" + strings.Repeat("preface words here. ", 100) + "\n\n")
+	b.WriteString("# 1 Alpha\n\n" + strings.Repeat("alpha real prose. ", 800) + "\n\n")
+	b.WriteString("# 2 Beta\n\n" + strings.Repeat("beta real prose. ", 800) + "\n\n")
+	b.WriteString("# 3 Gamma\n\n" + strings.Repeat("gamma real prose. ", 800) + "\n\n")
+	// In-book outline chapter: repeats "Chapter N. Title" as subheadings.
+	b.WriteString("# 4 Propositions\n\n" + strings.Repeat("intro to the outline. ", 100) + "\n\n")
+	for _, title := range []string{"Alpha", "Beta", "Gamma"} {
+		b.WriteString("## Chapter " + title + ".\n\n")
+		for i := 1; i <= 6; i++ {
+			b.WriteString("1.1 one-line proposition from the outline. ")
+		}
+		b.WriteString("\n\n")
+	}
+	result := PostprocessMarkdown(b.String(), "book.md")
+	titles := make([]string, 0, len(result.Chapters))
+	for _, chapter := range result.Chapters {
+		titles = append(titles, chapter.Title)
+		if strings.Contains(chapter.Markdown, "one-line proposition from the outline") &&
+			!strings.Contains(chapter.Markdown, "real prose") {
+			t.Fatalf("chapter %q contains only outline one-liners", chapter.Title)
+		}
+	}
+	joined := strings.Join(titles, "|")
+	if !strings.Contains(joined, "Chapter 1: Alpha") || !strings.Contains(joined, "Chapter 2: Beta") || !strings.Contains(joined, "Chapter 3: Gamma") {
+		t.Fatalf("expected real chapters in %v", titles)
+	}
+}
