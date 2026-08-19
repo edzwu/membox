@@ -18,8 +18,8 @@ func (s *Service) ListDocuments(ctx context.Context, limit int, includeUnavailab
 	if limit <= 0 {
 		limit = 100
 	}
-	if limit > 1000 {
-		return nil, errors.New("document list limit cannot exceed 1000")
+	if limit > 5000 {
+		return nil, errors.New("document list limit cannot exceed 5000")
 	}
 	return s.store.ListDocuments(ctx, limit, includeUnavailable, statusFilter)
 }

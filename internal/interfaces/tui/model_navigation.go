@@ -1156,7 +1156,7 @@ func searchDocumentsCmd(ctx context.Context, app App, query string, exact bool) 
 }
 func listDocumentsCmd(ctx context.Context, app App, sequence uint64) tea.Cmd {
 	return func() tea.Msg {
-		documents, err := app.ListDocuments(ctx, membox.ListDocumentsQuery{Limit: 1000})
+		documents, err := app.ListDocuments(ctx, membox.ListDocumentsQuery{Limit: 5000})
 		return documentsMsg{sequence: sequence, documents: documents, err: err}
 	}
 }
