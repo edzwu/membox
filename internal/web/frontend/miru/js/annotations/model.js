@@ -249,12 +249,19 @@ function detectNoteKind(noteText) {
   if (/\*\*总结：?\*\*|^---[\s\S]*?\nkind:\s*["']?summary["']?/m.test(text)) {
     return 'summary';
   }
+  // Japanese study (语) notes: furigana / chunking / grammar / zh translation.
+  if (/\*\*语：?\*\*|^---[\s\S]*?\nkind:\s*["']?jp-study["']?/m.test(text)) {
+    return 'jp-study';
+  }
   return '';
 }
 
 function insertNoteCard(id, noteText, kind) {
   const card = document.createElement('aside');
-  const kindClass = kind === 'qa' ? ' is-qa' : kind === 'summary' ? ' is-summary' : '';
+  const kindClass = kind === 'qa' ? ' is-qa'
+    : kind === 'summary' ? ' is-summary'
+    : kind === 'jp-study' ? ' is-jp-study'
+    : '';
   card.className = 'annot-note' + kindClass;
   card.dataset.annotId = id;
   if (kind) card.dataset.noteKind = kind;
@@ -348,6 +355,7 @@ export function setNoteOnPassage(entry, annotEl, text, opts = {}) {
     if (card) {
       card.classList.toggle('is-qa', kind === 'qa');
       card.classList.toggle('is-summary', kind === 'summary');
+      card.classList.toggle('is-jp-study', kind === 'jp-study');
       if (kind) card.dataset.noteKind = kind;
       else delete card.dataset.noteKind;
     }

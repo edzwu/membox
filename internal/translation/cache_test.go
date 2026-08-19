@@ -34,7 +34,7 @@ func TestCacheRoundTripAndKeyIsolation(t *testing.T) {
 	if otherKey != key {
 		t.Fatal("whitespace variants produced different keys")
 	}
-	// A different model or target language must never replay this output.
+	// A different model, target language, or mode must never replay this output.
 	for _, variant := range [][3]string{
 		{DefaultProvider, "qwen3:8b", DefaultTargetLanguage},
 		{DefaultProvider, DefaultModel, "Japanese"},
@@ -46,6 +46,13 @@ func TestCacheRoundTripAndKeyIsolation(t *testing.T) {
 		if _, ok, _ := cache.Get(ctx, variantKey); ok {
 			t.Fatalf("cross-model/target hit for %v", variant)
 		}
+	}
+	jpKey, _ := Key(Request{ID: "p-1", Text: request.Text, Mode: ModeJPStudy}, DefaultProvider, DefaultModel)
+	if jpKey == key {
+		t.Fatal("jp-study mode shared a cache key with plain translate")
+	}
+	if _, ok, _ := cache.Get(ctx, jpKey); ok {
+		t.Fatal("jp-study mode hit plain translate cache")
 	}
 	if err := cache.Store(ctx, key, request, DefaultProvider, DefaultModel, "  "); err == nil {
 		t.Fatal("empty translation was cached")

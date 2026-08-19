@@ -66,7 +66,7 @@ function renderButton() {
 function sourceText(element) {
   const clone = element.cloneNode(true);
   clone.querySelectorAll([
-    'button', '.annot-note-ref', `.${TRANSLATION_CLASS}`,
+    'button', '.annot-note-ref', `.${TRANSLATION_CLASS}`, '.membox-jp-study',
     '.katex-html', '.code-copy', '.section-copy', '.section-download', '.lead-copy',
   ].join(',')).forEach((node) => node.remove());
   return (clone.textContent || '').replace(/\s+/g, ' ').trim();
@@ -156,6 +156,8 @@ async function startTranslation() {
     showToast('No paragraphs need translation');
     return;
   }
+  // Drop any sibling immersive overlay (jp-study) before starting.
+  window.dispatchEvent(new CustomEvent('membox-stop-immersive', { detail: { source: 'translate' } }));
   stopTranslation({ render: false });
   active = true;
   running = true;
@@ -215,6 +217,10 @@ export function initTranslation() {
   });
   window.addEventListener('miru-document-change', () => {
     stopTranslation();
+  });
+  window.addEventListener('membox-stop-immersive', (event) => {
+    if (event.detail?.source === 'translate') return;
+    if (active) stopTranslation();
   });
   renderButton();
 }

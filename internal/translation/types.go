@@ -10,6 +10,10 @@ const (
 	DefaultModel          = "qwen3:14b"
 	DefaultTargetLanguage = "Simplified Chinese (zh-CN)"
 	MaxSegmentBytes       = 32 << 10
+
+	// Stream modes share one NDJSON endpoint; the prompt branches on Mode.
+	ModeTranslate = "translate" // default plain bilingual translation
+	ModeJPStudy   = "jp-study"  // furigana + chunking + grammar + zh-CN
 )
 
 // SocketPath is the single source of truth for the mmd translation socket
@@ -22,7 +26,9 @@ type Request struct {
 	ID             string `json:"id"`
 	Title          string `json:"title,omitempty"`
 	TargetLanguage string `json:"target_language,omitempty"`
-	Text           string `json:"text"`
+	// Mode selects the prompt template. Empty means ModeTranslate.
+	Mode string `json:"mode,omitempty"`
+	Text string `json:"text"`
 }
 
 // Event is the NDJSON unit streamed mmd → Companion → Miru.

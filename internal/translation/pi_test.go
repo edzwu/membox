@@ -86,4 +86,32 @@ func TestValidateRequestRejectsEmptyAndOversizedSegment(t *testing.T) {
 	if _, err := validateRequest(Request{ID: "x", Text: strings.Repeat("x", MaxSegmentBytes+1)}); err == nil {
 		t.Fatal("oversized segment accepted")
 	}
+	if _, err := validateRequest(Request{ID: "x", Text: "ok", Mode: "nope"}); err == nil {
+		t.Fatal("unknown mode accepted")
+	}
+	got, err := validateRequest(Request{ID: "x", Text: "ok", Mode: ModeJPStudy})
+	if err != nil || got.Mode != ModeJPStudy {
+		t.Fatalf("jp-study mode rejected: %+v err=%v", got, err)
+	}
+}
+
+func TestJPStudyPromptContainsStudySections(t *testing.T) {
+	prompt := translationPrompt(Request{
+		ID: "p-1", Title: "国境の南", Mode: ModeJPStudy,
+		Text: "僕が生まれたのは一九五一年の一月四日だ。",
+	})
+	for _, marker := range []string{"【语法】", "【翻译】", "句型", "形态", "功能", "本句", "Analyzer morphology", "僕が生まれたのは", "国境の南"} {
+		if !strings.Contains(prompt, marker) {
+			t.Fatalf("jp-study prompt missing %q: %s", marker, prompt)
+		}
+	}
+	if strings.Contains(prompt, "brief Chinese explanation") {
+		t.Fatal("jp-study prompt still asks for brief one-liners only")
+	}
+	if !strings.Contains(prompt, "Do NOT output 【读音】") {
+		t.Fatal("jp-study prompt missing no-reading rule")
+	}
+	if strings.Contains(prompt, "Output only the translated text") {
+		t.Fatal("jp-study mode reused the plain translation prompt")
+	}
 }

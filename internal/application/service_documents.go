@@ -218,6 +218,7 @@ const (
 	AnnotationNoteKindPlain   = ""
 	AnnotationNoteKindQA      = "qa"
 	AnnotationNoteKindSummary = "summary"
+	AnnotationNoteKindJPStudy = "jp-study" // 语：furigana + chunking + grammar + zh
 )
 
 // NormalizeAnnotationNoteKind returns a canonical kind or empty for plain notes.
@@ -227,12 +228,14 @@ func NormalizeAnnotationNoteKind(kind string) string {
 		return AnnotationNoteKindQA
 	case AnnotationNoteKindSummary:
 		return AnnotationNoteKindSummary
+	case AnnotationNoteKindJPStudy, "jp_study", "study":
+		return AnnotationNoteKindJPStudy
 	default:
 		return AnnotationNoteKindPlain
 	}
 }
 
-// DetectAnnotationNoteKind infers kind from note Markdown (front matter or Q: body).
+// DetectAnnotationNoteKind infers kind from note Markdown (front matter or body markers).
 func DetectAnnotationNoteKind(body string) string {
 	body = strings.TrimSpace(body)
 	if body == "" {
@@ -254,6 +257,10 @@ func DetectAnnotationNoteKind(body string) string {
 	}
 	if strings.Contains(body, "**Q:**") || strings.Contains(body, "**Q**:") {
 		return AnnotationNoteKindQA
+	}
+	// Japanese study notes from the 语 button carry an explicit **语：** marker.
+	if strings.Contains(body, "**语：**") || strings.Contains(body, "**语**:") || strings.Contains(body, "**语:**") {
+		return AnnotationNoteKindJPStudy
 	}
 	return AnnotationNoteKindPlain
 }

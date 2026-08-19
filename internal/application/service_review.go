@@ -354,7 +354,7 @@ func (s *Service) reviewCardView(ctx context.Context, card port.ReviewCard) (Rev
 	// blockquote is only a restore anchor in the note file, so drop it from the
 	// feed (quote + body) to avoid showing the quote twice.
 	bodyText := strings.TrimSpace(rest)
-	if card.Kind == "summary" {
+	if card.Kind == "summary" || card.Kind == AnnotationNoteKindJPStudy {
 		quote = ""
 		bodyText = strings.TrimSpace(stripBlockquoteExcerpt(bodyText))
 	}

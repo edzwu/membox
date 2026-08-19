@@ -35,7 +35,9 @@ function scrubLegacyFloatChrome() {
 function cardsInAnchorOrder() {
   const cards = Array.from(elements.article.querySelectorAll('span.annot-note-ref[data-annot-id]'))
     .map((anchor) => elements.annotationLayer.querySelector(`.annot-note[data-annot-id="${anchor.dataset.annotId}"]`))
-    .filter(Boolean);
+    .filter((card) => card
+      && !card.classList.contains('is-jp-study')
+      && !card.classList.contains('membox-jp-card-hidden'));
   cards.forEach((card, index) => {
     const current = elements.annotationLayer.children[index];
     if (current !== card) elements.annotationLayer.insertBefore(card, current || null);
@@ -63,6 +65,13 @@ export function layoutMarginNotes() {
   elements.annotationLayer.classList.toggle('is-rail', useRail);
   elements.annotationLayer.classList.toggle('is-stack', !useRail);
   cards.forEach((card) => {
+    // jp-study notes are inline UUID chips only — never float in the rail.
+    if (card.classList.contains('is-jp-study') || card.classList.contains('membox-jp-card-hidden')) {
+      card.hidden = true;
+      card.style.removeProperty('top');
+      card.style.removeProperty('z-index');
+      return;
+    }
     card.hidden = false;
     card.classList.toggle('annot-note-in-rail', useRail);
     card.classList.remove('annot-note-in-cell');

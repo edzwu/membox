@@ -20,7 +20,7 @@ function noteCount() {
   return state.annotations.filter((entry) => typeof entry.note === 'string' && entry.note.trim()).length;
 }
 
-function noteDocumentURL(ref) {
+export function noteDocumentURL(ref) {
   const url = new URL(window.location.href);
   url.searchParams.set('id', ref);
   // `note` is a one-way return target for the source page. Carrying it into

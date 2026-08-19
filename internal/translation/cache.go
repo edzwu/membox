@@ -17,7 +17,7 @@ import (
 
 // promptVersion invalidates cached translations when the prompt wording or
 // normalization rules change.
-const promptVersion = 1
+const promptVersion = 4
 
 // maxCacheEntries bounds the standalone cache file; least-recently-used rows
 // are evicted when the cap is exceeded.
@@ -86,7 +86,12 @@ func Key(request Request, provider, model string) (key, normalized string) {
 	if strings.TrimSpace(target) == "" {
 		target = DefaultTargetLanguage
 	}
-	sum := sha256.Sum256([]byte(fmt.Sprintf("v%d\n%s\n%s\n%s\n%s", promptVersion, provider, model, target, normalized)))
+	mode := strings.TrimSpace(request.Mode)
+	if mode == "" {
+		mode = ModeTranslate
+	}
+	// Mode is part of the key so jp-study never replays a plain translation.
+	sum := sha256.Sum256([]byte(fmt.Sprintf("v%d\n%s\n%s\n%s\n%s\n%s", promptVersion, provider, model, mode, target, normalized)))
 	return hex.EncodeToString(sum[:]), normalized
 }
 

@@ -374,6 +374,238 @@ dt > .membox-translation {
   to { transform: rotate(360deg); }
 }
 
+/* Inline reading that replaces the source passage. */
+.membox-jp-reading {
+  font-family: var(--font-serif);
+  line-height: 2.05;
+  letter-spacing: 0.01em;
+}
+
+.membox-jp-reading ruby {
+  ruby-align: center;
+  ruby-position: over;
+}
+
+.membox-jp-reading rt {
+  font-family: var(--font-sans);
+  font-size: 0.55em;
+  font-weight: 500;
+  color: color-mix(in srgb, var(--muted) 70%, #5b6ee1);
+  letter-spacing: 0;
+  user-select: none;
+}
+
+.membox-jp-gap {
+  display: inline-block;
+  width: 0.55em;
+}
+
+.membox-jp-source-replaced .membox-jp-reading {
+  /* reading owns the paragraph after replacement */
+}
+
+/* Selection: grammar/translation sits on the next line after the host.
+   Must be a span (phrasing) inside <p>; display:block only for layout. */
+.membox-jp-study-inline-follow {
+  display: block;
+  width: 100%;
+  clear: both;
+  margin-top: 0.28em;
+  margin-bottom: 0.35em;
+  box-sizing: border-box;
+}
+
+/* jp-study: no floating rail card — UUID chip sits inline by the passage. */
+.annot-note.is-jp-study,
+.annot-note.membox-jp-card-hidden {
+  display: none !important;
+}
+
+/* Drop the dotted whole-span underline; the chip is the affordance. */
+.article .annot.membox-jp-annot.annot-note-ref {
+  border-bottom: none;
+}
+
+a.membox-jp-note-id {
+  display: inline-block;
+  margin-left: 0.28em;
+  padding: 0 0.35em;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, #5b6ee1 35%, var(--line));
+  background: color-mix(in srgb, #5b6ee1 12%, var(--paper-raised, var(--paper)));
+  color: color-mix(in srgb, #5b6ee1 75%, var(--ink-soft));
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.68em;
+  font-weight: 600;
+  line-height: 1.5;
+  letter-spacing: 0.02em;
+  text-decoration: none;
+  vertical-align: super;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+
+a.membox-jp-note-id:hover,
+a.membox-jp-note-id:focus-visible {
+  color: #5b6ee1;
+  border-color: color-mix(in srgb, #5b6ee1 55%, var(--line));
+  background: color-mix(in srgb, #5b6ee1 18%, var(--paper-raised, var(--paper)));
+  outline: none;
+}
+
+a.membox-jp-note-id.is-pending {
+  opacity: 0.65;
+  cursor: default;
+}
+
+.membox-jp-sel-end {
+  display: inline;
+  width: 0;
+  height: 0;
+  font-size: 0;
+  line-height: 0;
+  overflow: hidden;
+}
+
+/* Below-panel: grammar + translation only. */
+.membox-jp-study {
+  margin: 0.38em 0 1em;
+  padding-left: 0.85em;
+  border-left: 2px solid color-mix(in srgb, #5b6ee1 55%, var(--line));
+  color: color-mix(in srgb, var(--ink-soft) 84%, #5b6ee1);
+  font-family: var(--font-serif);
+  font-size: 0.96em;
+  font-weight: 400;
+  line-height: 1.75;
+  letter-spacing: 0.012em;
+  white-space: pre-wrap;
+}
+
+.membox-jp-study[data-saved="true"] {
+  border-left-color: color-mix(in srgb, #5b6ee1 75%, var(--accent));
+  opacity: 0.92;
+}
+
+li > .membox-jp-study,
+td > .membox-jp-study,
+th > .membox-jp-study,
+dd > .membox-jp-study,
+dt > .membox-jp-study {
+  margin-bottom: 0.45em;
+}
+
+.membox-jp-study-text {
+  display: inline;
+}
+
+.membox-jp-study-label {
+  display: inline-block;
+  margin-top: 0.4em;
+  color: color-mix(in srgb, var(--accent) 55%, #5b6ee1);
+  font-family: var(--font-sans);
+  font-size: 0.84em;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.membox-jp-study-label:first-child {
+  margin-top: 0;
+}
+
+/* Grammar target inside 读音 — highlight surface form + small index chip. */
+.membox-jp-g {
+  display: inline;
+  padding: 0 0.12em 0.05em;
+  margin: 0 0.04em;
+  border-radius: 0.25em;
+  background: color-mix(in srgb, #5b6ee1 18%, transparent);
+  color: inherit;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+.membox-jp-g-n {
+  display: inline-block;
+  min-width: 0.95em;
+  margin-right: 0.12em;
+  padding: 0 0.22em;
+  border-radius: 999px;
+  background: color-mix(in srgb, #5b6ee1 78%, var(--paper));
+  color: #fff;
+  font-family: var(--font-sans);
+  font-size: 0.72em;
+  font-weight: 700;
+  line-height: 1.35;
+  vertical-align: super;
+  letter-spacing: 0;
+}
+
+.membox-jp-g-item .membox-jp-g-n {
+  vertical-align: baseline;
+  margin-right: 0.2em;
+}
+
+.membox-jp-g,
+.membox-jp-g-item {
+  transition: background 0.12s ease, box-shadow 0.12s ease;
+}
+
+.membox-jp-g.is-active {
+  background: color-mix(in srgb, #5b6ee1 34%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, #5b6ee1 45%, transparent);
+}
+
+.membox-jp-g-item.is-active {
+  background: color-mix(in srgb, #5b6ee1 14%, transparent);
+  border-radius: 0.25em;
+}
+
+.membox-jp-study-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 0.45em;
+  white-space: normal;
+}
+
+.membox-jp-study-actions[hidden] {
+  display: none;
+}
+
+.membox-jp-study-dismiss {
+  appearance: none;
+  border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--paper-raised, var(--paper)) 92%, #5b6ee1 8%);
+  color: var(--ink-soft);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  padding: 5px 10px;
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+}
+
+.membox-jp-study-dismiss:hover,
+.membox-jp-study-dismiss:focus-visible {
+  color: var(--ink);
+  border-color: var(--line);
+  outline: none;
+}
+
+.membox-jp-study-toolbar-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+}
+
 /* Bottom-left document status dock: larger invisible hit area so low-frequency
    extras (译 / search) expand when the pointer nears. The visual pill lives in
    .membox-status-cluster. Visible only while connected. */

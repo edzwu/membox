@@ -1498,6 +1498,27 @@ textarea.annot-note-input {
   display: none;
 }
 
+/* Japanese study notes from the 语 button — indigo tint, keep quote hidden. */
+.annot-note.is-jp-study {
+  border-left-color: color-mix(in srgb, var(--accent) 55%, #5b6ee1);
+  background: color-mix(in srgb, var(--paper-raised) 88%, #5b6ee1 12%);
+}
+.annot-note.is-jp-study::before {
+  content: '语';
+  position: absolute;
+  top: 4px;
+  right: 8px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: color-mix(in srgb, var(--accent) 40%, #5b6ee1);
+  opacity: 0.9;
+  pointer-events: none;
+}
+.annot-note.is-jp-study .annot-note-text blockquote {
+  display: none;
+}
+
 .annot-note-body {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
