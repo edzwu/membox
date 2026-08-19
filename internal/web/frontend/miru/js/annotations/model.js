@@ -244,6 +244,11 @@ function detectNoteKind(noteText) {
   if (/\*\*Q:\*\*|\*\*Q\*\*:/.test(text) || /^---[\s\S]*?\nkind:\s*["']?qa["']?/m.test(text)) {
     return 'qa';
   }
+  // Local-model summaries carry an explicit **总结：** marker (or kind front
+  // matter); keeping the kind lets .is-summary hide the restore quote.
+  if (/\*\*总结：?\*\*|^---[\s\S]*?\nkind:\s*["']?summary["']?/m.test(text)) {
+    return 'summary';
+  }
   return '';
 }
 

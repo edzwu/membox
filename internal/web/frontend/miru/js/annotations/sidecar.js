@@ -156,7 +156,7 @@ export function parseAnnotationSidecar(text) {
       underline,
       strikethrough,
       note,
-      kind: typeof item.kind === 'string' && item.kind === 'qa' ? 'qa' : '',
+      kind: typeof item.kind === 'string' && (item.kind === 'qa' || item.kind === 'summary') ? item.kind : '',
       clientId: typeof item.clientId === 'string' ? item.clientId.slice(0, 128) : '',
       ref: typeof item.ref === 'string' ? item.ref.slice(0, 64) : '',
     };
