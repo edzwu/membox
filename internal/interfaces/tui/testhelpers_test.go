@@ -142,6 +142,22 @@ func (f *fakeApp) CreateNote(_ context.Context, command membox.CreateNoteCommand
 	}
 	return result, nil
 }
+func (f *fakeApp) CreateQuickNote(_ context.Context, fromSelector string) (membox.CreateNoteResult, error) {
+	document := membox.DocumentView{ID: "quick-note", Title: "Untitled", Path: "/tmp/untitled.md", RelativePath: "untitled.md", Status: "active"}
+	result := membox.CreateNoteResult{Document: document}
+	if fromSelector != "" {
+		result.Link = &membox.LinkView{FromDocumentID: fromSelector, ToDocumentID: document.ID, Kind: "manual"}
+	}
+	return result, nil
+}
+func (f *fakeApp) FinalizeQuickNote(_ context.Context, selector string) (membox.FinalizeQuickNoteResult, error) {
+	return membox.FinalizeQuickNoteResult{
+		Document: membox.DocumentView{ID: selector, Title: "Named", Path: "/tmp/named.md", RelativePath: "named.md", Status: "active"},
+		Path:     "/tmp/named.md",
+		Title:    "Named",
+		Filename: "named.md",
+	}, nil
+}
 func (f *fakeApp) CreateTopic(_ context.Context, command membox.CreateTopicCommand) (membox.CreateTopicResult, error) {
 	return membox.CreateTopicResult{Topic: membox.TopicView{ID: "topic-" + command.Name, Name: command.Name, Path: "/tmp/topic-" + command.Name + ".md"}}, nil
 }

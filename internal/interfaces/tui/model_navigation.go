@@ -200,6 +200,15 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.loading = true
 			commands = append(commands, m.spinner.Tick, resolveEditorCmd(m.ctx, m.app, document.ID))
 		}
+	case "ctrl+n":
+		// Quick note: empty Markdown → $EDITOR → on :wq name from H1 or mmd.
+		m.loading = true
+		m.statusMessage = "new note…"
+		from := ""
+		if document, ok := m.selectedDocument(); ok {
+			from = document.ID
+		}
+		commands = append(commands, m.spinner.Tick, createQuickNoteCmd(m.ctx, m.app, m.launcher, from))
 	case "o":
 		if document, ok := m.selectedDocument(); ok {
 			commands = append(commands, openCmd(m.ctx, m.app, m.launcher, document.ID))
@@ -1218,6 +1227,31 @@ func resolveEditorCmd(ctx context.Context, app App, selector string) tea.Cmd {
 func reindexCmd(ctx context.Context, app App, selector string) tea.Cmd {
 	return func() tea.Msg {
 		return reindexMsg{err: app.ReindexDocument(ctx, membox.ReindexDocumentCommand{Selector: selector})}
+	}
+}
+
+func createQuickNoteCmd(ctx context.Context, app App, launcher host.Launcher, fromSelector string) tea.Cmd {
+	return func() tea.Msg {
+		result, err := app.CreateQuickNote(ctx, fromSelector)
+		if err != nil {
+			return noteCreatedMsg{err: err, quickNote: true}
+		}
+		editor, editorErr := launcher.EditorCommand(ctx, result.Document.Path)
+		if editorErr != nil {
+			return noteCreatedMsg{document: result.Document, err: editorErr, quickNote: true}
+		}
+		return noteCreatedMsg{document: result.Document, command: editor, quickNote: true}
+	}
+}
+
+func finalizeQuickNoteCmd(ctx context.Context, app App, selector string) tea.Cmd {
+	return func() tea.Msg {
+		// Pick up body edits before naming.
+		if err := app.ReindexDocument(ctx, membox.ReindexDocumentCommand{Selector: selector}); err != nil {
+			return quickNoteFinalizedMsg{err: err}
+		}
+		result, err := app.FinalizeQuickNote(ctx, selector)
+		return quickNoteFinalizedMsg{result: result, err: err}
 	}
 }
 func togglePinCmd(ctx context.Context, app App, selector string) tea.Cmd {

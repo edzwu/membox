@@ -536,6 +536,56 @@ func (b *Box) CreateNote(ctx context.Context, command CreateNoteCommand) (Create
 	return view, nil
 }
 
+// CreateQuickNote starts an empty scratch Markdown file for the TUI ctrl+n
+// flow. The body is intentionally not pre-filled with an H1 so :wq can name
+// the file from the author's heading (or mmd when none is present).
+func (b *Box) CreateQuickNote(ctx context.Context, fromSelector string) (CreateNoteResult, error) {
+	result, err := b.service.CreateNote(ctx, application.CreateNoteOptions{
+		Title:        "Untitled",
+		Body:         "\n",
+		FromSelector: fromSelector,
+	})
+	if err != nil {
+		return CreateNoteResult{}, err
+	}
+	view := CreateNoteResult{Document: documentView(result.Document, result.Path)}
+	if result.Link != nil {
+		view.Link = &LinkView{FromDocumentID: string(result.Link.FromDocumentID), ToDocumentID: string(result.Link.ToDocumentID), Kind: string(result.Link.Kind)}
+	}
+	return view, nil
+}
+
+// FinalizeQuickNoteResult is returned after a scratch note is named (or trashed).
+type FinalizeQuickNoteResult struct {
+	Document DocumentView `json:"document"`
+	Path     string       `json:"path"`
+	Title    string       `json:"title"`
+	Filename string       `json:"filename"`
+	Deleted  bool         `json:"deleted"`
+	UsedLLM  bool         `json:"used_llm"`
+}
+
+// FinalizeQuickNote renames a ctrl+n scratch note from its first H1, or asks
+// the local mmd completer for a title when no heading is present. Empty notes
+// are moved to trash.
+func (b *Box) FinalizeQuickNote(ctx context.Context, selector string) (FinalizeQuickNoteResult, error) {
+	result, err := b.service.FinalizeQuickNote(ctx, selector, mmdNoteNamer{home: b.home})
+	if err != nil {
+		return FinalizeQuickNoteResult{}, err
+	}
+	out := FinalizeQuickNoteResult{
+		Path:     result.Path,
+		Title:    result.Title,
+		Filename: result.Filename,
+		Deleted:  result.Deleted,
+		UsedLLM:  result.UsedLLM,
+	}
+	if result.Document != nil {
+		out.Document = documentView(result.Document, result.Path)
+	}
+	return out, nil
+}
+
 type TopicView struct {
 	ID           string    `json:"id"`
 	Name         string    `json:"name"`

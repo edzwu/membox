@@ -41,6 +41,7 @@ func helpSections() []helpSection {
 			{"↑ ↓ / pgup pgdn", "scroll focused preview"},
 			{"space", "details · ×2 opens filter input"},
 			{"e / o / d", "edit / open app / move to trash"},
+			{"ctrl+n", "quick note → $EDITOR → name from # H1 or mmd"},
 			{"r / p / s / ctrl+h", "rename file/PDF title / pin / summarize / toggle *-note.md"},
 			{"q / esc", "back / close result view"},
 		}},

@@ -1274,3 +1274,52 @@ func TestModel_UnpinMovesCursorToNextPinnedDocument(t *testing.T) {
 		t.Fatalf("last unpin should keep cursor on p3, got %q", model.filtered[model.selected].document.ID)
 	}
 }
+
+func TestCtrlNStartsQuickNote(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.items = documentItems([]membox.DocumentView{
+		{ID: "doc-1", Title: "Existing", Path: "/tmp/existing.md", RelativePath: "existing.md", Status: "active"},
+	})
+	model.refreshFilter()
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
+	model = updated.(Model)
+	if !model.loading {
+		t.Fatal("ctrl+n should set loading")
+	}
+	if cmd == nil {
+		t.Fatal("ctrl+n should schedule createQuickNoteCmd")
+	}
+	// Batch(spinner, createQuickNoteCmd) — find the noteCreatedMsg producer.
+	var created noteCreatedMsg
+	found := false
+	msg := cmd()
+	switch batch := msg.(type) {
+	case noteCreatedMsg:
+		created, found = batch, true
+	case tea.BatchMsg:
+		for _, sub := range batch {
+			if sub == nil {
+				continue
+			}
+			if c, ok := sub().(noteCreatedMsg); ok {
+				created, found = c, true
+				break
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected noteCreatedMsg in ctrl+n command batch, got %T", msg)
+	}
+	if created.err != nil {
+		t.Fatal(created.err)
+	}
+	if !created.quickNote {
+		t.Fatal("expected quickNote=true")
+	}
+	if created.document.ID != "quick-note" {
+		t.Fatalf("document=%+v", created.document)
+	}
+	if created.command == nil {
+		t.Fatal("expected editor command")
+	}
+}

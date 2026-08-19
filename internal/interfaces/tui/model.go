@@ -54,6 +54,8 @@ type App interface {
 	ConvertPDF(context.Context, membox.ConvertPDFCommand) (membox.ConvertPDFResult, error)
 	SetPDFConverterServer(context.Context, string) (membox.PDFConverterConfigView, error)
 	CreateNote(context.Context, membox.CreateNoteCommand) (membox.CreateNoteResult, error)
+	CreateQuickNote(context.Context, string) (membox.CreateNoteResult, error)
+	FinalizeQuickNote(context.Context, string) (membox.FinalizeQuickNoteResult, error)
 	CreateTopic(context.Context, membox.CreateTopicCommand) (membox.CreateTopicResult, error)
 	ListTopics(context.Context, membox.ListTopicsQuery) ([]membox.TopicView, error)
 	AddDocumentTopic(context.Context, membox.TopicMembershipCommand) (membox.TopicMembershipResult, error)
@@ -282,11 +284,16 @@ type editReadyMsg struct {
 	err      error
 }
 type editorDoneMsg struct {
-	selector string
-	viewer   bool
-	err      error
+	selector  string
+	viewer    bool
+	quickNote bool
+	err       error
 }
 type reindexMsg struct{ err error }
+type quickNoteFinalizedMsg struct {
+	result membox.FinalizeQuickNoteResult
+	err    error
+}
 type pinMsg struct {
 	documentID string
 	pinned     bool
@@ -300,9 +307,10 @@ type openWebMsg struct {
 }
 
 type noteCreatedMsg struct {
-	document membox.DocumentView
-	command  *exec.Cmd
-	err      error
+	document  membox.DocumentView
+	command   *exec.Cmd
+	quickNote bool
+	err       error
 }
 type summarizeDoneMsg struct {
 	documentID string
@@ -666,10 +674,37 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = msg.err
 		if msg.err == nil && !msg.viewer {
 			m.loading = true
-			commands = append(commands, m.spinner.Tick, reindexCmd(m.ctx, m.app, msg.selector))
+			if msg.quickNote {
+				// Scratch notes (ctrl+n): reindex is folded into finalize so the
+				// body is fresh before H1 / mmd naming runs.
+				commands = append(commands, m.spinner.Tick, finalizeQuickNoteCmd(m.ctx, m.app, msg.selector))
+			} else {
+				commands = append(commands, m.spinner.Tick, reindexCmd(m.ctx, m.app, msg.selector))
+			}
 		}
 		// Returning from the viewer keeps the thread tree on its original
 		// focus — opening a linked document never re-roots the tree.
+	case quickNoteFinalizedMsg:
+		m.loading, m.err = false, msg.err
+		if msg.err != nil {
+			m.statusMessage = "quick note: " + msg.err.Error()
+			commands = append(commands, listDocumentsCmd(m.ctx, m.app, m.listSequence))
+			break
+		}
+		if msg.result.Deleted {
+			m.removeDeletedDocument(msg.result.Document.ID)
+			m.statusMessage = "empty note discarded"
+			commands = append(commands, m.loadPreview(), listDocumentsCmd(m.ctx, m.app, m.listSequence))
+			break
+		}
+		// Refresh list then select the renamed note.
+		m.statusMessage = shortID(msg.result.Document.ID) + " " + msg.result.Filename
+		if msg.result.UsedLLM {
+			m.statusMessage += " · named by mmd"
+		}
+		commands = append(commands, m.loadPreview(), listDocumentsCmd(m.ctx, m.app, m.listSequence))
+		// Stash desired selection; listDocumentsMsg will restore by id when possible.
+		m.pendingSelectID = msg.result.Document.ID
 	case reindexMsg:
 		m.loading, m.err = false, msg.err
 		if msg.err == nil {
@@ -718,9 +753,10 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.clearExecutedCommand()
 			if msg.command != nil {
 				// The note is opened in the editor (vim), not a viewer: on wq the
-				// standard edit-completion path runs (reindex + list refresh).
+				// standard edit-completion path runs (reindex + list refresh),
+				// or quick-note finalize when created via ctrl+n.
 				return m, tea.ExecProcess(msg.command, func(err error) tea.Msg {
-					return editorDoneMsg{selector: msg.document.ID, viewer: false, err: err}
+					return editorDoneMsg{selector: msg.document.ID, viewer: false, quickNote: msg.quickNote, err: err}
 				})
 			}
 		}
