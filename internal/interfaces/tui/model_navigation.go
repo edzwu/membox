@@ -728,6 +728,35 @@ func (m Model) fullTextFilterQuery() string {
 	return query
 }
 
+// nameSearchQuery returns the combined name-mode filters (committed + live
+// draft). Name filters used to filter the locally loaded list; they now drive
+// a full-catalog identity search (SuggestDocuments) so filtering is a real
+// SQLite query regardless of list pagination.
+func (m Model) nameSearchQuery() string {
+	queries := make([]string, 0, len(m.textFilters)+1)
+	have := false
+	for _, filter := range m.textFilters {
+		if filter.Mode == searchModeName {
+			queries = append(queries, filter.Value)
+			have = true
+		}
+	}
+	if m.inputVisible && m.searchMode == searchModeName {
+		if draft := textFilterQuery(m.input.Value()); draft != "" {
+			queries = append(queries, draft)
+			have = true
+		}
+	}
+	if !have {
+		return ""
+	}
+	return strings.Join(queries, " ")
+}
+
+func (m Model) nameSearchQueryMatches(query string) bool {
+	return query != "" && query == m.nameSearchQuery()
+}
+
 func (m *Model) filterChanged(inputCommand tea.Cmd) tea.Cmd {
 	m.filterErr = nil
 	m.applyPreviewContent()
@@ -740,6 +769,12 @@ func (m *Model) filterChanged(inputCommand tea.Cmd) tea.Cmd {
 			commands = append(commands, m.threadSearchCmd(query, exact))
 		}
 		return tea.Batch(commands...)
+	}
+	// Name-mode filter runs a full-catalog identity search so notes beyond
+	// the local list page (e.g. sorted past the load limit) are still found.
+	if nameQuery := m.nameSearchQuery(); nameQuery != "" {
+		m.loading = true
+		return tea.Batch(inputCommand, m.spinner.Tick, nameSearchCmd(m.ctx, m.app, nameQuery))
 	}
 	m.graphSearchQuery, m.graphSearchHits = "", nil
 	m.loading = false
@@ -1152,6 +1187,15 @@ func searchDocumentsCmd(ctx context.Context, app App, query string, exact bool) 
 	return func() tea.Msg {
 		results, err := app.SearchDocuments(ctx, membox.SearchDocumentsQuery{Query: query, Limit: 100, Exact: exact})
 		return searchMsg{query: strings.TrimSpace(query), exact: exact, results: results, err: err}
+	}
+}
+
+// nameSearchCmd runs the name filter as a full-catalog identity search
+// (UUID/title/path substrings) instead of filtering the locally loaded list.
+func nameSearchCmd(ctx context.Context, app App, query string) tea.Cmd {
+	return func() tea.Msg {
+		results, err := app.SuggestDocuments(ctx, membox.SuggestDocumentsQuery{Query: query, Limit: 500})
+		return searchMsg{query: strings.TrimSpace(query), exact: true, results: results, err: err, nameSearch: true}
 	}
 }
 func listDocumentsCmd(ctx context.Context, app App, sequence uint64) tea.Cmd {

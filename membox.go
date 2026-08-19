@@ -321,6 +321,40 @@ type SearchResult struct {
 	Snippet    string `json:"snippet"`
 }
 
+// SuggestDocumentsQuery drives identity search (UUID/title/path substrings)
+// for picker and filter UIs — full-catalog, unlike the TUI's local list.
+type SuggestDocumentsQuery struct {
+	Query string
+	Limit int
+}
+
+// SuggestDocuments matches document identity (UUID, title, relative path) as
+// substrings across the whole catalog, independent of any list pagination.
+// This is what the TUI name filter calls so filtering is a real SQLite query.
+func (b *Box) SuggestDocuments(ctx context.Context, query SuggestDocumentsQuery) ([]SearchResult, error) {
+	limit := query.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	hits, err := b.service.SuggestDocuments(ctx, strings.TrimSpace(query.Query), limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]SearchResult, 0, len(hits))
+	for _, hit := range hits {
+		out = append(out, SearchResult{
+			DocumentID: string(hit.DocumentID),
+			Title:      hit.Title,
+			Path:       hit.Path,
+			Snippet:    hit.Snippet,
+		})
+	}
+	return out, nil
+}
+
 func (b *Box) SearchDocuments(ctx context.Context, query SearchDocumentsQuery) ([]SearchResult, error) {
 	limit := query.Limit
 	if limit <= 0 {

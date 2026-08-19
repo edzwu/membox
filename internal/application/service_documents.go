@@ -72,7 +72,8 @@ func (s *Service) Grep(ctx context.Context, pattern string, limit int) ([]port.S
 }
 
 // SuggestDocuments finds active documents by UUID, title, or path substring.
-// Unlike full-text Search, it is intended for compact picker/autocomplete UIs.
+// Unlike full-text Search, it is intended for compact picker/autocomplete UIs
+// and the TUI name filter (full-catalog identity search).
 func (s *Service) SuggestDocuments(ctx context.Context, query string, limit int) ([]port.SearchHit, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
@@ -81,8 +82,8 @@ func (s *Service) SuggestDocuments(ctx context.Context, query string, limit int)
 	if limit <= 0 {
 		limit = 10
 	}
-	if limit > 100 {
-		return nil, errors.New("suggestion limit cannot exceed 100")
+	if limit > 500 {
+		return nil, errors.New("suggestion limit cannot exceed 500")
 	}
 	return s.store.SuggestDocuments(ctx, query, limit)
 }

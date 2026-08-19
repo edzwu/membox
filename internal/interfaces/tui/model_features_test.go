@@ -105,6 +105,21 @@ func TestModel_EnterOpensViewerSubprocess(t *testing.T) {
 	}
 }
 
+// deliverNameFilter simulates the catalog identity-search response the name
+// filter now awaits: after a Tab commit (or draft edit) the filter runs a
+// full-catalog SQLite query (SuggestDocuments); tests feed the backend-like
+// hit list back through Update so local exact/case/date/notes semantics apply.
+func deliverNameFilter(t *testing.T, model *Model, ids ...string) {
+	t.Helper()
+	query := model.nameSearchQuery()
+	results := make([]membox.SearchResult, 0, len(ids))
+	for _, id := range ids {
+		results = append(results, membox.SearchResult{DocumentID: id})
+	}
+	updated, _ := model.Update(searchMsg{query: query, nameSearch: true, results: results})
+	*model = updated.(Model)
+}
+
 func TestModel_EnterWithWebViewerOpensBrowser(t *testing.T) {
 	app := &fakeApp{viewer: "web"}
 	model := New(context.Background(), app, fakeLauncher{})
@@ -809,6 +824,9 @@ func TestModel_FilterOptionsPanelCtrlOAndStatusBar(t *testing.T) {
 	if !strings.Contains(model.inputView(), "N=: rust") {
 		t.Fatalf("tag does not encode word mode: %q", model.inputView())
 	}
+	// Backend returns both LIKE hits (Trust, Rust); local whole-word semantics
+	// must keep only the standalone "Rust" doc.
+	deliverNameFilter(t, &model, "019fbe56-64c3-7e3c-861d-000000000001", "019fbe56-64c3-7e3c-861d-000000000002")
 	if len(model.filtered) != 1 || !strings.Contains(model.filtered[0].document.Title, "Rust I Wanted") {
 		t.Fatalf("word match selected wrong docs: %+v", model.filtered)
 	}
@@ -819,6 +837,8 @@ func TestModel_FilterOptionsPanelCtrlOAndStatusBar(t *testing.T) {
 	model.input.SetValue("rust")
 	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
 	model = updated.(Model)
+	// Backend returns both LIKE hits; local substring semantics keep both.
+	deliverNameFilter(t, &model, "019fbe56-64c3-7e3c-861d-000000000001", "019fbe56-64c3-7e3c-861d-000000000002")
 	if len(model.filtered) != 2 {
 		t.Fatalf("contains mode should select both docs: %+v", model.filtered)
 	}
@@ -829,6 +849,7 @@ func TestModel_FilterOptionsPanelCtrlOAndStatusBar(t *testing.T) {
 	model.input.SetValue("RUST")
 	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
 	model = updated.(Model)
+	deliverNameFilter(t, &model, "019fbe56-64c3-7e3c-861d-000000000001", "019fbe56-64c3-7e3c-861d-000000000002")
 	if len(model.filtered) != 0 {
 		t.Fatalf("word+case RUST should match nothing: %+v", model.filtered)
 	}

@@ -1026,6 +1026,7 @@ func TestModel_TextPatternsCommitAsTagsWithANDSemantics(t *testing.T) {
 	model.input.SetValue("report")
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyTab})
 	model = updated.(Model)
+	deliverNameFilter(t, &model, "alpha-report", "beta-report")
 	if len(model.textFilters) != 1 || model.textFilters[0].Mode != searchModeName || model.input.Value() != "" || len(model.filtered) != 2 {
 		t.Fatalf("name pattern was not committed: tags=%+v input=%q filtered=%+v", model.textFilters, model.input.Value(), model.filtered)
 	}
@@ -1036,6 +1037,7 @@ func TestModel_TextPatternsCommitAsTagsWithANDSemantics(t *testing.T) {
 	model.input.SetValue("alpha")
 	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
 	model = updated.(Model)
+	deliverNameFilter(t, &model, "alpha-report")
 	if len(model.textFilters) != 2 || len(model.filtered) != 1 || model.filtered[0].document.ID != "alpha-report" {
 		t.Fatalf("name tags do not use AND semantics: tags=%+v filtered=%+v", model.textFilters, model.filtered)
 	}

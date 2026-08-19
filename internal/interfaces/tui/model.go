@@ -40,6 +40,7 @@ const (
 type App interface {
 	AddPath(context.Context, membox.AddPathCommand) (membox.AddPathResult, error)
 	SearchDocuments(context.Context, membox.SearchDocumentsQuery) ([]membox.SearchResult, error)
+	SuggestDocuments(context.Context, membox.SuggestDocumentsQuery) ([]membox.SearchResult, error)
 	ListDocuments(context.Context, membox.ListDocumentsQuery) ([]membox.DocumentView, error)
 	SetDocumentSummary(context.Context, membox.SetSummaryCommand) (membox.DocumentView, error)
 	SummarizeDocument(context.Context, string) (membox.DocumentView, error)
@@ -235,10 +236,11 @@ type Model struct {
 }
 
 type searchMsg struct {
-	query   string
-	exact   bool
-	results []membox.SearchResult
-	err     error
+	query      string
+	exact      bool
+	results    []membox.SearchResult
+	err        error
+	nameSearch bool // name-mode identity search (SuggestDocuments), not FTS
 }
 type threadSearchMsg struct {
 	query    string
@@ -570,7 +572,17 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.clearExecutedCommand()
 		}
 	case searchMsg:
-		if query, exact := m.fullTextFilter(); query == msg.query && exact == msg.exact {
+		// Name-mode results match the current name query; FTS results match the
+		// full-text query + exactness. Stale responses (query changed again)
+		// are ignored so a fast typist never sees out-of-order lists.
+		var matches bool
+		if msg.nameSearch {
+			matches = m.nameSearchQueryMatches(msg.query)
+		} else {
+			query, exact := m.fullTextFilter()
+			matches = query == msg.query && exact == msg.exact
+		}
+		if matches {
 			m.loading, m.err = false, msg.err
 			if msg.err == nil {
 				m.filtered = searchResultItems(m.items, msg.results, m.dateFilters, m.effectiveNameFilters(), m.hideNotes, m.mediaScope)
@@ -608,6 +620,11 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				if query, exact := m.fullTextFilter(); query != "" {
 					m.loading = true
 					commands = append(commands, m.spinner.Tick, searchDocumentsCmd(m.ctx, m.app, query, exact))
+				} else if nameQuery := m.nameSearchQuery(); nameQuery != "" {
+					// Name filters also search the full catalog: notes sorted past
+					// the list limit still resolve via SQLite, not the local page.
+					m.loading = true
+					commands = append(commands, m.spinner.Tick, nameSearchCmd(m.ctx, m.app, nameQuery))
 				} else {
 					commands = append(commands, m.loadPreview())
 				}

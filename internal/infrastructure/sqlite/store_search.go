@@ -72,25 +72,30 @@ LIMIT ?`, needle, limit)
 
 // SuggestDocuments performs literal substring matching for picker UIs. UUIDs
 // are not part of FTS, so this deliberately searches document identity and
-// metadata rather than document bodies.
+// metadata rather than document bodies. Whitespace-separated terms are ANDed:
+// each term must hit id, title, or relative_path somewhere (mirrors the TUI
+// name tags' AND semantics without an in-memory list page).
 func (s *Store) SuggestDocuments(ctx context.Context, query string, limit int) ([]port.SearchHit, error) {
-	rows, err := s.db.QueryContext(ctx, `WITH needle(value) AS (VALUES(lower(?)))
-SELECT d.id,COALESCE(i.title,''),l.relative_path,''
+	terms := strings.Fields(strings.ToLower(strings.TrimSpace(query)))
+	if len(terms) == 0 {
+		return nil, errors.New("suggestion query is empty")
+	}
+	conditions := make([]string, 0, len(terms))
+	args := make([]any, 0, len(terms)*3+1)
+	for _, term := range terms {
+		conditions = append(conditions,
+			"(instr(lower(d.id),?)>0 OR instr(lower(COALESCE(i.title,'')),?)>0 OR instr(lower(l.relative_path),?)>0)")
+		args = append(args, term, term, term)
+	}
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT d.id,COALESCE(i.title,''),l.relative_path,''
 FROM documents d
 JOIN document_locations l ON l.document_id=d.id
 LEFT JOIN document_index i ON i.document_id=d.id
-CROSS JOIN needle n
 WHERE l.status='active' AND `+notTrashedClause+`
-  AND (instr(lower(d.id),n.value)>0 OR instr(lower(COALESCE(i.title,'')),n.value)>0 OR instr(lower(l.relative_path),n.value)>0)
-ORDER BY CASE
-  WHEN lower(d.id)=n.value THEN 0
-  WHEN instr(lower(d.id),n.value)=1 THEN 1
-  WHEN instr(lower(COALESCE(i.title,'')),n.value)=1 THEN 2
-  WHEN instr(lower(d.id),n.value)>0 THEN 3
-  WHEN instr(lower(COALESCE(i.title,'')),n.value)>0 THEN 4
-  ELSE 5 END,
-  lower(COALESCE(i.title,'')),lower(l.relative_path)
-LIMIT ?`, query, limit)
+  AND `+strings.Join(conditions, " AND ")+`
+ORDER BY lower(COALESCE(i.title,'')),lower(l.relative_path)
+LIMIT ?`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("suggesting documents: %w", err)
 	}

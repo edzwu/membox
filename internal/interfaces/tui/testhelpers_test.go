@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"strings"
 
 	"membox"
 )
@@ -60,6 +61,21 @@ func (f *fakeApp) AddPath(context.Context, membox.AddPathCommand) (membox.AddPat
 }
 func (f *fakeApp) SearchDocuments(context.Context, membox.SearchDocumentsQuery) ([]membox.SearchResult, error) {
 	return f.searchResults, nil
+}
+func (f *fakeApp) SuggestDocuments(_ context.Context, query membox.SuggestDocumentsQuery) ([]membox.SearchResult, error) {
+	if f.searchResults != nil {
+		return f.searchResults, nil
+	}
+	// Default: mirror the local list, filtered by the query substring so
+	// filter tests exercise the backend path without a real SQLite store.
+	var out []membox.SearchResult
+	for _, d := range f.documents {
+		if strings.Contains(strings.ToLower(d.ID), strings.ToLower(query.Query)) ||
+			strings.Contains(strings.ToLower(d.Title), strings.ToLower(query.Query)) {
+			out = append(out, membox.SearchResult{DocumentID: d.ID, Title: d.Title, Path: d.Path})
+		}
+	}
+	return out, nil
 }
 func (f *fakeApp) ListDocuments(context.Context, membox.ListDocumentsQuery) ([]membox.DocumentView, error) {
 	if f.documents != nil {
