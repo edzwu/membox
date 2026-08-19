@@ -267,10 +267,6 @@ func (s *Service) CreateNote(ctx context.Context, opts CreateNoteOptions) (Creat
 	if err := s.writer.WriteNew(ctx, absolute, body); err != nil {
 		return CreateNoteResult{}, err
 	}
-	_, err = s.scanOne(ctx, indexedPath)
-	if err != nil {
-		return CreateNoteResult{}, err
-	}
 	// The note is verified by path below, not by the scan's add/update split:
 	// when the file already existed in the catalog (e.g. deleted externally and
 	// recreated, or a rename matched it), the scan reports Updated instead of
@@ -279,11 +275,24 @@ func (s *Service) CreateNote(ctx context.Context, opts CreateNoteOptions) (Creat
 	if err != nil {
 		return CreateNoteResult{}, err
 	}
+	// Fast path: index exactly the freshly written file instead of walking the
+	// whole directory on every clip (`mm path scan` still does the full walk).
+	// Fall back to the full scan when the single-file observation fails or the
+	// path turns out to be cataloged (external recreation / rename matched it).
+	created, fastErr := s.indexNewFile(ctx, indexedPath, absolute)
+	if created == nil {
+		if _, scanErr := s.scanOne(ctx, indexedPath); scanErr != nil {
+			if fastErr != nil {
+				return CreateNoteResult{}, errors.Join(fastErr, scanErr)
+			}
+			return CreateNoteResult{}, scanErr
+		}
+	}
 	documents, err := s.store.DocumentsForPath(ctx, indexedPath.ID)
 	if err != nil {
 		return CreateNoteResult{}, err
 	}
-	var created *catalog.Document
+	created = nil
 	for _, document := range documents {
 		if document.Location.RelativePath == filepath.ToSlash(relative) && document.Status == catalog.DocumentActive {
 			created = document
@@ -317,6 +326,47 @@ func (s *Service) CreateNote(ctx context.Context, opts CreateNoteOptions) (Creat
 		}
 	}
 	return result, nil
+}
+
+// indexNewFile indexes exactly one freshly written document without walking
+// the whole directory (CreateNote fast path — avoids an O(directory) rescan
+// on every browser clip).
+//
+// Callers must hold the mutation lock and guarantee the file is not already
+// cataloged (WriteNew uses O_EXCL and path tracking is checked upstream).
+// When the observation fails the caller falls back to a full scan so the
+// note is still indexed with identical semantics to before.
+func (s *Service) indexNewFile(ctx context.Context, indexedPath *catalog.IndexedPath, absolute string) (*catalog.Document, error) {
+	relative, err := filepath.Rel(indexedPath.Root, absolute)
+	if err != nil {
+		return nil, fmt.Errorf("relating note path: %w", err)
+	}
+	location, err := catalog.NewLocation(indexedPath.ID, filepath.ToSlash(relative))
+	if err != nil {
+		return nil, err
+	}
+	observation, err := s.scanner.ObserveFile(ctx, location, absolute)
+	if err != nil {
+		return nil, err
+	}
+	id, err := s.ids.NewDocumentID()
+	if err != nil {
+		return nil, err
+	}
+	now := s.clock.Now()
+	document, err := catalog.NewDocument(id, observation, now)
+	if err != nil {
+		return nil, err
+	}
+	save := port.ScanSave{Document: document, Body: observation.Body, SearchText: observation.SearchText, Reindex: true}
+	indexedPath.RecordScan(now, nil)
+	if err := s.prepareScanContent(ctx, []port.ScanSave{save}); err != nil {
+		return nil, err
+	}
+	if err := s.store.SaveScan(ctx, indexedPath, []port.ScanSave{save}); err != nil {
+		return nil, err
+	}
+	return document, nil
 }
 
 // ListClipsBySourceURL returns documents registered for a normalized web URL.
