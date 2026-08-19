@@ -371,14 +371,27 @@ func (s *Server) handlePDFAsset(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 	selector, relativePath := remainder[:separator], remainder[separator+1:]
-	document, pdfPath, err := s.service.ResolveDocument(request.Context(), selector)
-	if err != nil || document.Status != catalog.DocumentActive || document.Index.MediaType != "application/pdf" {
-		http.Error(writer, "PDF not found", http.StatusNotFound)
+	document, docPath, err := s.service.ResolveDocument(request.Context(), selector)
+	if err != nil || document.Status != catalog.DocumentActive {
+		http.Error(writer, "document not found", http.StatusNotFound)
 		return
 	}
-	assetRoot, err := pdfasset.Root(pdfPath, string(document.ID))
+	var assetRoot string
+	if document.Index.MediaType == "application/pdf" {
+		assetRoot, err = pdfasset.Root(docPath, string(document.ID))
+	} else {
+		// Note illustrations and other non-PDF binaries live under the managed
+		// PDF library root so they stay outside Markdown/Git trees.
+		var libraryRoot string
+		libraryRoot, err = s.service.PDFLibraryRoot(request.Context())
+		if err != nil {
+			http.Error(writer, "asset library unavailable", http.StatusInternalServerError)
+			return
+		}
+		assetRoot, err = pdfasset.Directory(libraryRoot, string(document.ID))
+	}
 	if err != nil {
-		http.Error(writer, "invalid PDF asset root", http.StatusBadRequest)
+		http.Error(writer, "invalid asset root", http.StatusBadRequest)
 		return
 	}
 	target, err := pdfasset.ImageTarget(assetRoot, relativePath)

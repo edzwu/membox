@@ -18,6 +18,14 @@ func TestRootAndImageTarget(t *testing.T) {
 	if err != nil || target != filepath.Join(wantRoot, "images", "chart.jpg") {
 		t.Fatalf("target=%q err=%v", target, err)
 	}
+	noteRoot, err := Directory("/library", "01a0177c-48da-79cb-8b1c-46f435a660b4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantNote := filepath.Join("/library", DirectoryName, "01a0177c-48da-79cb-8b1c-46f435a660b4")
+	if noteRoot != wantNote {
+		t.Fatalf("note root=%q want=%q", noteRoot, wantNote)
+	}
 }
 
 func TestImageTargetRejectsUnsafeAndNonImagePaths(t *testing.T) {

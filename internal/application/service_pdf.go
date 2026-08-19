@@ -152,6 +152,32 @@ func (s *Service) ImportPDF(ctx context.Context, opts ImportPDFOptions) (ImportP
 	return ImportPDFResult{Document: document, Path: target}, nil
 }
 
+// PDFLibraryRoot returns the configured managed PDF directory (default
+// ~/Documents/membox-pdfs). Non-PDF document assets (note illustrations)
+// also live under <root>/.membox-assets/<doc-uuid>/ so binaries stay out of
+// Markdown/Git trees.
+func (s *Service) PDFLibraryRoot(ctx context.Context) (string, error) {
+	root, err := s.store.GetSetting(ctx, SettingPDFPath)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(root) == "" {
+		home, homeErr := os.UserHomeDir()
+		if homeErr != nil {
+			return "", fmt.Errorf("resolving default PDF directory: %w", homeErr)
+		}
+		root = filepath.Join(home, "Documents", "membox-pdfs")
+	}
+	expandedRoot, err := expandUserHome(root)
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(expandedRoot, 0o755); err != nil {
+		return "", fmt.Errorf("creating PDF directory %q: %w", expandedRoot, err)
+	}
+	return s.scanner.Canonicalize(expandedRoot)
+}
+
 func expandUserHome(value string) (string, error) {
 	value = strings.TrimSpace(value)
 	if value != "~" && !strings.HasPrefix(value, "~/") {

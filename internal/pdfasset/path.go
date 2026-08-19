@@ -15,18 +15,29 @@ var imageExtensions = map[string]bool{
 	".webp": true, ".bmp": true, ".gif": true,
 }
 
+// Directory returns the private asset directory under parentDir, isolated by
+// stable document UUID. Binary assets stay out of Markdown/Git trees when
+// parentDir is the managed PDF library (or another non-git root).
+func Directory(parentDir, documentID string) (string, error) {
+	parsed, err := uuid.Parse(strings.TrimSpace(documentID))
+	if err != nil {
+		return "", fmt.Errorf("invalid document ID %q", documentID)
+	}
+	parentDir = filepath.Clean(strings.TrimSpace(parentDir))
+	if parentDir == "" || parentDir == "." {
+		return "", fmt.Errorf("asset parent directory is required")
+	}
+	return filepath.Join(parentDir, DirectoryName, parsed.String()), nil
+}
+
 // Root returns the private asset directory adjacent to a managed PDF. Assets
 // are isolated by stable PDF UUID and never live in a Markdown/Git directory.
 func Root(pdfPath, documentID string) (string, error) {
-	parsed, err := uuid.Parse(strings.TrimSpace(documentID))
-	if err != nil {
-		return "", fmt.Errorf("invalid PDF document ID %q", documentID)
-	}
 	pdfPath = filepath.Clean(strings.TrimSpace(pdfPath))
 	if pdfPath == "" || pdfPath == "." {
 		return "", fmt.Errorf("PDF path is required")
 	}
-	return filepath.Join(filepath.Dir(pdfPath), DirectoryName, parsed.String()), nil
+	return Directory(filepath.Dir(pdfPath), documentID)
 }
 
 // ImageTarget validates one converter/API relative path and returns its path

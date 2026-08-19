@@ -81,6 +81,63 @@ func TestPDFAssetHandlerServesOnlyManagedImagePaths(t *testing.T) {
 	}
 }
 
+func TestPDFAssetHandlerServesNoteImagesFromPDFLibrary(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	store, err := sqlite.Open(filepath.Join(root, "membox.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	service := application.NewService(store, filesystem.NewScanner(), filesystem.Reader{}, filesystem.Writer{}, system.IDGenerator{}, system.Clock{}, git.History{})
+
+	notesRoot := filepath.Join(root, "notes")
+	pdfRoot := filepath.Join(root, "pdfs")
+	if err := os.MkdirAll(notesRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(pdfRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetSetting(ctx, application.SettingPDFPath, pdfRoot); err != nil {
+		t.Fatal(err)
+	}
+	notePath := filepath.Join(notesRoot, "diagram-note.md")
+	if err := os.WriteFile(notePath, []byte("# note\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.AddPath(ctx, notesRoot); err != nil {
+		t.Fatal(err)
+	}
+	documents, err := service.ListDocuments(ctx, 10, false, "")
+	if err != nil || len(documents) != 1 {
+		t.Fatalf("indexed notes=%d err=%v", len(documents), err)
+	}
+	documentID := string(documents[0].Document.ID)
+	assetRoot, err := pdfasset.Directory(pdfRoot, documentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	imagePath, err := pdfasset.ImageTarget(assetRoot, "images/figure.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(imagePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(imagePath, []byte("png-fixture"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	server := NewServer(service, fstest.MapFS{}, fstest.MapFS{})
+	request := httptest.NewRequest(http.MethodGet, "/api/pdf-assets/"+documentID+"/images/figure.png", nil)
+	response := httptest.NewRecorder()
+	server.handlePDFAsset(response, request)
+	if response.Code != http.StatusOK || response.Body.String() != "png-fixture" || response.Header().Get("Content-Type") != "image/png" {
+		t.Fatalf("note asset response: code=%d type=%q body=%q", response.Code, response.Header().Get("Content-Type"), response.Body.String())
+	}
+}
+
 func backendTestPDFBytes() []byte {
 	objects := []string{
 		`<< /Type /Catalog /Pages 2 0 R >>`,
