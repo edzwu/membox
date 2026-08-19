@@ -63,25 +63,50 @@ function sanitize(html) {
   });
 }
 
+// Defer non-structural post-processing off the render critical path so a
+// large document becomes readable immediately instead of blocking the main
+// thread on highlighting / folding / TOC construction. Structural passes
+// (tables, links, section chrome, folding) still run synchronously before
+// first paint; everything else is chunked into idle callbacks in dependency
+// order (TOC needs stable heading ids, which come after fold/annotations).
+function whenIdle(task) {
+  if (typeof requestIdleCallback === 'function') {
+    requestIdleCallback(task, { timeout: 1500 });
+  } else {
+    setTimeout(task, 0);
+  }
+}
+
 function processArticle() {
+  // Structural pass — synchronous so folding/layout are correct at first paint.
   wrapTables();
-  highlightCode();
-  renderMath();
-  // Mermaid is async (lazy-loads vendor). Diagrams replace fences after paint;
-  // fold/TOC already ran on the pre blocks, which is fine for navigation.
-  void renderMermaid();
-  renderAnnotationSyntax();
-  foldSections();
   wrapLeadingContent();
   stripHeadingHeaderLinks();
-  const headings = assignHeadingIds();
-  attributeSectionSources();
-  addCopyButtons();
+  renderAnnotationSyntax();
   markExternalLinks();
-  buildToc(headings);
-  observeHeadings(headings);
   addSectionActionButtons();
-  addFoldListeners();
+  foldSections();
+
+  // Per-block highlighting/math can take real time on big documents but do
+  // not affect fold/TOC structure — run them in an idle callback.
+  whenIdle(() => {
+    highlightCode();
+    renderMath();
+    // Mermaid is async (lazy-loads vendor). Diagrams replace fences after
+    // paint; fold/TOC already ran on the pre blocks, which is fine.
+    void renderMermaid();
+
+    // Folding + TOC need stable heading ids and the final DOM; heading ids
+    // must exist before buildToc/observeHeadings consume them.
+    whenIdle(() => {
+      const headings = assignHeadingIds();
+      attributeSectionSources();
+      addCopyButtons();
+      addFoldListeners();
+      buildToc(headings);
+      observeHeadings(headings);
+    });
+  });
 }
 
 function getDocumentTitle() {
