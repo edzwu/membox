@@ -236,13 +236,83 @@ function fencedBlock(raw: string, language: string): string {
   return `\n\n${fence}${safeLanguage}\n${text}\n${fence}\n\n`;
 }
 
-/** textContent with HTML <br> represented as a source newline. */
+/**
+ * textContent with structural newlines restored.
+ *
+ * Many highlighters (snaptoken diffs, Prism line wrappers, GitHub blob tables)
+ * render each source line as a block child (`div.line`, `ins.line`, …) and rely
+ * on CSS for line breaks. textContent concatenates those without `\n`, so we
+ * reinsert newlines before reading text. `<br>` is handled the same way.
+ */
 function elementText(el: HTMLElement): string {
   const clone = el.cloneNode(true) as HTMLElement;
   for (const br of Array.from(clone.querySelectorAll('br'))) {
     br.replaceWith(clone.ownerDocument.createTextNode('\n'));
   }
+  insertNewlinesForCodeLineElements(clone);
   return (clone.textContent || '').replace(/\u00a0/g, ' ');
+}
+
+/** Insert a trailing `\n` after each line-wrapper child under pre/code roots. */
+function insertNewlinesForCodeLineElements(root: HTMLElement): void {
+  const hosts: HTMLElement[] = [];
+  if (isCodeHost(root)) hosts.push(root);
+  for (const el of Array.from(root.querySelectorAll('pre, code'))) {
+    hosts.push(el as HTMLElement);
+  }
+  // Deepest hosts first so nested pre/code are normalized before parents read text.
+  hosts.sort((a, b) => depth(b) - depth(a));
+
+  for (const host of hosts) {
+    const children = Array.from(host.children);
+    if (children.length < 2) continue;
+    const lines = children.filter(isCodeLineElement);
+    if (lines.length < 2) continue;
+    // Require line wrappers to dominate direct children (avoid random div soup).
+    if (lines.length < children.length * 0.6) continue;
+
+    const existingNewlines = (host.textContent || '').match(/\n/g)?.length ?? 0;
+    if (existingNewlines >= lines.length - 1) continue;
+
+    const doc = host.ownerDocument;
+    for (const line of lines) {
+      const next = line.nextSibling;
+      if (next?.nodeType === Node.TEXT_NODE && /\n/.test(next.textContent || '')) continue;
+      line.after(doc.createTextNode('\n'));
+    }
+  }
+}
+
+function isCodeHost(el: Element): boolean {
+  const tag = el.nodeName;
+  return tag === 'PRE' || tag === 'CODE';
+}
+
+function isCodeLineElement(el: Element): boolean {
+  const tag = el.nodeName;
+  if (tag === 'BR') return true;
+  const cls = classNameOf(el);
+  // Explicit line markers used by snaptoken, Prism, Highlight.js plugins, etc.
+  if (/(?:^|\s)(?:line|hljs-line|code-line|blob-code|react-code-line)(?:\s|$)/i.test(cls)) {
+    return true;
+  }
+  // Block-ish direct children of a code host are almost always one source line.
+  return tag === 'DIV' || tag === 'P' || tag === 'LI' || tag === 'TR';
+}
+
+function classNameOf(el: Element): string {
+  const value = (el as HTMLElement).className;
+  return typeof value === 'string' ? value : String(value || '');
+}
+
+function depth(el: Element): number {
+  let n = 0;
+  let cur: Element | null = el;
+  while (cur) {
+    n += 1;
+    cur = cur.parentElement;
+  }
+  return n;
 }
 
 function detectCodeLanguage(pre: HTMLElement, code: Element | null): string {

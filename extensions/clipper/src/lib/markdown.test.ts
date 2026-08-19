@@ -43,6 +43,30 @@ describe('htmlToMarkdown', () => {
     expect(markdown).toMatch(/^````$/m);
   });
 
+  // Regression: snaptoken/kilo (and similar highlighters) put each source line
+  // in a block child (div.line / ins.line) and rely on CSS for breaks. Without
+  // restoring \n, the fence collapses to one long line.
+  it('restores newlines for CSS line-wrapper code blocks', () => {
+    const markdown = htmlToMarkdown(`
+      <pre class="highlight"><code>
+        <ins class="line"><span class="cp">#include &lt;unistd.h&gt;</span></ins>
+        <div class="line"></div>
+        <div class="line"><span class="kt">int</span> <span class="nf">main</span>() {</div>
+        <ins class="line">  <span class="kt">char</span> c;</ins>
+        <ins class="line">  <span class="k">while</span> (read(STDIN_FILENO, &amp;c, 1) == 1);</ins>
+        <div class="line">  <span class="k">return</span> 0;</div>
+        <div class="line">}</div>
+      </code></pre>
+    `);
+
+    expect(markdown).toContain('#include <unistd.h>\n');
+    expect(markdown).toContain('int main() {\n');
+    expect(markdown).toContain('  char c;\n');
+    expect(markdown).toContain('  while (read(STDIN_FILENO, &c, 1) == 1);\n');
+    expect(markdown).toContain('  return 0;\n');
+    expect(markdown).not.toMatch(/#include <unistd\.h>int main/);
+  });
+
   it('recognizes lowercase MathML namespace elements used by Chromium', () => {
     const math = document.createElementNS('http://www.w3.org/1998/Math/MathML', 'math');
     math.setAttribute('data-latex', 'x_1');
