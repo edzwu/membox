@@ -497,7 +497,8 @@ func TestFilterOptionsCanToggleScope(t *testing.T) {
 	_ = cmd
 }
 
-func TestShortIDUsesLastFourUUIDCharacters(t *testing.T) {
+func TestShortIDUsesCompactSuffix(t *testing.T) {
+	// Without a corpus map, short ids fall back to the last 4 compact hex chars.
 	if got := shortID("019fbde8-1765-7f72-a52f-0e0606d10000"); got != "0000" {
 		t.Fatalf("unexpected short UUID %q", got)
 	}

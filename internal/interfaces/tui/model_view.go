@@ -234,7 +234,7 @@ func (m Model) treePreviewView() string {
 		return lipgloss.NewStyle().Width(previewWidth).MaxWidth(previewWidth).Render(m.preview.View())
 	}
 	indices := m.treeVisibleIndices()
-	uuidWidth := 4
+	uuidWidth := logicalIDColumnWidth(m.filtered, indices)
 	// readStatusMark (○/◐/● + space) reserves two columns. The converted-PDF
 	// marker only consumes width on rows where it is present.
 	badgeWidth := 2
@@ -966,7 +966,7 @@ func searchResultItems(items []item, results []membox.SearchResult, dateFilters 
 					RelativePath: filename, MediaType: "text/markdown", Status: "active",
 				},
 				title: displayTitle(result.Title, result.Path), filename: filename,
-				match: result.Title + " " + result.Path + " " + filename + " " + result.DocumentID,
+				match: result.Title + " " + result.Path + " " + filename + " " + shortID(result.DocumentID),
 			}
 		}
 		if hideNotes && isClippedNote(candidate.filename) {
@@ -1001,7 +1001,14 @@ func documentItems(documents []membox.DocumentView) []item {
 	items := make([]item, 0, len(documents))
 	for _, document := range documents {
 		filename := documentFilename(document)
-		match := document.Title + " " + document.Path + " " + filename + " " + document.Status + " " + document.ID
+		// Match haystack exposes only the logical short id — physical UUIDs
+		// stay out of TUI filtering so name search is left-to-right on what
+		// the tree actually renders.
+		logical := document.ShortID
+		if logical == "" {
+			logical = shortID(document.ID)
+		}
+		match := document.Title + " " + document.Path + " " + filename + " " + document.Status + " " + logical
 		items = append(items, item{
 			document: document, title: displayTitle(document.Title, document.Path), filename: filename, match: match,
 			pdfConverted: document.MediaType == "application/pdf" && convertedPDFs[strings.ToLower(document.ID)],
@@ -1202,3 +1209,21 @@ func dateOnly(value time.Time) string {
 }
 
 func shortID(id string) string { return host.ShortDocumentID(id) }
+
+// logicalIDColumnWidth sizes the tree's id column for the longest visible
+// logical abbreviation (usually 4, occasionally 5–6 on collisions).
+func logicalIDColumnWidth(items []item, indices []int) int {
+	width := 4
+	for _, index := range indices {
+		if index < 0 || index >= len(items) {
+			continue
+		}
+		if n := len(shortID(items[index].document.ID)); n > width {
+			width = n
+		}
+	}
+	if width > 8 {
+		return 8
+	}
+	return width
+}

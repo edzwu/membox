@@ -167,7 +167,7 @@ func (t *ServiceDocumentTools) SearchDocuments(ctx context.Context, query string
 	out := make([]DocumentHit, 0, len(hits))
 	for _, hit := range hits {
 		out = append(out, DocumentHit{
-			ID:      string(hit.DocumentID),
+			ID:      t.logicalID(ctx, string(hit.DocumentID)),
 			Title:   hit.Title,
 			Snippet: hit.Snippet,
 			Path:    hit.Path,
@@ -192,7 +192,7 @@ func (t *ServiceDocumentTools) GrepDocuments(ctx context.Context, pattern string
 	out := make([]DocumentHit, 0, len(hits))
 	for _, hit := range hits {
 		out = append(out, DocumentHit{
-			ID:      string(hit.DocumentID),
+			ID:      t.logicalID(ctx, string(hit.DocumentID)),
 			Title:   hit.Title,
 			Snippet: hit.Snippet,
 			Path:    hit.Path,
@@ -248,7 +248,7 @@ func (t *ServiceDocumentTools) GetDocument(ctx context.Context, id string) (Docu
 	if err != nil {
 		return DocumentView{}, err
 	}
-	return documentView(doc, abs), nil
+	return t.documentView(ctx, doc, abs), nil
 }
 
 func (t *ServiceDocumentTools) ReadDocument(ctx context.Context, id string, cursor string, limit int) (DocumentChunk, error) {
@@ -289,7 +289,7 @@ func (t *ServiceDocumentTools) ReadDocument(ctx context.Context, id string, curs
 		next = fmt.Sprintf("%d", end)
 	}
 	return DocumentChunk{
-		ID:         string(doc.ID),
+		ID:         t.logicalID(ctx, string(doc.ID)),
 		Title:      doc.Index.Title,
 		Revision:   documentRevision(doc),
 		Text:       chunk,
@@ -305,24 +305,24 @@ func (t *ServiceDocumentTools) ListRelated(ctx context.Context, id string) (Rela
 	if err != nil {
 		return RelatedView{}, err
 	}
-	view := RelatedView{ID: string(doc.ID)}
+	view := RelatedView{ID: t.logicalID(ctx, string(doc.ID))}
 	for _, link := range graph.Outgoing {
 		if link.Document == nil {
 			continue
 		}
-		view.Links = append(view.Links, DocumentHit{ID: string(link.Document.ID), Title: link.Document.Index.Title})
+		view.Links = append(view.Links, DocumentHit{ID: t.logicalID(ctx, string(link.Document.ID)), Title: link.Document.Index.Title})
 	}
 	for _, link := range graph.Incoming {
 		if link.Document == nil {
 			continue
 		}
-		view.Links = append(view.Links, DocumentHit{ID: string(link.Document.ID), Title: link.Document.Index.Title})
+		view.Links = append(view.Links, DocumentHit{ID: t.logicalID(ctx, string(link.Document.ID)), Title: link.Document.Index.Title})
 	}
 	for _, topic := range graph.Topics {
 		if topic.Document == nil {
 			continue
 		}
-		view.Topics = append(view.Topics, DocumentHit{ID: string(topic.Document.ID), Title: topic.Document.Index.Title})
+		view.Topics = append(view.Topics, DocumentHit{ID: t.logicalID(ctx, string(topic.Document.ID)), Title: topic.Document.Index.Title})
 	}
 	// Also list annotation notes via dedicated API.
 	if _, notes, noteErr := t.Service.ListAnnotationNotes(ctx, id); noteErr == nil {
@@ -331,11 +331,11 @@ func (t *ServiceDocumentTools) ListRelated(ctx context.Context, id string) (Rela
 			seen[n.ID] = true
 		}
 		for _, note := range notes {
-			nid := string(note.NoteDocumentID)
+			nid := t.logicalID(ctx, string(note.NoteDocumentID))
 			if seen[nid] {
 				continue
 			}
-			if noteDoc, _, rerr := t.Service.ResolveDocument(ctx, nid); rerr == nil {
+			if noteDoc, _, rerr := t.Service.ResolveDocument(ctx, string(note.NoteDocumentID)); rerr == nil {
 				view.Notes = append(view.Notes, DocumentHit{ID: nid, Title: noteDoc.Index.Title})
 			} else {
 				view.Notes = append(view.Notes, DocumentHit{ID: nid})
@@ -362,7 +362,7 @@ func (t *ServiceDocumentTools) CreateNote(ctx context.Context, cmd CreateNoteCom
 		return MutationResult{}, err
 	}
 	return MutationResult{
-		ID:       string(result.Document.ID),
+		ID:       t.logicalID(ctx, string(result.Document.ID)),
 		Title:    result.Document.Index.Title,
 		Revision: documentRevision(result.Document),
 	}, nil
@@ -392,7 +392,7 @@ func (t *ServiceDocumentTools) UpdateDocument(ctx context.Context, cmd UpdateDoc
 		return MutationResult{}, err
 	}
 	return MutationResult{
-		ID:       string(result.DocumentID),
+		ID:       t.logicalID(ctx, string(result.DocumentID)),
 		Title:    doc.Index.Title,
 		Revision: documentRevision(doc),
 	}, nil
@@ -419,7 +419,7 @@ func (t *ServiceDocumentTools) RenameDocument(ctx context.Context, cmd RenameDoc
 		return MutationResult{}, err
 	}
 	return MutationResult{
-		ID:       string(result.DocumentID),
+		ID:       t.logicalID(ctx, string(result.DocumentID)),
 		Title:    doc.Index.Title,
 		Revision: documentRevision(doc),
 	}, nil
@@ -443,14 +443,26 @@ func (t *ServiceDocumentTools) LinkDocuments(ctx context.Context, cmd LinkDocume
 		return MutationResult{}, err
 	}
 	return MutationResult{
-		ID:    to,
+		ID:    t.logicalID(ctx, string(toDoc.ID)),
 		Title: toDoc.Index.Title,
 	}, nil
 }
 
-func documentView(doc *catalog.Document, abs string) DocumentView {
+// logicalID returns the agent-visible short id. Physical UUIDs stay inside the
+// catalog/SQLite boundary; agents only round-trip logical selectors.
+func (t *ServiceDocumentTools) logicalID(ctx context.Context, physical string) string {
+	if t == nil || t.Service == nil {
+		return catalog.FallbackLogicalID(physical)
+	}
+	if logical, err := t.Service.LogicalID(ctx, physical); err == nil && logical != "" {
+		return logical
+	}
+	return catalog.FallbackLogicalID(physical)
+}
+
+func (t *ServiceDocumentTools) documentView(ctx context.Context, doc *catalog.Document, abs string) DocumentView {
 	return DocumentView{
-		ID:        string(doc.ID),
+		ID:        t.logicalID(ctx, string(doc.ID)),
 		Title:     doc.Index.Title,
 		Status:    string(doc.Status),
 		Revision:  documentRevision(doc),

@@ -296,6 +296,10 @@ type CatalogStore interface {
 		statusFilter string,
 	) ([]DocumentRecord, error)
 	ResolveDocument(ctx context.Context, selector string) (*catalog.Document, string, error)
+	// LogicalID/LogicalIDs expose unique short abbreviations of physical UUIDs
+	// for display and left-to-right selector typing. Physical ids are unchanged.
+	LogicalID(ctx context.Context, physicalID string) (string, error)
+	LogicalIDs(ctx context.Context) (map[string]string, error)
 	// Document source URLs (browser clip provenance), stored at ingest time.
 	UpsertDocumentSource(
 		ctx context.Context,

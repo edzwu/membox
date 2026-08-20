@@ -145,6 +145,7 @@ type Model struct {
 	renderedPreview string // styled preview for rawContent at renderedWidth
 	renderedWidth   int
 	previewGen      uint64 // drops stale async preview renders
+	previewCache    map[string]previewCacheEntry
 
 	inputVisible   bool
 	inputActive    bool
@@ -191,6 +192,7 @@ type Model struct {
 	deleteSelector         string
 	deletePath             string
 	commandHistory         []string
+	filterHistory          []string
 	historyIndex           int
 	cmdSuggestions         []commandSuggestion
 	cmdSelected            int
@@ -272,6 +274,7 @@ type previewMsg struct {
 	content    string // raw Markdown (or plain placeholder)
 	rendered   string // pre-rendered ANSI at width (may be empty on error path)
 	width      int
+	size       int64  // source size used for cache invalidation
 	generation uint64
 	err        error
 }
@@ -410,7 +413,7 @@ func inputPlaceholder(mode string) string {
 	case inputModeAgent:
 		return "ask the agent about your documents…"
 	default:
-		return "filter documents (enter opens · tab pins · ctrl+f name/content)"
+		return "filter documents (enter opens · tab pins · ↑↓ history · esc tree)"
 	}
 }
 
@@ -658,6 +661,13 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			// Cheap: paint cached ANSI; styling runs only in previewCmd.
 			m.applyPreviewContent()
+			size := msg.size
+			if size == 0 {
+				if document, ok := m.selectedDocument(); ok && document.ID == m.rawDocumentID {
+					size = document.Size
+				}
+			}
+			m.putPreviewCache(m.rawDocumentID, size, m.renderedWidth, m.rawContent, m.renderedPreview)
 		}
 	case scanMsg:
 		m.scanning = false
@@ -1014,17 +1024,81 @@ func (m *Model) selectDocumentID(documentID string) bool {
 
 // previewDebounce is how long we wait after the last selection change before
 // reading/rendering the document. Keeps arrow-key navigation fluid.
-const previewDebounce = 60 * time.Millisecond
+const previewDebounce = 45 * time.Millisecond
+
+const previewCacheLimit = 24
 
 type previewDebounceMsg struct{ generation uint64 }
+
+type previewCacheEntry struct {
+	size     int64
+	width    int
+	raw      string
+	rendered string
+}
 
 func (m *Model) loadPreview() tea.Cmd {
 	m.previewGen++
 	gen := m.previewGen
+	width := m.preview.Width
+	if width <= 0 {
+		_, width = m.layoutWidths()
+	}
+	// Cache hit: paint immediately, no debounce / disk / style pass.
+	if document, ok := m.previewTarget(); ok {
+		if m.applyCachedPreview(document, width) {
+			return nil
+		}
+		// Drop stale body right away so a slow load never looks like a freeze
+		// on the previous document.
+		if m.rawDocumentID != document.ID {
+			m.preview.SetContent(previewDim.Render("Loading…"))
+		}
+	}
 	// Debounce: only the latest generation after idle fires the real load.
 	return tea.Tick(previewDebounce, func(time.Time) tea.Msg {
 		return previewDebounceMsg{generation: gen}
 	})
+}
+
+func (m *Model) previewTarget() (membox.DocumentView, bool) {
+	if m.fullscreen && m.fullDocument != nil {
+		return *m.fullDocument, true
+	}
+	return m.selectedDocument()
+}
+
+func (m *Model) applyCachedPreview(document membox.DocumentView, width int) bool {
+	entry, ok := m.previewCache[document.ID]
+	if !ok || entry.width != width || entry.size != document.Size || entry.rendered == "" {
+		return false
+	}
+	m.rawContent = entry.raw
+	m.rawDocumentID = document.ID
+	m.renderedPreview = entry.rendered
+	m.renderedWidth = entry.width
+	m.applyPreviewContent()
+	return true
+}
+
+func (m *Model) putPreviewCache(documentID string, size int64, width int, raw, rendered string) {
+	if documentID == "" || rendered == "" {
+		return
+	}
+	if m.previewCache == nil {
+		m.previewCache = make(map[string]previewCacheEntry, previewCacheLimit)
+	}
+	if _, exists := m.previewCache[documentID]; !exists {
+		for len(m.previewCache) >= previewCacheLimit {
+			for key := range m.previewCache {
+				delete(m.previewCache, key)
+				break
+			}
+		}
+	}
+	m.previewCache[documentID] = previewCacheEntry{
+		size: size, width: width, raw: raw, rendered: rendered,
+	}
 }
 
 func (m *Model) runPreviewLoad(gen uint64) tea.Cmd {
@@ -1035,14 +1109,15 @@ func (m *Model) runPreviewLoad(gen uint64) tea.Cmd {
 	if width <= 0 {
 		_, width = m.layoutWidths()
 	}
-	if m.fullscreen && m.fullDocument != nil {
-		return previewCmd(m.ctx, m.app, m.fullDocument.ID, width, gen)
-	}
-	if document, ok := m.selectedDocument(); ok {
+	if document, ok := m.previewTarget(); ok {
+		// Cache may have been filled while debouncing (e.g. rapid reverse).
+		if m.applyCachedPreview(document, width) {
+			return nil
+		}
 		// Always resolve the media type before reading. In particular, never
 		// send PDF binary bytes to a terminal: embedded control sequences can
 		// corrupt the TUI in addition to rendering as mojibake.
-		return previewCmd(m.ctx, m.app, document.ID, width, gen)
+		return previewCmd(m.ctx, m.app, document.ID, document.Summary, document.Size, width, gen)
 	}
 	placeholder := previewPlaceholder("No document selected.")
 	return func() tea.Msg {
@@ -1089,11 +1164,15 @@ func (m *Model) rewrapPreviewCmd() tea.Cmd {
 	}
 	raw := m.rawContent
 	docID := m.rawDocumentID
+	var size int64
+	if document, ok := m.selectedDocument(); ok && document.ID == docID {
+		size = document.Size
+	}
 	return func() tea.Msg {
 		rendered := renderMarkdownPreview(raw, width)
 		return previewMsg{
 			documentID: docID, content: raw, rendered: rendered,
-			width: width, generation: gen,
+			width: width, size: size, generation: gen,
 		}
 	}
 }

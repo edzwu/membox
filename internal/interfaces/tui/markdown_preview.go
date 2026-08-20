@@ -31,6 +31,13 @@ var (
 	reImage      = regexp.MustCompile(`!\[[^\]]*\]\([^)]+\)`)
 )
 
+// Preview paint caps keep arrow-key navigation snappy on long transcripts.
+// The side pane is for skimming; open the file for the full body.
+const (
+	previewMaxSourceLines = 400
+	previewMaxOutputLines = 600
+)
+
 // renderMarkdownPreview turns Markdown source into ANSI text for the TUI
 // viewport. Front matter is stripped. Rendering is O(lines) and avoids glamour.
 func renderMarkdownPreview(source string, width int) string {
@@ -46,9 +53,18 @@ func renderMarkdownPreview(source string, width int) string {
 	}
 
 	lines := strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n")
-	var out []string
+	truncated := false
+	if len(lines) > previewMaxSourceLines {
+		lines = lines[:previewMaxSourceLines]
+		truncated = true
+	}
+	out := make([]string, 0, min(len(lines)+8, previewMaxOutputLines))
 	inFence := false
 	for _, line := range lines {
+		if len(out) >= previewMaxOutputLines {
+			truncated = true
+			break
+		}
 		trimmed := strings.TrimSpace(line)
 
 		// Fenced code blocks: dim monospace-ish plain text, no further MD.
@@ -103,6 +119,9 @@ func renderMarkdownPreview(source string, width int) string {
 		default:
 			out = append(out, wrapStyled(styleInline(line), width)...)
 		}
+	}
+	if truncated {
+		out = append(out, "", previewDim.Render("… (preview truncated)"))
 	}
 	return strings.TrimRight(strings.Join(out, "\n"), "\n")
 }
@@ -165,33 +184,48 @@ func wrapStyled(line string, width int) []string {
 }
 
 func styleInline(s string) string {
-	s = reImage.ReplaceAllString(s, "")
-	s = reLink.ReplaceAllString(s, "$1")
-	s = reInlineCode.ReplaceAllStringFunc(s, func(m string) string {
-		inner := reInlineCode.FindStringSubmatch(m)
-		if len(inner) < 2 {
+	// Plain prose (typical transcript lines) has none of these markers — skip
+	// the regex pass entirely. This is the hot path on large previews.
+	if !strings.ContainsAny(s, "`*_[]!") {
+		return s
+	}
+	if strings.Contains(s, "![") {
+		s = reImage.ReplaceAllString(s, "")
+	}
+	if strings.Contains(s, "](") {
+		s = reLink.ReplaceAllString(s, "$1")
+	}
+	if strings.Contains(s, "`") {
+		s = reInlineCode.ReplaceAllStringFunc(s, func(m string) string {
+			inner := reInlineCode.FindStringSubmatch(m)
+			if len(inner) < 2 {
+				return m
+			}
+			return previewCode.Render(inner[1])
+		})
+	}
+	if strings.Contains(s, "**") || strings.Contains(s, "__") {
+		s = reBold.ReplaceAllStringFunc(s, func(m string) string {
+			parts := reBold.FindStringSubmatch(m)
+			for i := 1; i < len(parts); i++ {
+				if parts[i] != "" {
+					return lipgloss.NewStyle().Bold(true).Render(parts[i])
+				}
+			}
 			return m
-		}
-		return previewCode.Render(inner[1])
-	})
-	s = reBold.ReplaceAllStringFunc(s, func(m string) string {
-		parts := reBold.FindStringSubmatch(m)
-		for i := 1; i < len(parts); i++ {
-			if parts[i] != "" {
-				return lipgloss.NewStyle().Bold(true).Render(parts[i])
+		})
+	}
+	if strings.ContainsAny(s, "*_") {
+		s = reItalic.ReplaceAllStringFunc(s, func(m string) string {
+			parts := reItalic.FindStringSubmatch(m)
+			for i := 1; i < len(parts); i++ {
+				if parts[i] != "" {
+					return lipgloss.NewStyle().Italic(true).Render(parts[i])
+				}
 			}
-		}
-		return m
-	})
-	s = reItalic.ReplaceAllStringFunc(s, func(m string) string {
-		parts := reItalic.FindStringSubmatch(m)
-		for i := 1; i < len(parts); i++ {
-			if parts[i] != "" {
-				return lipgloss.NewStyle().Italic(true).Render(parts[i])
-			}
-		}
-		return m
-	})
+			return m
+		})
+	}
 	return s
 }
 

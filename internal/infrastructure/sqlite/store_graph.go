@@ -232,6 +232,7 @@ func (s *Store) PurgeDocument(ctx context.Context, documentID catalog.DocumentID
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing purge of %s: %w", documentID, err)
 	}
+	s.invalidateLogicalIDs()
 	return nil
 }
 

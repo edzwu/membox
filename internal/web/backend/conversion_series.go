@@ -107,7 +107,7 @@ func (s *Server) buildConversionSeries(ctx context.Context, selector string) (co
 		if !matched || id != identity {
 			continue
 		}
-		siblings = append(siblings, seriesItemFromDocument(record.Document))
+		siblings = append(siblings, s.seriesItemFromDocument(ctx, record.Document))
 	}
 	if len(siblings) == 0 {
 		return conversionSeriesResponse{Kind: "none"}, nil
@@ -140,7 +140,7 @@ func (s *Server) buildConversionSeries(ctx context.Context, selector string) (co
 		currentIdx = -1
 		sections   []conversionSeriesItem
 	)
-	focusID := string(document.ID)
+	focusID := s.logicalID(ctx, string(document.ID))
 	for i := range siblings {
 		item := siblings[i]
 		if item.Kind == "index" && indexItem == nil {
@@ -205,14 +205,14 @@ func (s *Server) buildConversionSeries(ctx context.Context, selector string) (co
 	return response, nil
 }
 
-func seriesItemFromDocument(document *catalog.Document) conversionSeriesItem {
+func (s *Server) seriesItemFromDocument(ctx context.Context, document *catalog.Document) conversionSeriesItem {
 	filename := filepath.Base(document.Location.RelativePath)
 	title := strings.TrimSpace(document.Index.Title)
 	if title == "" {
 		title = strings.TrimSuffix(filename, filepath.Ext(filename))
 	}
 	return conversionSeriesItem{
-		ID:       string(document.ID),
+		ID:       s.logicalID(ctx, string(document.ID)),
 		Path:     document.Location.RelativePath,
 		Filename: filename,
 		Title:    title,

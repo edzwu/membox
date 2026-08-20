@@ -55,12 +55,12 @@ func TestRepairDuplicateNotes(t *testing.T) {
 	defer func() { _ = service.Close() }()
 	server := NewServer(service, fstest.MapFS{}, fstest.MapFS{})
 
-	records, err := service.ListDocuments(ctx, 1000, false, "")
+	records, err := service.ListDocuments(ctx, 5000, false, "")
 	if err != nil {
 		t.Fatalf("listing documents: %v", err)
 	}
-	if len(records) == 1000 {
-		t.Fatalf("more than 1000 documents; raise the limit before repairing")
+	if len(records) == 5000 {
+		t.Fatalf("more than 5000 documents; raise the limit before repairing")
 	}
 	if err != nil {
 		t.Fatalf("listing documents: %v", err)

@@ -3,10 +3,13 @@ package tui
 import (
 	"context"
 	"fmt"
+	"io"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -503,7 +506,14 @@ func (m *Model) openInput(mode string) tea.Cmd {
 	m.input.Placeholder = inputPlaceholder(mode)
 	m.input.Focus()
 	m.input.SetValue("")
-	m.historyIndex = len(m.commandHistory)
+	switch mode {
+	case inputModeCmd:
+		m.historyIndex = len(m.commandHistory)
+	case inputModeSearch:
+		m.historyIndex = len(m.filterHistory)
+	default:
+		m.historyIndex = 0
+	}
 	m.cmdSuggestions = nil
 	m.cmdSelected = 0
 	m.cmdMenuVisible = false
@@ -560,18 +570,45 @@ func (m *Model) hideInput() {
 
 func (m *Model) clearExecutedCommand() {
 	command := strings.TrimSpace(m.input.Value())
-	if command != "" && (len(m.commandHistory) == 0 || m.commandHistory[len(m.commandHistory)-1] != command) {
-		m.commandHistory = append(m.commandHistory, command)
-		if len(m.commandHistory) > 50 {
-			m.commandHistory = m.commandHistory[len(m.commandHistory)-50:]
-		}
-	}
+	m.rememberCommandHistory(command)
 	m.input.SetValue("")
 	m.input.CursorEnd()
 	m.cmdSuggestions = nil
 	m.cmdSelected = 0
 	m.cmdMenuVisible = false
 	m.historyIndex = len(m.commandHistory)
+}
+
+func (m *Model) rememberCommandHistory(command string) {
+	if command == "" {
+		return
+	}
+	if len(m.commandHistory) > 0 && m.commandHistory[len(m.commandHistory)-1] == command {
+		return
+	}
+	m.commandHistory = append(m.commandHistory, command)
+	if len(m.commandHistory) > 50 {
+		m.commandHistory = m.commandHistory[len(m.commandHistory)-50:]
+	}
+}
+
+// rememberFilterHistory records a committed/used filter draft so ↑/↓ in the
+// focused filter input can recall prior queries (shell-style). Tree navigation
+// stays locked until esc blurs the input.
+func (m *Model) rememberFilterHistory(value string) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return
+	}
+	if len(m.filterHistory) > 0 && m.filterHistory[len(m.filterHistory)-1] == value {
+		m.historyIndex = len(m.filterHistory)
+		return
+	}
+	m.filterHistory = append(m.filterHistory, value)
+	if len(m.filterHistory) > 50 {
+		m.filterHistory = m.filterHistory[len(m.filterHistory)-50:]
+	}
+	m.historyIndex = len(m.filterHistory)
 }
 
 func (m *Model) commitFilterToken() (bool, error) {
@@ -611,6 +648,7 @@ func (m *Model) commitFilterToken() (bool, error) {
 	}
 	filter.Sequence = m.nextFilterSequence()
 	m.dateFilters = append(m.dateFilters, filter)
+	m.rememberFilterHistory(token)
 	m.input.SetValue(remainingInput)
 	return true, nil
 }
@@ -622,6 +660,7 @@ func (m *Model) commitTextFilter() bool {
 	}
 	for _, existing := range m.textFilters {
 		if existing.Mode == m.searchMode && strings.EqualFold(existing.Value, value) {
+			m.rememberFilterHistory(value)
 			m.input.SetValue("")
 			return true
 		}
@@ -633,6 +672,7 @@ func (m *Model) commitTextFilter() bool {
 		Exact:    m.filterExact,
 		Case:     m.filterCase,
 	})
+	m.rememberFilterHistory(value)
 	m.input.SetValue("")
 	return true
 }
@@ -759,6 +799,9 @@ func (m Model) nameSearchQueryMatches(query string) bool {
 
 func (m *Model) filterChanged(inputCommand tea.Cmd) tea.Cmd {
 	m.filterErr = nil
+	// Re-highlight the already-painted preview for the live draft query. Do
+	// not re-read/re-style the whole file on every keystroke — that is what
+	// made large transcripts feel frozen while typing a filter.
 	m.applyPreviewContent()
 	if query, exact := m.fullTextFilter(); query != "" {
 		m.loading = true
@@ -778,7 +821,11 @@ func (m *Model) filterChanged(inputCommand tea.Cmd) tea.Cmd {
 	}
 	m.graphSearchQuery, m.graphSearchHits = "", nil
 	m.loading = false
+	previousID := m.rawDocumentID
 	m.refreshFilter()
+	if document, ok := m.selectedDocument(); ok && document.ID == previousID && m.renderedPreview != "" {
+		return inputCommand
+	}
 	return tea.Batch(inputCommand, m.loadPreview())
 }
 
@@ -1086,9 +1133,9 @@ func matchNameFilter(title, filename, match, documentID string, filter textFilte
 	return wordsMatch(title+" "+filename+" "+match, strings.ToLower(query))
 }
 
-// isUUIDFilterQuery reports whether q is a compact document selector: 3–36
-// chars of hex with optional hyphens (covers short IDs like "3ccf" and full
-// UUIDs). Multi-word or non-hex queries stay on the title/path path.
+// isUUIDFilterQuery reports whether q is a logical-id / hex selector: 3–32
+// hex chars with optional hyphens (covers visible short ids like "3ccf" and
+// rare pasted full UUIDs). Multi-word or non-hex queries stay on title/path.
 func isUUIDFilterQuery(q string) bool {
 	if strings.ContainsAny(q, " \t") {
 		return false
@@ -1104,32 +1151,40 @@ func isUUIDFilterQuery(q string) bool {
 			return false
 		}
 	}
-	// Short IDs are 4 hex chars in the TUI; allow 3–32 hex digits (compact UUID).
+	// Logical ids are usually 4–5 hex chars; allow up to a full compact UUID.
 	return n >= 3 && n <= 32
 }
 
-// matchDocumentIDFilter matches query as a unique-style ID suffix against the
-// document UUID, comparing both dashed and compact forms.
+// matchDocumentIDFilter matches the user-visible logical id left-to-right
+// (prefix). Physical UUIDs stay inside the DB layer — the TUI never filters
+// on physical time-prefixes like "01a014b8". A full physical UUID paste still
+// matches exactly so old deep-links keep working.
 func matchDocumentIDFilter(documentID, query string, caseSensitive bool) bool {
 	id := strings.TrimSpace(documentID)
 	q := strings.TrimSpace(query)
 	if id == "" || q == "" {
 		return false
 	}
+	logical := shortID(id)
 	if !caseSensitive {
-		id = strings.ToLower(id)
+		logical = strings.ToLower(logical)
 		q = strings.ToLower(q)
+		id = strings.ToLower(id)
 	}
-	// Direct suffix on dashed UUID (shortID is last 4 chars including hex only).
-	if strings.HasSuffix(id, q) {
-		return true
-	}
-	compactID := strings.ReplaceAll(id, "-", "")
 	compactQ := strings.ReplaceAll(q, "-", "")
 	if compactQ == "" {
 		return false
 	}
-	return strings.HasSuffix(compactID, compactQ) || compactID == compactQ
+	logicalLower := strings.ToLower(logical)
+	// 正序 against the logical id shown in the tree. Also accept a full
+	// previous short id after collision-lengthening (it remains the tail).
+	if strings.HasPrefix(logicalLower, compactQ) ||
+		(len(compactQ) >= 4 && strings.HasSuffix(logicalLower, compactQ)) {
+		return true
+	}
+	// Exact full physical only (dashed or compact) — never physical prefix.
+	compactID := strings.ReplaceAll(id, "-", "")
+	return id == q || compactID == compactQ
 }
 
 func isWordChar(r rune) bool {
@@ -1207,9 +1262,9 @@ func listDocumentsCmd(ctx context.Context, app App, sequence uint64) tea.Cmd {
 
 // previewMaxBytes caps how much of a document we paint in the side pane so a
 // multi-hundred-KB transcript never stalls navigation.
-const previewMaxBytes = 96 << 10
+const previewMaxBytes = 64 << 10
 
-func previewCmd(ctx context.Context, app App, selector string, width int, generation uint64) tea.Cmd {
+func previewCmd(ctx context.Context, app App, selector, summary string, size int64, width int, generation uint64) tea.Cmd {
 	return func() tea.Msg {
 		location, err := app.ResolveDocumentLocation(ctx, membox.ResolveLocationQuery{Selector: selector})
 		if err != nil {
@@ -1220,29 +1275,88 @@ func previewCmd(ctx context.Context, app App, selector string, width int, genera
 			rendered := renderMarkdownPreview(plain, width)
 			return previewMsg{
 				documentID: selector, content: plain, rendered: rendered,
-				width: width, generation: generation,
+				width: width, size: size, generation: generation,
 			}
 		}
-		body, err := app.ReadDocument(ctx, membox.ReadDocumentQuery{Selector: selector})
+		raw, err := readPreviewSource(ctx, app, selector, location.Path)
 		if err != nil {
 			return previewMsg{documentID: selector, generation: generation, err: err}
 		}
-		raw := string(body)
-		// A stored summary (e.g. generated from the review feed's 总结 button)
-		// leads the preview so the takeaway is visible before the body.
-		if summary, summaryErr := app.ReadDocumentSummary(ctx, selector); summaryErr == nil && strings.TrimSpace(summary) != "" {
-			raw = "摘要：" + strings.TrimSpace(summary) + "\n\n" + raw
+		// Prefer the summary already on the list row (no extra SQLite round-trip).
+		// Fall back to a metadata read for callers that did not pass one.
+		summary = strings.TrimSpace(summary)
+		if summary == "" {
+			if stored, summaryErr := app.ReadDocumentSummary(ctx, selector); summaryErr == nil {
+				summary = strings.TrimSpace(stored)
+			}
 		}
-		if len(raw) > previewMaxBytes {
-			raw = raw[:previewMaxBytes] + "\n\n… (preview truncated)\n"
+		if summary != "" {
+			raw = "摘要：" + summary + "\n\n" + raw
 		}
 		// Lightweight line renderer (not glamour) — still off the UI goroutine.
 		rendered := renderMarkdownPreview(raw, width)
 		return previewMsg{
 			documentID: selector, content: raw, rendered: rendered,
-			width: width, generation: generation,
+			width: width, size: size, generation: generation,
 		}
 	}
+}
+
+// readPreviewSource loads only the head of a note for the side pane. Prefer a
+// bounded filesystem read so multi-MB Markdown never fully enters memory just
+// to paint a 40-row viewport. Fall back to App.ReadDocument for tests / odd paths.
+func readPreviewSource(ctx context.Context, app App, selector, path string) (string, error) {
+	if path != "" {
+		if raw, err := readFileHead(path, previewMaxBytes); err == nil {
+			return raw, nil
+		}
+	}
+	body, err := app.ReadDocument(ctx, membox.ReadDocumentQuery{Selector: selector})
+	if err != nil {
+		return "", err
+	}
+	return clampPreviewBytes(string(body)), nil
+}
+
+func readFileHead(path string, limit int) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	buf := make([]byte, limit+1)
+	n, err := io.ReadFull(file, buf)
+	if err == io.EOF || err == io.ErrUnexpectedEOF {
+		err = nil
+	}
+	if err != nil && n == 0 {
+		return "", err
+	}
+	truncated := n > limit
+	if truncated {
+		n = limit
+	}
+	// Avoid splitting a UTF-8 code point at the byte cap.
+	for n > 0 && !utf8.Valid(buf[:n]) {
+		n--
+		truncated = true
+	}
+	raw := string(buf[:n])
+	if truncated {
+		raw += "\n\n… (preview truncated)\n"
+	}
+	return raw, nil
+}
+
+func clampPreviewBytes(raw string) string {
+	if len(raw) <= previewMaxBytes {
+		return raw
+	}
+	n := previewMaxBytes
+	for n > 0 && !utf8.ValidString(raw[:n]) {
+		n--
+	}
+	return raw[:n] + "\n\n… (preview truncated)\n"
 }
 func scanCmd(ctx context.Context, app App) tea.Cmd {
 	return func() tea.Msg {

@@ -9,15 +9,20 @@ membox MVP 不保存 Markdown 内容副本，也不引入 blob storage。
 
 ```text
 Markdown 文件          内容事实（content authority）
-SQLite documents.id   身份事实（identity authority）
+SQLite documents.id   物理身份（physical UUID，UUIDv7，永不改写）
+逻辑 short id          可见身份（compact UUID 唯一后缀，默认 4 位，碰撞加长）
 文件系统路径            当前位置（location）
 SQLite FTS5            可重建的搜索索引
 ```
 
-一个文档的 UUID 不因内容修改而改变：
+物理 UUID 只存在于 SQLite 主键与内部 FK。CLI / TUI / Web / Agent 只暴露逻辑 short id，
+并按逻辑 id 正序（左到右前缀）解析选择器。UUIDv7 时间前缀（如 `01a014b8`）不再作为短选择器。
+
+一个文档的物理 UUID 不因内容修改而改变：
 
 ```text
-Document ID: 019...
+Physical ID: 019fbde8-…-c344   # SQLite documents.id
+Logical ID:  c344              # 列表/TUI/命令里看到的
 Location:    ~/notes/a.md
 SHA-256:     当前字节内容的指纹
 ```

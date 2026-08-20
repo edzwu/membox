@@ -84,6 +84,7 @@ func (s *Store) SaveScan(ctx context.Context, indexedPath *catalog.IndexedPath, 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing scan: %w", err)
 	}
+	s.invalidateLogicalIDs()
 	return nil
 }
 
@@ -99,7 +100,11 @@ func (s *Store) SaveDocument(ctx context.Context, save port.ScanSave) error {
 	if err := saveContentVersion(ctx, tx, save); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.invalidateLogicalIDs()
+	return nil
 }
 
 func (s *Store) SaveSourceTimes(ctx context.Context, documents []*catalog.Document) error {

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -21,6 +22,14 @@ var selectorPattern = regexp.MustCompile(`^[0-9a-fA-F-]+$`)
 type Store struct {
 	db   *sql.DB
 	path string
+
+	// logicalMu guards the derived logical-id cache. Physical documents.id
+	// values never change; logical short ids are recomputed when the set of
+	// physical ids changes so collisions lengthen without rewriting the DB.
+	logicalMu      sync.RWMutex
+	logicalByPhys  map[string]string
+	logicalLoaded  bool
+	logicalDirty   bool
 }
 
 func Open(path string) (*Store, error) {

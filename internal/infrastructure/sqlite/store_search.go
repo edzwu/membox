@@ -80,22 +80,22 @@ func (s *Store) SuggestDocuments(ctx context.Context, query string, limit int) (
 	if len(terms) == 0 {
 		return nil, errors.New("suggestion query is empty")
 	}
-	conditions := make([]string, 0, len(terms))
-	args := make([]any, 0, len(terms)*3+1)
-	for _, term := range terms {
-		conditions = append(conditions,
-			"(instr(lower(d.id),?)>0 OR instr(lower(COALESCE(i.title,'')),?)>0 OR instr(lower(l.relative_path),?)>0)")
-		args = append(args, term, term, term)
+	if limit <= 0 {
+		limit = 50
 	}
-	args = append(args, limit)
+	logical, err := s.logicalSnapshot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// Identity suggestions match the visible logical id (prefix / 正序) and
+	// title/path. Physical UUID substrings are intentionally not searched —
+	// UUIDv7 time prefixes collide and must stay a storage concern.
 	rows, err := s.db.QueryContext(ctx, `SELECT d.id,COALESCE(i.title,''),l.relative_path,''
 FROM documents d
 JOIN document_locations l ON l.document_id=d.id
 LEFT JOIN document_index i ON i.document_id=d.id
 WHERE l.status='active' AND `+notTrashedClause+`
-  AND `+strings.Join(conditions, " AND ")+`
-ORDER BY lower(COALESCE(i.title,'')),lower(l.relative_path)
-LIMIT ?`, args...)
+ORDER BY lower(COALESCE(i.title,'')),lower(l.relative_path)`)
 	if err != nil {
 		return nil, fmt.Errorf("suggesting documents: %w", err)
 	}
@@ -106,7 +106,31 @@ LIMIT ?`, args...)
 		if err := rows.Scan(&hit.DocumentID, &hit.Title, &hit.Path, &hit.Snippet); err != nil {
 			return nil, err
 		}
+		physical := string(hit.DocumentID)
+		short := catalog.LookupLogical(physical, logical)
+		title := strings.ToLower(hit.Title)
+		path := strings.ToLower(hit.Path)
+		ok := true
+		for _, term := range terms {
+			compactTerm := strings.ReplaceAll(term, "-", "")
+			// Prefix = left-to-right on the current visible id. Suffix keeps
+			// previously copied short ids working after a collision lengthens
+			// the abbreviation (git-style).
+			logicalHit := compactTerm != "" && (strings.HasPrefix(short, compactTerm) ||
+				(len(compactTerm) >= catalog.MinLogicalIDLen && strings.HasSuffix(short, compactTerm)))
+			exactPhysical := term == strings.ToLower(physical) || compactTerm == catalog.CompactID(physical)
+			if !logicalHit && !exactPhysical && !strings.Contains(title, term) && !strings.Contains(path, term) {
+				ok = false
+				break
+			}
+		}
+		if !ok {
+			continue
+		}
 		hits = append(hits, hit)
+		if len(hits) >= limit {
+			break
+		}
 	}
 	return hits, rows.Err()
 }
@@ -190,25 +214,31 @@ func (s *Store) ResolveDocument(ctx context.Context, selector string) (*catalog.
 	if !selectorPattern.MatchString(selector) {
 		return nil, "", fmt.Errorf("invalid document selector %q", selector)
 	}
-	// UI short IDs are the *last* 4 hex chars (see host.ShortDocumentID).
-	// Prefer prefix match (full/partial UUID), then unique suffix match.
-	docs, paths, err := s.queryDocumentsByIDPattern(ctx, selector+"%")
+	// Physical UUID stays the SQLite primary key. Logical short ids are
+	// unique compact suffixes (4+ hex chars, lengthened on collision) so
+	// users can type the visible id left-to-right without hitting UUID v7
+	// time-prefix collisions like "01a014b8".
+	logical, err := s.logicalSnapshot(ctx)
 	if err != nil {
 		return nil, "", err
 	}
-	if len(docs) == 0 {
-		docs, paths, err = s.queryDocumentsByIDPattern(ctx, "%"+selector)
-		if err != nil {
-			return nil, "", err
+	physical, err := catalog.MatchLogicalSelector(selector, logical)
+	if err != nil {
+		return nil, "", err
+	}
+	doc, path, err := s.getDocumentByID(ctx, physical)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, "", fmt.Errorf("document %q not found", selector)
 		}
+		return nil, "", err
 	}
-	if len(docs) == 0 {
-		return nil, "", fmt.Errorf("document %q not found", selector)
-	}
-	if len(docs) > 1 {
-		return nil, "", fmt.Errorf("document selector %q is ambiguous; use a longer id", selector)
-	}
-	return docs[0], paths[0], nil
+	return doc, path, nil
+}
+
+func (s *Store) getDocumentByID(ctx context.Context, id string) (*catalog.Document, string, error) {
+	row := s.db.QueryRowContext(ctx, documentSelect+` WHERE lower(d.id)=lower(?)`, id)
+	return scanDocument(row)
 }
 
 func (s *Store) queryDocumentsByIDPattern(ctx context.Context, pattern string) ([]*catalog.Document, []string, error) {

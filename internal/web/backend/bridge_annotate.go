@@ -188,8 +188,9 @@ func (s *Server) liveAnnotationSidecar(ctx context.Context, pageID string) (map[
 		if exact == "" {
 			continue
 		}
-		entry := annotationMap(record, exact, note)
+		entry := s.annotationMap(ctx, record, exact, note)
 		annotations = append(annotations, entry)
+		refs[s.logicalID(ctx, string(record.NoteDocumentID))] = true
 		refs[string(record.NoteDocumentID)] = true
 		anchors[anchorKey{exact: exact, start: record.Start}] = true
 	}
@@ -242,7 +243,7 @@ func (s *Server) liveAnnotationSidecar(ctx context.Context, pageID string) (map[
 	return sidecar, len(annotations) > 0 || progress != nil, nil
 }
 
-func annotationMap(record port.AnnotationNoteRecord, exact, note string) map[string]any {
+func (s *Server) annotationMap(ctx context.Context, record port.AnnotationNoteRecord, exact, note string) map[string]any {
 	noteValue := any(nil)
 	if strings.TrimSpace(note) != "" {
 		noteValue = note
@@ -251,7 +252,7 @@ func annotationMap(record port.AnnotationNoteRecord, exact, note string) map[str
 		"start": record.Start, "end": record.Start + jsStringLength(exact), "exact": exact,
 		"prefix": record.Prefix, "suffix": record.Suffix,
 		"highlight": record.Highlight, "underline": record.Underline, "strikethrough": record.Strikethrough,
-		"note": noteValue, "ref": string(record.NoteDocumentID),
+		"note": noteValue, "ref": s.logicalID(ctx, string(record.NoteDocumentID)),
 	}
 	if kind := application.NormalizeAnnotationNoteKind(record.Kind); kind != "" {
 		out["kind"] = kind
@@ -279,9 +280,11 @@ func (s *Server) reconcileAnnotationNotes(ctx context.Context, pageID string, pa
 		}
 	}
 	newRevision := existingRevision
-	byRef := make(map[string]port.AnnotationNoteRecord, len(existing))
+	byRef := make(map[string]port.AnnotationNoteRecord, len(existing)*2)
 	for _, record := range existing {
-		byRef[string(record.NoteDocumentID)] = record
+		physical := string(record.NoteDocumentID)
+		byRef[physical] = record
+		byRef[s.logicalID(ctx, physical)] = record
 	}
 	seen := map[string]bool{}
 	out := make([]map[string]any, 0, len(payload.Annotations))
@@ -353,12 +356,13 @@ func (s *Server) reconcileAnnotationNotes(ctx context.Context, pageID string, pa
 		if saveErr != nil {
 			return nil, 0, false, saveErr
 		}
-		ref = string(result.Record.NoteDocumentID)
+		ref = s.logicalID(ctx, string(result.Record.NoteDocumentID))
 		if ms := result.Record.UpdatedAt.UnixMilli(); ms > newRevision {
 			newRevision = ms
 		}
 		seen[ref] = true
-		saved := annotationMap(result.Record, exact, note)
+		seen[string(result.Record.NoteDocumentID)] = true
+		saved := s.annotationMap(ctx, result.Record, exact, note)
 		if clientID := strings.TrimSpace(anchor.ClientID); clientID != "" {
 			saved["clientId"] = clientID
 		}
@@ -372,7 +376,8 @@ func (s *Server) reconcileAnnotationNotes(ctx context.Context, pageID string, pa
 		// before other notes were created or restored) must never wipe them.
 		hasOmitted := false
 		for _, record := range existing {
-			if !seen[string(record.NoteDocumentID)] {
+			physical := string(record.NoteDocumentID)
+			if !seen[physical] && !seen[s.logicalID(ctx, physical)] {
 				hasOmitted = true
 				break
 			}
@@ -381,9 +386,10 @@ func (s *Server) reconcileAnnotationNotes(ctx context.Context, pageID string, pa
 		replacementApplied = authorized
 		if authorized {
 			for _, record := range existing {
-				ref := string(record.NoteDocumentID)
-				if !seen[ref] {
-					if err := s.service.DeleteAnnotationNote(ctx, pageID, ref); err != nil {
+				physical := string(record.NoteDocumentID)
+				logical := s.logicalID(ctx, physical)
+				if !seen[physical] && !seen[logical] {
+					if err := s.service.DeleteAnnotationNote(ctx, pageID, physical); err != nil {
 						return nil, 0, false, err
 					}
 				}

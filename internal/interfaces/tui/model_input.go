@@ -70,6 +70,7 @@ func (m Model) updateFilterInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Enter always opens the selected document (fzf-style): the draft
 		// already filtered the list live, so typing + enter is the fastest
 		// path to a result. Pinning the draft as a tag lives on tab.
+		m.rememberFilterHistory(m.input.Value())
 		m.hideInput()
 		if document, ok := m.selectedDocument(); ok {
 			m.loading = true
@@ -82,15 +83,16 @@ func (m Model) updateFilterInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(m.spinner.Tick, resolveViewerCmd(m.ctx, m.app, document.ID))
 		}
 		return m, nil
-	case "up", "down", "pgup", "pgdown":
-		return m.moveSelection(msg.String())
-	case "home", "end":
-		if m.viewMode == viewTree {
-			return m.moveSelection(msg.String())
-		}
+	case "up", "down":
+		// While the filter is focused, ↑/↓ recall prior filter queries — not
+		// the tree. Esc first to move the selection again.
+		return m.navigateFilterHistory(msg.String())
+	case "pgup", "pgdown", "home", "end":
+		// Tree/list paging stays locked until the filter input blurs.
 		return m, nil
 	case "ctrl+u":
 		m.input.SetValue("")
+		m.historyIndex = len(m.filterHistory)
 		return m, m.filterChanged(nil)
 	case "backspace":
 		if m.input.Value() == "" && m.removeLastFilter() {
@@ -114,6 +116,28 @@ func (m Model) updateFilterInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var command tea.Cmd
 	m.input, command = m.input.Update(msg)
 	return m, m.filterChanged(command)
+}
+
+// navigateFilterHistory walks filterHistory like a shell prompt. Recalling a
+// prior query also re-runs the live filter so the tree matches the draft.
+func (m Model) navigateFilterHistory(key string) (tea.Model, tea.Cmd) {
+	if len(m.filterHistory) == 0 {
+		return m, nil
+	}
+	if key == "up" {
+		if m.historyIndex > 0 {
+			m.historyIndex--
+		}
+	} else if m.historyIndex < len(m.filterHistory) {
+		m.historyIndex++
+	}
+	if m.historyIndex == len(m.filterHistory) {
+		m.input.SetValue("")
+	} else {
+		m.input.SetValue(m.filterHistory[m.historyIndex])
+	}
+	m.input.CursorEnd()
+	return m, m.filterChanged(nil)
 }
 
 func (m Model) updateAgentInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {

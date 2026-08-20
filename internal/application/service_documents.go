@@ -95,6 +95,16 @@ func (s *Service) ResolveDocument(ctx context.Context, selector string) (*catalo
 	return s.store.ResolveDocument(ctx, selector)
 }
 
+// LogicalID returns the visible short id for a physical document UUID.
+func (s *Service) LogicalID(ctx context.Context, physicalID string) (string, error) {
+	return s.store.LogicalID(ctx, physicalID)
+}
+
+// LogicalIDs returns the full physical→logical abbreviation map.
+func (s *Service) LogicalIDs(ctx context.Context) (map[string]string, error) {
+	return s.store.LogicalIDs(ctx)
+}
+
 func (s *Service) ReadDocument(ctx context.Context, selector string) ([]byte, error) {
 	document, absolute, err := s.ResolveDocument(ctx, selector)
 	if err != nil {

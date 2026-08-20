@@ -454,18 +454,20 @@ func TestModel_HomeAndEndMoveToTreeBoundaries(t *testing.T) {
 		t.Fatalf("Home did not focus first tree row: selected=%d top=%d", model.selected, model.scrollTop)
 	}
 
-	model.inputVisible, model.inputActive = true, true
+	// While the filter is focused, Home/End stay off the tree — esc first.
+	model.selected = 3
+	model.inputVisible, model.inputActive, model.inputMode = true, true, inputModeSearch
 	model.input.Focus()
 	model.input.SetValue("doc")
 	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnd})
 	model = updated.(Model)
-	if model.selected != len(model.filtered)-1 || model.input.Value() != "doc" {
-		t.Fatalf("End with active input did not focus final row: selected=%d input=%q", model.selected, model.input.Value())
+	if model.selected != 3 || model.input.Value() != "doc" {
+		t.Fatalf("End with active filter moved tree: selected=%d input=%q", model.selected, model.input.Value())
 	}
 	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyHome})
 	model = updated.(Model)
-	if model.selected != 0 || model.scrollTop != 0 || model.input.Value() != "doc" {
-		t.Fatalf("Home with active input did not focus first row: selected=%d top=%d input=%q", model.selected, model.scrollTop, model.input.Value())
+	if model.selected != 3 || model.input.Value() != "doc" {
+		t.Fatalf("Home with active filter moved tree: selected=%d input=%q", model.selected, model.input.Value())
 	}
 }
 
@@ -622,6 +624,61 @@ func TestModel_PDFPreviewNeverReadsBinaryIntoTerminal(t *testing.T) {
 	}
 }
 
+func TestModel_PreviewCacheServesSecondLoad(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.width, model.height = 120, 24
+	model.resize()
+	model.items = documentItems([]membox.DocumentView{{
+		ID: "doc-cache", Title: "Cached", Path: "/tmp/cached.md", RelativePath: "cached.md", Size: 42,
+	}})
+	model.refreshFilter()
+	model.putPreviewCache("doc-cache", 42, model.preview.Width, "# body\n", "body")
+
+	cmd := model.loadPreview()
+	if cmd != nil {
+		t.Fatal("cache hit should not schedule a disk load")
+	}
+	if model.rawDocumentID != "doc-cache" || model.renderedPreview != "body" {
+		t.Fatalf("cache was not applied: id=%q rendered=%q", model.rawDocumentID, model.renderedPreview)
+	}
+}
+
+func TestModel_FilterKeystrokeDoesNotReloadSamePreview(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.width, model.height = 120, 24
+	model.resize()
+	model.items = documentItems([]membox.DocumentView{{
+		ID: "doc-keep", Title: "Keep", Path: "/tmp/keep.md", RelativePath: "keep.md",
+	}})
+	model.refreshFilter()
+	model.rawDocumentID = "doc-keep"
+	model.rawContent = "hello world"
+	model.renderedPreview = "hello world"
+	model.renderedWidth = model.preview.Width
+	model.inputVisible, model.inputActive, model.inputMode = true, true, inputModeSearch
+	model.input.Focus()
+	model.input.SetValue("hel")
+
+	cmd := model.filterChanged(nil)
+	if cmd != nil {
+		// A batch that only carries a nil input command is fine; a loadPreview tick is not.
+		msg := cmd()
+		if _, ok := msg.(previewDebounceMsg); ok {
+			t.Fatal("filter keystroke re-triggered preview load for the same document")
+		}
+		if batch, ok := msg.(tea.BatchMsg); ok {
+			for _, part := range batch {
+				if part == nil {
+					continue
+				}
+				if _, ok := part().(previewDebounceMsg); ok {
+					t.Fatal("filter keystroke re-triggered preview load for the same document")
+				}
+			}
+		}
+	}
+}
+
 func TestModel_CtrlPCyclesMediaScopeWithoutChangingInputMode(t *testing.T) {
 	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
@@ -752,6 +809,66 @@ func TestModel_CommandExecutionClearsInputAndHistoryNavigates(t *testing.T) {
 	model = updated.(Model)
 	if model.input.Value() != "" {
 		t.Fatalf("down did not return to empty draft: %q", model.input.Value())
+	}
+}
+
+func TestModel_FilterInputHistoryLocksTreeNavigation(t *testing.T) {
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.items = documentItems([]membox.DocumentView{
+		{ID: "019fbe56-64c3-7e3c-861d-000000000001", Title: "Alpha", Path: "/tmp/alpha.md", RelativePath: "alpha.md"},
+		{ID: "019fbe56-64c3-7e3c-861d-000000000002", Title: "Beta", Path: "/tmp/beta.md", RelativePath: "beta.md"},
+	})
+	model.refreshFilter()
+	model.selected = 0
+	model.inputVisible, model.inputActive, model.inputMode = true, true, inputModeSearch
+	model.input.Focus()
+	model.historyIndex = len(model.filterHistory)
+
+	// Pin a filter tag so it lands in history.
+	model.input.SetValue("alpha")
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	model = updated.(Model)
+	if len(model.filterHistory) != 1 || model.filterHistory[0] != "alpha" {
+		t.Fatalf("tab did not record filter history: %+v", model.filterHistory)
+	}
+	if model.selected != 0 {
+		t.Fatalf("tab moved tree selection: %d", model.selected)
+	}
+
+	// ↑ recalls history; selection must stay put while the filter is focused.
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyUp})
+	model = updated.(Model)
+	if model.input.Value() != "alpha" {
+		t.Fatalf("up did not recall filter: %q", model.input.Value())
+	}
+	if model.selected != 0 {
+		t.Fatalf("up moved tree selection while filter focused: %d", model.selected)
+	}
+
+	// ↓ returns to the empty draft; pgdown/home stay no-ops for the tree.
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = updated.(Model)
+	if model.input.Value() != "" {
+		t.Fatalf("down did not clear filter draft: %q", model.input.Value())
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	model = updated.(Model)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyHome})
+	model = updated.(Model)
+	if model.selected != 0 {
+		t.Fatalf("paging keys moved tree while filter focused: %d", model.selected)
+	}
+
+	// Esc unlocks the tree; ↓ then moves selection.
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model = updated.(Model)
+	if model.inputActive || model.inputVisible {
+		t.Fatalf("esc did not blur filter: active=%v visible=%v", model.inputActive, model.inputVisible)
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = updated.(Model)
+	if model.selected != 1 {
+		t.Fatalf("down after esc did not move tree: %d", model.selected)
 	}
 }
 
@@ -963,21 +1080,24 @@ func TestModel_LinkGraphDrawsStarCanvasAndNavigatesColumns(t *testing.T) {
 
 func TestModel_FilterNarrowsResults(t *testing.T) {
 	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	alphaID := "019fbde8-1764-7f17-bdbc-e4359f7d1111"
+	betaID := "019fbde8-1764-7f17-bdbc-e4359f7d2222"
 	model.items = documentItems([]membox.DocumentView{
-		{ID: "019-alpha", Title: "Alpha", Path: "/tmp/alpha.md", RelativePath: "alpha.md"},
-		{ID: "019-beta", Title: "Beta", Path: "/tmp/beta.md", RelativePath: "beta.md"},
+		{ID: alphaID, Title: "Alpha", Path: "/tmp/alpha.md", RelativePath: "alpha.md"},
+		{ID: betaID, Title: "Beta", Path: "/tmp/beta.md", RelativePath: "beta.md"},
 	})
 	model.inputVisible = true
 	model.input.SetValue("beta")
 	model.refreshFilter()
-	if len(model.filtered) != 1 || model.filtered[0].document.ID != "019-beta" {
+	if len(model.filtered) != 1 || model.filtered[0].document.ID != betaID {
 		t.Fatalf("unexpected filtered items: %+v", model.filtered)
 	}
 
-	model.input.SetValue("019-alpha")
+	// Name filter matches the visible logical id left-to-right, not the physical UUID.
+	model.input.SetValue(shortID(alphaID))
 	model.refreshFilter()
-	if len(model.filtered) != 1 || model.filtered[0].document.ID != "019-alpha" {
-		t.Fatalf("UUID filter did not match: %+v", model.filtered)
+	if len(model.filtered) != 1 || model.filtered[0].document.ID != alphaID {
+		t.Fatalf("logical id filter did not match: %+v", model.filtered)
 	}
 }
 
@@ -1217,22 +1337,30 @@ func TestModel_InvalidDateTagShowsErrorAndEscPreservesValidTags(t *testing.T) {
 	}
 }
 
-func TestModel_FilterMatchesUUIDSuffixAndUnicodeFilename(t *testing.T) {
+func TestModel_FilterMatchesLogicalIDAndUnicodeFilename(t *testing.T) {
 	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	target := "019fbde8-1764-7f17-bdbc-e4359f7dceed"
 	model.items = documentItems([]membox.DocumentView{
-		{ID: "019fbde8-1764-7f17-bdbc-e4359f7dceed", Title: "01-语言大乱斗-ts", Path: "/tmp/01-语言大乱斗-ts.md", RelativePath: "01-语言大乱斗-ts.md"},
+		{ID: target, Title: "01-语言大乱斗-ts", Path: "/tmp/01-语言大乱斗-ts.md", RelativePath: "01-语言大乱斗-ts.md"},
 		{ID: "019fbe56-64c3-7e3c-861d-4da66742dabf", Title: "Alpha", Path: "/tmp/alpha.md", RelativePath: "alpha.md"},
 	})
 	model.inputVisible = true
-	model.input.SetValue("ceed")
+	logical := shortID(target)
+	model.input.SetValue(logical)
 	model.refreshFilter()
-	if len(model.filtered) != 1 || model.filtered[0].document.ID != "019fbde8-1764-7f17-bdbc-e4359f7dceed" {
-		t.Fatalf("UUID suffix did not match: %+v", model.filtered)
+	if len(model.filtered) != 1 || model.filtered[0].document.ID != target {
+		t.Fatalf("logical id did not match: %+v (logical=%s)", model.filtered, logical)
 	}
-	model.input.SetValue("ceed 大乱斗")
+	// Physical time-prefix must not match in the TUI.
+	model.input.SetValue("019fbde8")
+	model.refreshFilter()
+	if len(model.filtered) != 0 {
+		t.Fatalf("physical UUID prefix leaked into name filter: %+v", model.filtered)
+	}
+	model.input.SetValue(logical + " 大乱斗")
 	model.refreshFilter()
 	if len(model.filtered) != 1 {
-		t.Fatalf("UUID suffix plus Unicode filename lost match: %+v", model.filtered)
+		t.Fatalf("logical id plus Unicode filename lost match: %+v", model.filtered)
 	}
 	model.input.SetValue("大乱斗")
 	model.refreshFilter()

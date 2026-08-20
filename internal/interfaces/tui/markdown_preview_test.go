@@ -39,7 +39,7 @@ func TestPreviewCmdPrependsStoredSummary(t *testing.T) {
 	done := make(chan struct{})
 	gen := uint64(7)
 	go func() {
-		msg = previewCmd(context.Background(), app, selectID, 60, gen)()
+		msg = previewCmd(context.Background(), app, selectID, app.previewSummary, 0, 60, gen)()
 		close(done)
 	}()
 	<-done

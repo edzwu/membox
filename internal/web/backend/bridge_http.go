@@ -228,6 +228,9 @@ func (s *Server) handleBridgeClips(writer http.ResponseWriter, request *http.Req
 	// had source_url text and never got a graph_edges row.
 	s.repairSourceLinks(ctx, sourceURL)
 	clips := s.listClipsBySourceURL(ctx, sourceURL, selectionOnly)
+	for i := range clips {
+		clips[i].ID = s.logicalID(ctx, clips[i].ID)
+	}
 	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
 	writer.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(writer).Encode(map[string]any{
@@ -563,11 +566,12 @@ func (s *Server) handleIngest(writer http.ResponseWriter, request *http.Request)
 				resp := ingestConflictResponse{}
 				resp.Error.Code = "clip_exists"
 				resp.Error.Message = "A page clip for this URL already exists. Confirm overwrite to replace its content and keep the same UUID."
+				existingLogical := s.logicalID(ctx, existingID)
 				resp.Existing = ingestResponse{
-					ID:      existingID,
+					ID:      existingLogical,
 					Path:    path,
 					Created: false,
-					ViewURL: s.ViewURL(existingID),
+					ViewURL: s.ViewURL(existingLogical),
 					Title:   existingTitle,
 				}
 				_ = json.NewEncoder(writer).Encode(resp)
@@ -589,14 +593,19 @@ func (s *Server) handleIngest(writer http.ResponseWriter, request *http.Request)
 				}
 			}
 			s.backfillPageAnnotations(ctx, existingID, sourceURL)
+			syncedLogical := s.logicalID(ctx, string(synced.DocumentID))
+			linkedLogical := ""
+			if linked != "" {
+				linkedLogical = s.logicalID(ctx, linked)
+			}
 			writer.Header().Set("Content-Type", "application/json; charset=utf-8")
 			_ = json.NewEncoder(writer).Encode(ingestResponse{
-				ID:      string(synced.DocumentID),
+				ID:      syncedLogical,
 				Path:    synced.Path,
 				Created: false,
 				Updated: true,
-				ViewURL: s.ViewURL(string(synced.DocumentID)),
-				Linked:  linked,
+				ViewURL: s.ViewURL(syncedLogical),
+				Linked:  linkedLogical,
 				Title:   title,
 			})
 			return
@@ -673,12 +682,17 @@ func (s *Server) handleIngest(writer http.ResponseWriter, request *http.Request)
 		s.backfillPageAnnotations(ctx, id, sourceURL)
 	}
 
+	logical := s.logicalID(ctx, id)
+	linkedLogical := ""
+	if linked != "" {
+		linkedLogical = s.logicalID(ctx, linked)
+	}
 	resp := ingestResponse{
-		ID:      id,
+		ID:      logical,
 		Path:    result.Path,
 		Created: true,
-		ViewURL: s.ViewURL(id),
-		Linked:  linked,
+		ViewURL: s.ViewURL(logical),
+		Linked:  linkedLogical,
 		Title:   title,
 	}
 	writer.Header().Set("Content-Type", "application/json; charset=utf-8")

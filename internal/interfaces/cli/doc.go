@@ -245,7 +245,13 @@ func newDocShowCommand(runtime *runtime) *cobra.Command {
 		if jsonOutput {
 			return writeJSON(cmd, document)
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "ID:          %s\n", document.ID)
+		// Human output shows only the logical id. Physical UUIDs remain the
+		// SQLite primary key and are available via --json as "id".
+		logical := document.ShortID
+		if logical == "" {
+			logical = shortID(document.ID)
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "ID:          %s\n", logical)
 		fmt.Fprintf(cmd.OutOrStdout(), "Path:        %s\n", document.Path)
 		fmt.Fprintf(cmd.OutOrStdout(), "Status:      %s\n", document.Status)
 		fmt.Fprintf(cmd.OutOrStdout(), "Title:       %s\n", document.Title)

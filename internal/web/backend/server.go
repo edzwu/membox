@@ -31,6 +31,22 @@ import (
 
 const integrationScript = `<script type="module" src="/membox/integration.js"></script>`
 
+// logicalID returns the user/agent-visible short id for a physical document
+// UUID. Physical ids remain SQLite primary keys and are not emitted on the
+// HTTP boundary except where binary asset paths still key on them.
+func (s *Server) logicalID(ctx context.Context, physical string) string {
+	physical = strings.TrimSpace(physical)
+	if physical == "" {
+		return ""
+	}
+	if s != nil && s.service != nil {
+		if id, err := s.service.LogicalID(ctx, physical); err == nil && id != "" {
+			return id
+		}
+	}
+	return catalog.FallbackLogicalID(physical)
+}
+
 // Server is a localhost-only HTTP server exposing the membox API and Miru.
 type Server struct {
 	service       *application.Service
@@ -241,7 +257,7 @@ func (s *Server) markdownPathRedirect(request *http.Request) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	return "/?id=" + url.QueryEscape(string(document.ID)), true
+	return "/?id=" + url.QueryEscape(s.logicalID(request.Context(), string(document.ID))), true
 }
 
 // handleDocumentByPath resolves a flat Markdown filename in the main path to
@@ -268,13 +284,14 @@ func (s *Server) handleDocumentByPath(writer http.ResponseWriter, request *http.
 	}
 	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
 	writer.Header().Set("Cache-Control", "no-store")
+	logical := s.logicalID(request.Context(), string(document.ID))
 	_ = json.NewEncoder(writer).Encode(map[string]any{
-		"id":       string(document.ID),
+		"id":       logical,
 		"title":    title,
 		"path":     document.Location.RelativePath,
 		"filename": filepath.Base(document.Location.RelativePath),
 		"absolute": absolute,
-		"view_url": s.ViewURL(string(document.ID)),
+		"view_url": s.ViewURL(logical),
 	})
 }
 
@@ -467,8 +484,9 @@ func (s *Server) handleDocumentRename(writer http.ResponseWriter, request *http.
 	}
 	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
 	writer.Header().Set("Cache-Control", "no-store")
+	logical := s.logicalID(request.Context(), string(result.DocumentID))
 	_ = json.NewEncoder(writer).Encode(map[string]string{
-		"id":       string(result.DocumentID),
+		"id":       logical,
 		"path":     result.Path,
 		"filename": filepath.Base(result.Path),
 		"title":    result.Title,
@@ -511,10 +529,11 @@ func (s *Server) handleRelatedCandidates(writer http.ResponseWriter, request *ht
 				return
 			}
 			focusID := string(focus.ID)
+			focusLogical := s.logicalID(request.Context(), focusID)
 			// Keep the current document out of the ordinary switcher list, but
-			// let an explicit UUID fragment find it. This makes pasting the ID a
-			// reliable identity lookup rather than an apparently empty search.
-			if queryLower == "" || !strings.Contains(strings.ToLower(focusID), queryLower) {
+			// let an explicit logical-id prefix find it. Physical UUIDs stay
+			// out of the HTTP search surface.
+			if queryLower == "" || !strings.HasPrefix(focusLogical, queryLower) {
 				excluded[focusID] = true
 			}
 		} else {
@@ -543,23 +562,25 @@ func (s *Server) handleRelatedCandidates(writer http.ResponseWriter, request *ht
 	}
 	candidates := make([]candidateView, 0, limit)
 	included := make(map[string]bool, limit)
-	appendCandidate := func(id, title, documentPath, openedAt string) bool {
-		if excluded[id] || included[id] {
+	appendCandidate := func(physicalID, title, documentPath, openedAt string) bool {
+		if excluded[physicalID] || included[physicalID] {
 			return false
 		}
+		logical := s.logicalID(request.Context(), physicalID)
 		// Selection-note documents stay out of normal title/recent browsing,
-		// but their durable UUID is still a valid Ctrl+O identity. Include one
-		// when the entered fragment actually occurs in that UUID.
+		// but their logical id remains a valid Ctrl+O identity.
 		if strings.HasSuffix(documentPath, "-note.md") &&
-			(purpose != "open" || queryLower == "" || !strings.Contains(strings.ToLower(id), queryLower)) {
+			(purpose != "open" || queryLower == "" ||
+				(!strings.HasPrefix(logical, queryLower) &&
+					!(len(queryLower) >= catalog.MinLogicalIDLen && strings.HasSuffix(logical, queryLower)))) {
 			return false
 		}
 		title = strings.TrimSpace(title)
 		if title == "" {
 			title = path.Base(documentPath)
 		}
-		candidates = append(candidates, candidateView{ID: id, Title: title, Path: documentPath, OpenedAt: openedAt})
-		included[id] = true
+		candidates = append(candidates, candidateView{ID: logical, Title: title, Path: documentPath, OpenedAt: openedAt})
+		included[physicalID] = true
 		return len(candidates) == limit
 	}
 	if query == "" {
@@ -654,11 +675,12 @@ func (s *Server) handleRelated(writer http.ResponseWriter, request *http.Request
 					return
 				}
 			}
-			id := string(link.Document.ID)
-			if seenRelated[id] {
+			physical := string(link.Document.ID)
+			id := s.logicalID(ctx, physical)
+			if seenRelated[physical] {
 				return
 			}
-			seenRelated[id] = true
+			seenRelated[physical] = true
 			title := link.Document.Index.Title
 			if strings.TrimSpace(title) == "" {
 				title = path.Base(link.Document.Location.RelativePath)
@@ -670,7 +692,7 @@ func (s *Server) handleRelated(writer http.ResponseWriter, request *http.Request
 				Direction: direction,
 			}
 			if isAnnotation && link.Document.ID == annotation.TargetDocumentID {
-				item.AnnotationRef = string(annotation.NoteDocumentID)
+				item.AnnotationRef = s.logicalID(ctx, string(annotation.NoteDocumentID))
 			}
 			related = append(related, item)
 		}
@@ -683,10 +705,12 @@ func (s *Server) handleRelated(writer http.ResponseWriter, request *http.Request
 		// Source PDFs only store a single edge to the conversion index. Surface
 		// the full chapter series so readers can jump into Markdown without first
 		// opening the TOC document.
+		focusPhysical := string(focus.ID)
+		focusLogical := s.logicalID(ctx, focusPhysical)
 		if focus.Index.MediaType == "application/pdf" {
-			if series, seriesErr := s.buildConversionSeries(ctx, string(focus.ID)); seriesErr == nil && series.Kind == "pdf-conversion" {
+			if series, seriesErr := s.buildConversionSeries(ctx, focusPhysical); seriesErr == nil && series.Kind == "pdf-conversion" {
 				for _, item := range series.Items {
-					if seenRelated[item.ID] || item.ID == string(focus.ID) {
+					if seenRelated[item.ID] || item.ID == focusLogical {
 						continue
 					}
 					seenRelated[item.ID] = true
@@ -709,7 +733,7 @@ func (s *Server) handleRelated(writer http.ResponseWriter, request *http.Request
 		writer.Header().Set("Content-Type", "application/json; charset=utf-8")
 		writer.Header().Set("Cache-Control", "no-store")
 		_ = json.NewEncoder(writer).Encode(map[string]any{
-			"focus":   map[string]string{"id": string(focus.ID), "title": focus.Index.Title},
+			"focus":   map[string]string{"id": focusLogical, "title": focus.Index.Title},
 			"related": related,
 		})
 	case http.MethodPost, http.MethodPut:
@@ -755,13 +779,14 @@ func (s *Server) handleRelated(writer http.ResponseWriter, request *http.Request
 			if title == "" {
 				title = path.Base(target.Location.RelativePath)
 			}
+			targetLogical := s.logicalID(ctx, string(target.ID))
 			writer.Header().Set("Content-Type", "application/json; charset=utf-8")
 			_ = json.NewEncoder(writer).Encode(map[string]any{
-				"id":             string(target.ID),
+				"id":             targetLogical,
 				"title":          title,
 				"path":           target.Location.RelativePath,
 				"already_exists": linked.AlreadyExists,
-				"view_url":       s.ViewURL(string(target.ID)),
+				"view_url":       s.ViewURL(targetLogical),
 			})
 			return
 		}
@@ -783,12 +808,13 @@ func (s *Server) handleRelated(writer http.ResponseWriter, request *http.Request
 			http.Error(writer, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		newLogical := s.logicalID(ctx, string(result.Document.ID))
 		writer.Header().Set("Content-Type", "application/json; charset=utf-8")
 		_ = json.NewEncoder(writer).Encode(map[string]any{
-			"id":       string(result.Document.ID),
+			"id":       newLogical,
 			"title":    result.Document.Index.Title,
 			"path":     result.Path,
-			"view_url": s.ViewURL(string(result.Document.ID)),
+			"view_url": s.ViewURL(newLogical),
 		})
 	default:
 		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
@@ -975,7 +1001,7 @@ func (s *Server) handleSync(writer http.ResponseWriter, request *http.Request) {
 			http.Error(writer, createErr.Error(), http.StatusInternalServerError)
 			return
 		}
-		response = saveResponse{ID: string(result.Document.ID), Path: result.Path, Created: true}
+		response = saveResponse{ID: s.logicalID(request.Context(), string(result.Document.ID)), Path: result.Path, Created: true}
 	} else {
 		// The source Markdown and its selection-note documents have independent
 		// authorities. Sync the source here, then reconcile annotation notes.
@@ -984,7 +1010,7 @@ func (s *Server) handleSync(writer http.ResponseWriter, request *http.Request) {
 			http.Error(writer, syncErr.Error(), http.StatusNotFound)
 			return
 		}
-		response = saveResponse{ID: string(result.DocumentID), Path: result.Path, Created: false}
+		response = saveResponse{ID: s.logicalID(request.Context(), string(result.DocumentID)), Path: result.Path, Created: false}
 	}
 	if annotations != "" {
 		var annotationPayload annotationWritePayload
@@ -1049,7 +1075,7 @@ func (s *Server) handleSave(writer http.ResponseWriter, request *http.Request) {
 	}
 	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
 	_ = json.NewEncoder(writer).Encode(saveResponse{
-		ID:      string(result.Document.ID),
+		ID:      s.logicalID(request.Context(), string(result.Document.ID)),
 		Path:    result.Path,
 		Created: true,
 	})

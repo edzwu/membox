@@ -48,6 +48,7 @@ func helpSections() []helpSection {
 		{title: "Filter & commands", entries: []helpEntry{
 			{":", "palette: doc new, pdf convert/server, rename, link …"},
 			{"enter / tab", "in input: open document / pin filter tag"},
+			{"↑ ↓", "in filter: prior queries · esc returns to tree"},
 			{"ctrl+f", "in input: name ⇄ content search"},
 			{"ctrl+o", "in input: options (match · case · name/content)"},
 			{"ctrl+k", "agent input"},

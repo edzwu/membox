@@ -45,7 +45,12 @@ func startServer(t *testing.T) (baseURL, docID, notesDir string) {
 	if err != nil || len(records) != 1 {
 		t.Fatalf("expected one indexed document, got %d (err=%v)", len(records), err)
 	}
-	docID = string(records[0].Document.ID)
+	physicalID := string(records[0].Document.ID)
+	logical, logicalErr := service.LogicalID(ctx, physicalID)
+	if logicalErr != nil || logical == "" {
+		t.Fatalf("logical id for %s: %v (%q)", physicalID, logicalErr, logical)
+	}
+	docID = logical
 
 	server := web.NewServer(service)
 	baseURL, err = server.Start(ctx, 0)
@@ -700,13 +705,20 @@ func TestSelectionNoteRelatedSourceCarriesReturnAnchor(t *testing.T) {
 	var related struct {
 		Related []struct {
 			ID            string `json:"id"`
+			Title         string `json:"title"`
 			AnnotationRef string `json:"annotation_ref"`
 		} `json:"related"`
 	}
 	mustUnmarshal(t, body, &related)
-	if len(related.Related) != 1 || related.Related[0].ID != docID || related.Related[0].AnnotationRef != noteID {
+	if len(related.Related) != 1 || related.Related[0].AnnotationRef != noteID {
 		t.Fatalf("source return anchor missing from related list: %q", body)
 	}
+	// Source card is identified by logical id (may lengthen after the note is
+	// created if tails collided); title is stable.
+	if related.Related[0].Title != "Flash Attention" || related.Related[0].ID == "" || related.Related[0].ID == noteID {
+		t.Fatalf("source return card wrong: %q", body)
+	}
+	docID = related.Related[0].ID
 
 	openPickerIDs := func(query string) []string {
 		t.Helper()
@@ -738,11 +750,17 @@ func TestSelectionNoteRelatedSourceCarriesReturnAnchor(t *testing.T) {
 		}
 		return false
 	}
-	if ids := openPickerIDs(noteID[len(noteID)-8:]); !containsID(ids, noteID) {
-		t.Fatalf("Ctrl+O UUID fragment did not find selection note %s: %v", noteID, ids)
+	// Ctrl+O matches the visible logical id left-to-right (not physical UUID tails).
+	if ids := openPickerIDs(noteID); !containsID(ids, noteID) {
+		t.Fatalf("Ctrl+O logical id did not find selection note %s: %v", noteID, ids)
+	}
+	if len(noteID) > 2 {
+		if ids := openPickerIDs(noteID[:len(noteID)-1]); !containsID(ids, noteID) {
+			t.Fatalf("Ctrl+O logical prefix did not find selection note %s: %v", noteID, ids)
+		}
 	}
 	if ids := openPickerIDs(docID); !containsID(ids, docID) {
-		t.Fatalf("Ctrl+O UUID did not find its current document %s: %v", docID, ids)
+		t.Fatalf("Ctrl+O logical id did not find its current document %s: %v", docID, ids)
 	}
 	if ids := openPickerIDs("body"); containsID(ids, noteID) {
 		t.Fatalf("Ctrl+O exposed an internal selection note through non-UUID text: %v", ids)
@@ -880,7 +898,10 @@ func TestServerRelatedSearchesAndLinksExistingDocument(t *testing.T) {
 		}
 	}
 	assertCandidate("Softmax", true)
-	assertCandidate(target.ID[len(target.ID)-6:], true)
+	assertCandidate(target.ID, true)
+	if len(target.ID) > 2 {
+		assertCandidate(target.ID[:len(target.ID)-1], true)
+	}
 
 	linkBody := postJSON(t, baseURL+"/api/doc/"+docID+"/related", map[string]string{"target_id": target.ID})
 	if !strings.Contains(string(linkBody), `"id":"`+target.ID+`"`) {

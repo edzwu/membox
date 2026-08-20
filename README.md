@@ -60,11 +60,14 @@ The default database is `~/.membox/membox.db`. Override the home with `MEMBOX_HO
 ## Identity model
 
 ```text
-Document UUID   stable logical identity
-Filesystem path current location
-SHA-256         current byte fingerprint
-SQLite FTS5     rebuildable search projection
+Physical UUID     stable database identity (documents.id, full UUIDv7)
+Logical short ID  visible 4+ hex chars (unique compact suffix; lengthens on collision)
+Filesystem path   current location
+SHA-256           current byte fingerprint
+SQLite FTS5       rebuildable search projection
 ```
+
+Listings, TUI, and CLI show the **logical** short id. Type it left-to-right (`mm doc show ab12`). Full physical UUIDs always work. UUIDv7 time prefixes (e.g. `01a014b8…`) collide heavily, so short selectors prefer the distinguishing tail rather than the physical prefix. Physical primary keys are never rewritten.
 
 External edits are reflected after `mm path scan`. The scanner supports `.md`, `.markdown`, and `.pdf`. A conservative scanner preserves identity for unique filesystem-file-key and exact-hash renames; ambiguous matches are never automatically merged.
 

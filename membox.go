@@ -13,6 +13,7 @@ import (
 	"membox/internal/application/port"
 	"membox/internal/bootstrap"
 	"membox/internal/domain/catalog"
+	"membox/internal/interfaces/host"
 	"membox/internal/web"
 	"membox/internal/web/backend"
 	"membox/internal/web/companion"
@@ -55,7 +56,30 @@ func Open(config Config) (*Box, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Box{service: service, home: config.Home}, nil
+	box := &Box{service: service, home: config.Home}
+	// Publish logical short ids so CLI/TUI shortID() helpers stay unique as
+	// the corpus grows. Physical UUIDs in SQLite are never rewritten.
+	_ = box.RefreshLogicalIDs(context.Background())
+	return box, nil
+}
+
+// RefreshLogicalIDs reloads unique short abbreviations from the catalog into
+// the process-wide display map. Safe to call after scans/imports.
+func (b *Box) RefreshLogicalIDs(ctx context.Context) error {
+	ids, err := b.service.LogicalIDs(ctx)
+	if err != nil {
+		return err
+	}
+	host.SetLogicalIDs(ids)
+	return nil
+}
+
+// ShortID returns the visible logical id for a physical document UUID.
+func (b *Box) ShortID(ctx context.Context, physicalID string) string {
+	if logical, err := b.service.LogicalID(ctx, physicalID); err == nil && logical != "" {
+		return logical
+	}
+	return host.ShortDocumentID(physicalID)
 }
 
 func (b *Box) Close() error {
@@ -65,6 +89,7 @@ func (b *Box) Close() error {
 		shutdownErr = b.webServer.Shutdown(ctx)
 		cancel()
 	}
+	host.SetLogicalIDs(nil)
 	return errors.Join(shutdownErr, b.service.Close())
 }
 
@@ -303,6 +328,9 @@ func (b *Box) RemovePath(ctx context.Context, command RemovePathCommand) (Remove
 
 func (b *Box) ScanPaths(ctx context.Context, command ScanPathsCommand) (ScanReport, error) {
 	report, err := b.service.ScanPaths(ctx, application.ScanOptions{Selector: command.Selector, TimestampSource: command.TimestampSource})
+	if err == nil {
+		_ = b.RefreshLogicalIDs(ctx)
+	}
 	return scanReport(report), err
 }
 
@@ -401,7 +429,10 @@ type SetReadStatusCommand struct {
 
 type GetDocumentQuery struct{ Selector string }
 type DocumentView struct {
-	ID           string     `json:"id"`
+	// ID is the physical UUID (stable SQLite primary key).
+	ID string `json:"id"`
+	// ShortID is the logical visible abbreviation (unique compact suffix).
+	ShortID      string     `json:"short_id,omitempty"`
 	Path         string     `json:"path"`
 	PathID       int64      `json:"path_id"`
 	RelativePath string     `json:"relative_path"`
@@ -476,7 +507,7 @@ func (b *Box) GetDocument(ctx context.Context, query GetDocumentQuery) (Document
 }
 
 func documentView(document *catalog.Document, path string) DocumentView {
-	view := DocumentView{ID: string(document.ID), Path: path, PathID: int64(document.Location.PathID), RelativePath: document.Location.RelativePath,
+	view := DocumentView{ID: string(document.ID), ShortID: host.ShortDocumentID(string(document.ID)), Path: path, PathID: int64(document.Location.PathID), RelativePath: document.Location.RelativePath,
 		Status: string(document.Status), Pinned: document.Pinned, Title: document.Index.Title, Summary: document.Index.Summary,
 		MediaType: document.Index.MediaType, Authors: document.Index.Authors, Year: document.Index.Year, Keywords: document.Index.Keywords,
 		PageCount: document.Index.PageCount, MTime: document.Index.MTime, Size: document.Index.Size, SHA256: document.Index.SHA256,
@@ -510,6 +541,7 @@ func (b *Box) ImportPDF(ctx context.Context, command ImportPDFCommand) (ImportPD
 	if err != nil {
 		return ImportPDFResult{}, err
 	}
+	_ = b.RefreshLogicalIDs(ctx)
 	return ImportPDFResult{Document: documentView(result.Document, result.Path), Path: result.Path}, nil
 }
 
@@ -563,6 +595,7 @@ func (b *Box) CreateNote(ctx context.Context, command CreateNoteCommand) (Create
 	if err != nil {
 		return CreateNoteResult{}, err
 	}
+	_ = b.RefreshLogicalIDs(ctx)
 	view := CreateNoteResult{Document: documentView(result.Document, result.Path)}
 	if result.Link != nil {
 		view.Link = &LinkView{FromDocumentID: string(result.Link.FromDocumentID), ToDocumentID: string(result.Link.ToDocumentID), Kind: string(result.Link.Kind)}
@@ -582,6 +615,7 @@ func (b *Box) CreateQuickNote(ctx context.Context, fromSelector string) (CreateN
 	if err != nil {
 		return CreateNoteResult{}, err
 	}
+	_ = b.RefreshLogicalIDs(ctx)
 	view := CreateNoteResult{Document: documentView(result.Document, result.Path)}
 	if result.Link != nil {
 		view.Link = &LinkView{FromDocumentID: string(result.Link.FromDocumentID), ToDocumentID: string(result.Link.ToDocumentID), Kind: string(result.Link.Kind)}
@@ -953,6 +987,9 @@ func (b *Box) PurgeTrash(ctx context.Context, command PurgeTrashCommand) (PurgeT
 		olderThan = time.Now().Add(-time.Duration(days) * 24 * time.Hour)
 	}
 	removed, freed, err := b.service.PurgeTrashedDocuments(ctx, olderThan)
+	if err == nil && removed > 0 {
+		_ = b.RefreshLogicalIDs(ctx)
+	}
 	return PurgeTrashResult{Removed: removed, BytesFreed: freed}, err
 }
 
