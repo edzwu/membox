@@ -21,6 +21,7 @@ export const elements = {
   empty: document.getElementById('empty'),
   emptyKbd: document.getElementById('empty-kbd'),
   toast: document.getElementById('toast'),
+  exportDock: document.getElementById('export-dock'),
   copyAll: document.getElementById('copy-all'),
   downloadAll: document.getElementById('download-all'),
   pngAll: document.getElementById('png-all'),
@@ -37,4 +38,5 @@ export const READING_CONTROLS = [
   elements.pngAll,
   elements.htmlAll,
   elements.copyPng,
+  elements.exportDock,
 ];

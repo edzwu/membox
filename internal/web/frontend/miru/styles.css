@@ -2210,27 +2210,81 @@ body.is-dragover::after {
   pointer-events: none;
 }
 
+/* Bottom-right export dock: Copy stays pinned; the lower-frequency export
+   actions (download / PNG / site) collapse into an extras tray that expands
+   when the pointer nears, mirroring the bottom-left status dock. */
+.export-dock {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 70;
+  /* Proximity pad — expands hover target without shifting the pill. */
+  padding: 20px 22px;
+  margin: -20px -22px;
+}
+
+.export-dock[hidden] {
+  display: none;
+}
+
+.export-cluster {
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--paper-raised);
+  box-shadow: 0 4px 16px var(--shadow);
+  overflow: hidden;
+}
+
+/* Low-frequency export tray: collapsed by default, opens on dock hover/focus. */
+.export-extras {
+  display: flex;
+  align-items: center;
+  max-width: 0;
+  opacity: 0;
+  overflow: hidden;
+  transition: max-width 0.2s ease, opacity 0.16s ease;
+}
+
+.export-dock:hover .export-extras,
+.export-dock:focus-within .export-extras {
+  max-width: 160px;
+  opacity: 1;
+}
+
 .copy-all,
 .download-all,
 .png-all,
 .html-all,
 .copy-png {
-  position: fixed;
-  right: 24px;
-  z-index: 70;
-  width: 36px;
-  height: 36px;
   appearance: none;
-  border: 1px solid var(--line);
-  background: var(--paper-raised);
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  background: transparent;
   color: var(--ink-soft);
-  border-radius: var(--radius);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 4px 16px var(--shadow);
-  transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+/* Segments inside the cluster are separated by hairline dividers; the first
+   extras button leans on the cluster's own border. */
+.download-all,
+.png-all,
+.html-all,
+.copy-png,
+.copy-all {
+  border-left: 1px solid color-mix(in srgb, var(--line) 85%, transparent);
+}
+
+.export-extras button:first-child {
+  border-left: 0;
 }
 
 .copy-all:hover,
@@ -2246,26 +2300,6 @@ body.is-dragover::after {
   color: var(--accent);
   border-color: var(--accent);
   background: var(--accent-soft);
-}
-
-.copy-all {
-  bottom: 24px;
-}
-
-.download-all {
-  bottom: 68px;
-}
-
-.png-all {
-  bottom: 112px;
-}
-
-.copy-png {
-  bottom: 156px;
-}
-
-.html-all {
-  bottom: 200px;
 }
 
 /* --------------------------------------------------------------------------
@@ -2346,6 +2380,13 @@ body.is-dragover::after {
   .lead-copy {
     right: 0;
     opacity: 1;
+  }
+
+  .export-dock {
+    right: 12px;
+    bottom: 12px;
+    padding: 16px 18px;
+    margin: -16px -18px;
   }
 
   .code-copy {
