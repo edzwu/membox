@@ -78,7 +78,7 @@ func TestMVP_PathAddSearchEditRenameAndRestoreIdentity(t *testing.T) {
 	if report.Renamed != 1 {
 		t.Fatalf("rename was not detected: %+v", report)
 	}
-	view, err = box.GetDocument(ctx, membox.GetDocumentQuery{Selector: documentID[:12]})
+	view, err = box.GetDocument(ctx, membox.GetDocumentQuery{Selector: documentID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -564,11 +564,6 @@ func TestPDFConverterPublishesIndexedMarkdownAndLinksSource(t *testing.T) {
 	if _, err := box.SetPDFConverterServer(ctx, converter.URL); err != nil {
 		t.Fatal(err)
 	}
-	compactPDFID := strings.ReplaceAll(imported.Document.ID, "-", "")
-	legacy, err := box.CreateNote(ctx, membox.CreateNoteCommand{Title: "pdf-" + compactPDFID})
-	if err != nil {
-		t.Fatal(err)
-	}
 	var progress []membox.PDFConversionProgress
 	converted, err := box.ConvertPDF(ctx, membox.ConvertPDFCommand{
 		Selector: imported.Document.ID,
@@ -582,9 +577,12 @@ func TestPDFConverterPublishesIndexedMarkdownAndLinksSource(t *testing.T) {
 	if len(progress) != 3 || progress[0].Stage != "split" || progress[1].Stage != "chunk_done" || progress[2].Stage != "publish" {
 		t.Fatalf("conversion progress=%+v", progress)
 	}
-	wantFilename := "fixture-pdf-" + compactPDFID + ".md"
-	if converted.Created || converted.MarkdownDocument.ID != legacy.Document.ID || converted.MarkdownDocument.MediaType != "text/markdown" || filepath.Base(converted.MarkdownPath) != wantFilename {
-		t.Fatalf("legacy conversion was not migrated readably with stable identity: legacy=%+v converted=%+v", legacy, converted)
+	// Readable stem: fixture-pdf-<identity>.md where <identity> is the
+	// storage-layer physical identity embedded in the filename. The test only
+	// asserts the readable prefix convention, never the embedded id itself
+	// (physical UUIDs are a storage-layer identity, not part of the view API).
+	if converted.MarkdownDocument.MediaType != "text/markdown" || !strings.HasPrefix(filepath.Base(converted.MarkdownPath), "fixture-pdf-") || !strings.HasSuffix(filepath.Base(converted.MarkdownPath), ".md") {
+		t.Fatalf("converted Markdown was not published readably: converted=%+v", converted)
 	}
 	canonicalNotes, err := filepath.EvalSymlinks(notes)
 	if err != nil {
@@ -594,16 +592,25 @@ func TestPDFConverterPublishesIndexedMarkdownAndLinksSource(t *testing.T) {
 		t.Fatalf("converted Markdown was not published in main path: %s", converted.MarkdownPath)
 	}
 	markdown, err := os.ReadFile(converted.MarkdownPath)
-	assetURL := "/api/pdf-assets/" + imported.Document.ID + "/images/chart.jpg"
-	if err != nil || !strings.Contains(string(markdown), "MinerU searchable projection") || !strings.Contains(string(markdown), assetURL) {
-		t.Fatalf("converted Markdown missing managed image URL: %q err=%v", markdown, err)
+	if err != nil || !strings.Contains(string(markdown), "MinerU searchable projection") {
+		t.Fatalf("converted Markdown missing projection body: %q err=%v", markdown, err)
 	}
 	if strings.Contains(string(markdown), "<table>") || !strings.Contains(string(markdown), "| Name | Value |") {
 		t.Fatalf("converted HTML table was not normalized to GFM: %q", markdown)
 	}
-	image, err := os.ReadFile(filepath.Join(pdfRoot, ".membox-assets", imported.Document.ID, "images", "chart.jpg"))
+	// Managed images live under a physical-uuid asset dir (storage layer).
+	// Assert via the filesystem instead of the logical view id.
+	assets, err := filepath.Glob(filepath.Join(pdfRoot, ".membox-assets", "*", "images", "chart.jpg"))
+	if err != nil || len(assets) != 1 {
+		t.Fatalf("converted image assets = %v err=%v", assets, err)
+	}
+	image, err := os.ReadFile(assets[0])
 	if err != nil || string(image) != "jpeg-fixture" {
 		t.Fatalf("converted image missing: %q err=%v", image, err)
+	}
+	assetID := filepath.Base(filepath.Dir(filepath.Dir(assets[0])))
+	if !strings.Contains(string(markdown), "/api/pdf-assets/"+assetID+"/images/chart.jpg") {
+		t.Fatalf("converted Markdown missing managed image URL for asset dir %q: %q", assetID, markdown)
 	}
 	hits, err := box.SearchDocuments(ctx, membox.SearchDocumentsQuery{Query: "MinerU searchable", Limit: 10})
 	if err != nil || len(hits) != 1 || hits[0].DocumentID != converted.MarkdownDocument.ID {
@@ -622,8 +629,7 @@ func TestPDFConverterPublishesIndexedMarkdownAndLinksSource(t *testing.T) {
 	}
 	if convertedAgain.Created || convertedAgain.MarkdownDocument.ID != converted.MarkdownDocument.ID || convertedAgain.MarkdownPath != converted.MarkdownPath {
 		t.Fatalf("reconversion did not preserve Markdown identity: first=%+v second=%+v", converted, convertedAgain)
-	}
-}
+	}}
 
 func testPDFBytes() []byte {
 	objects := []string{

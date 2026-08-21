@@ -19,6 +19,7 @@ import (
 	"unicode"
 
 	"membox/internal/application"
+	"membox/internal/domain/catalog"
 )
 
 // DefaultBrowserCourseCode is used when the browser clipper summarizes a
@@ -127,7 +128,7 @@ func FindByVideoID(ctx context.Context, service *application.Service, videoID, c
 	lectureNo, _ := strconv.Atoi(match.meta["lecture_no"])
 	playlistIndex, _ := strconv.Atoi(match.meta["playlist_index"])
 	return Result{
-		DocumentID: match.id, Path: absPath, Filename: filepath.Base(absPath),
+		DocumentID: serviceLogicalID(ctx, service, match.id), Path: absPath, Filename: filepath.Base(absPath),
 		CourseCode: match.meta["course_code"], CourseID: match.meta["course_id"],
 		CourseTitle: match.meta["course_title"], LectureNo: lectureNo,
 		LectureNoSource: match.meta["lecture_no_source"], PlaylistIndex: playlistIndex,
@@ -274,11 +275,27 @@ func Publish(ctx context.Context, service *application.Service, artifact Artifac
 	}
 
 	return Result{
-		DocumentID: summaryID, Path: upserted.Path, Filename: filename, Created: upserted.Created,
+		DocumentID: serviceLogicalID(ctx, service, summaryID), Path: upserted.Path, Filename: filename, Created: upserted.Created,
 		CourseCode: artifact.CourseCode, CourseID: artifact.CourseID, CourseTitle: artifact.CourseTitle,
 		LectureNo: artifact.LectureNo, LectureNoSource: artifact.LectureNoSource, PlaylistIndex: artifact.PlaylistIndex,
 		VideoID: artifact.VideoID, LectureTitle: displayTitle, SourceURL: artifact.SourceURL,
 	}, nil
+}
+
+// serviceLogicalID converts a physical document UUID to its logical visible
+// id. Physical UUIDs are a storage-layer identity; every Result exposed to
+// CLI/TUI/agents carries the logical id, which is itself a valid selector.
+func serviceLogicalID(ctx context.Context, service *application.Service, physical string) string {
+	physical = strings.TrimSpace(physical)
+	if physical == "" {
+		return ""
+	}
+	if service != nil {
+		if id, err := service.LogicalID(ctx, physical); err == nil && id != "" {
+			return id
+		}
+	}
+	return catalog.FallbackLogicalID(physical)
 }
 
 // SummaryFilename builds a stable, readable name.

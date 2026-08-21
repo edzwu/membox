@@ -15,7 +15,7 @@ membox 已经具备：
 
 - 稳定 **Document UUID**
 - 本地 Markdown 为内容权威
-- 本机 HTTP + **Miru** 阅读器（`/?id=<uuid>`）
+- 本机 HTTP + **Miru** 阅读器（`/?id=<logical-id>`）
 - `POST /api/save` / `POST /api/sync` 创建笔记并回写索引
 
 缺的是一条 **从「正在看的网页」到「membox 文档」** 的低摩擦导入路径。
@@ -62,7 +62,7 @@ MarkSnip Agent Bridge 的合理内核是：
 浏览任意网页
     →（扩展）一键 Save to membox
     → membox 分配 UUID，写入 notes 目录并索引
-    → 新标签打开 Miru：http://127.0.0.1:<port>/?id=<uuid>
+    → 新标签打开 Miru：http://127.0.0.1:<port>/?id=<logical-id>
     → 继续阅读 / 折叠 / 批注（现有能力）
 ```
 
@@ -142,7 +142,7 @@ MVP 推荐 **A**，版本与 `/api/ingest` 契约一起演进。
 验收：
 
 1. 成功时 toast/popup 显示标题 + 短 UUID  
-2. 自动（或确认后）打开 `http://127.0.0.1:<port>/?id=<uuid>`  
+2. 自动（或确认后）打开 `http://127.0.0.1:<port>/?id=<logical-id>`  
 3. `mm doc show <uuid>` 可见；磁盘上有对应 `.md`  
 4. Markdown 含来源 URL（front matter 或文首 meta）
 

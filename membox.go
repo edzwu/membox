@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -247,7 +248,7 @@ func (b *Box) OpenDocumentWeb(ctx context.Context, selector string) (string, err
 		return "", err
 	}
 	if document.Status != catalog.DocumentActive {
-		return "", fmt.Errorf("document %s is %s at %s", document.ID, document.Status, absolute)
+		return "", fmt.Errorf("document %s is %s at %s", b.ShortID(ctx, string(document.ID)), document.Status, absolute)
 	}
 	if document.Index.MediaType != "text/markdown" {
 		return "", fmt.Errorf("web reader does not support %s; open the file directly", document.Index.MediaType)
@@ -256,7 +257,7 @@ func (b *Box) OpenDocumentWeb(ctx context.Context, selector string) (string, err
 	if err != nil {
 		return "", err
 	}
-	return status.URL + "/?id=" + string(document.ID), nil
+	return status.URL + "/?id=" + url.QueryEscape(b.ShortID(ctx, string(document.ID))), nil
 }
 
 type PathView struct {
@@ -374,7 +375,7 @@ func (b *Box) SuggestDocuments(ctx context.Context, query SuggestDocumentsQuery)
 	out := make([]SearchResult, 0, len(hits))
 	for _, hit := range hits {
 		out = append(out, SearchResult{
-			DocumentID: string(hit.DocumentID),
+			DocumentID: b.ShortID(ctx, string(hit.DocumentID)),
 			Title:      hit.Title,
 			Path:       hit.Path,
 			Snippet:    hit.Snippet,
@@ -407,7 +408,7 @@ func (b *Box) SearchDocuments(ctx context.Context, query SearchDocumentsQuery) (
 				continue
 			}
 		}
-		out = append(out, SearchResult{DocumentID: string(hit.DocumentID), Title: hit.Title, Path: hit.Path, Snippet: hit.Snippet})
+		out = append(out, SearchResult{DocumentID: b.ShortID(ctx, string(hit.DocumentID)), Title: hit.Title, Path: hit.Path, Snippet: hit.Snippet})
 		if len(out) == limit {
 			break
 		}
@@ -429,10 +430,9 @@ type SetReadStatusCommand struct {
 
 type GetDocumentQuery struct{ Selector string }
 type DocumentView struct {
-	// ID is the physical UUID (stable SQLite primary key).
+	// ID is the logical visible document id (unique compact suffix). Physical
+	// UUIDs are a storage-layer identity and never cross the Box boundary.
 	ID string `json:"id"`
-	// ShortID is the logical visible abbreviation (unique compact suffix).
-	ShortID      string     `json:"short_id,omitempty"`
 	Path         string     `json:"path"`
 	PathID       int64      `json:"path_id"`
 	RelativePath string     `json:"relative_path"`
@@ -472,7 +472,7 @@ func (b *Box) ListDocuments(ctx context.Context, query ListDocumentsQuery) ([]Do
 		if query.MediaType != "" && record.Document.Index.MediaType != query.MediaType {
 			continue
 		}
-		view := documentView(record.Document, record.AbsolutePath)
+		view := b.documentView(ctx, record.Document, record.AbsolutePath)
 		view.ReadStatus = record.ReadStatus
 		views = append(views, view)
 		if len(views) == limit {
@@ -503,11 +503,11 @@ func (b *Box) GetDocument(ctx context.Context, query GetDocumentQuery) (Document
 	if err != nil {
 		return DocumentView{}, err
 	}
-	return documentView(document, path), nil
+	return b.documentView(ctx, document, path), nil
 }
 
-func documentView(document *catalog.Document, path string) DocumentView {
-	view := DocumentView{ID: string(document.ID), ShortID: host.ShortDocumentID(string(document.ID)), Path: path, PathID: int64(document.Location.PathID), RelativePath: document.Location.RelativePath,
+func (b *Box) documentView(ctx context.Context, document *catalog.Document, path string) DocumentView {
+	view := DocumentView{ID: b.ShortID(ctx, string(document.ID)), Path: path, PathID: int64(document.Location.PathID), RelativePath: document.Location.RelativePath,
 		Status: string(document.Status), Pinned: document.Pinned, Title: document.Index.Title, Summary: document.Index.Summary,
 		MediaType: document.Index.MediaType, Authors: document.Index.Authors, Year: document.Index.Year, Keywords: document.Index.Keywords,
 		PageCount: document.Index.PageCount, MTime: document.Index.MTime, Size: document.Index.Size, SHA256: document.Index.SHA256,
@@ -542,7 +542,7 @@ func (b *Box) ImportPDF(ctx context.Context, command ImportPDFCommand) (ImportPD
 		return ImportPDFResult{}, err
 	}
 	_ = b.RefreshLogicalIDs(ctx)
-	return ImportPDFResult{Document: documentView(result.Document, result.Path), Path: result.Path}, nil
+	return ImportPDFResult{Document: b.documentView(ctx, result.Document, result.Path), Path: result.Path}, nil
 }
 
 type UpdatePDFMetadataCommand struct {
@@ -560,7 +560,7 @@ func (b *Box) UpdatePDFMetadata(ctx context.Context, command UpdatePDFMetadataCo
 	if err != nil {
 		return DocumentView{}, err
 	}
-	return documentView(document, path), nil
+	return b.documentView(ctx, document, path), nil
 }
 
 type ResolveLocationQuery struct{ Selector string }
@@ -571,7 +571,7 @@ func (b *Box) ResolveDocumentLocation(ctx context.Context, query ResolveLocation
 	if err != nil {
 		return LocationView{}, err
 	}
-	return LocationView{DocumentID: string(document.ID), Path: path, Status: string(document.Status)}, nil
+	return LocationView{DocumentID: b.ShortID(ctx, string(document.ID)), Path: path, Status: string(document.Status)}, nil
 }
 
 type CreateNoteCommand struct {
@@ -580,6 +580,8 @@ type CreateNoteCommand struct {
 }
 
 type LinkView struct {
+	// FromDocumentID/ToDocumentID are logical document ids; physical UUIDs
+	// are a storage-layer identity and never cross the Box boundary.
 	FromDocumentID string `json:"from_document_id"`
 	ToDocumentID   string `json:"to_document_id"`
 	Kind           string `json:"kind"`
@@ -596,9 +598,9 @@ func (b *Box) CreateNote(ctx context.Context, command CreateNoteCommand) (Create
 		return CreateNoteResult{}, err
 	}
 	_ = b.RefreshLogicalIDs(ctx)
-	view := CreateNoteResult{Document: documentView(result.Document, result.Path)}
+	view := CreateNoteResult{Document: b.documentView(ctx, result.Document, result.Path)}
 	if result.Link != nil {
-		view.Link = &LinkView{FromDocumentID: string(result.Link.FromDocumentID), ToDocumentID: string(result.Link.ToDocumentID), Kind: string(result.Link.Kind)}
+		view.Link = &LinkView{FromDocumentID: b.ShortID(ctx, string(result.Link.FromDocumentID)), ToDocumentID: b.ShortID(ctx, string(result.Link.ToDocumentID)), Kind: string(result.Link.Kind)}
 	}
 	return view, nil
 }
@@ -616,9 +618,9 @@ func (b *Box) CreateQuickNote(ctx context.Context, fromSelector string) (CreateN
 		return CreateNoteResult{}, err
 	}
 	_ = b.RefreshLogicalIDs(ctx)
-	view := CreateNoteResult{Document: documentView(result.Document, result.Path)}
+	view := CreateNoteResult{Document: b.documentView(ctx, result.Document, result.Path)}
 	if result.Link != nil {
-		view.Link = &LinkView{FromDocumentID: string(result.Link.FromDocumentID), ToDocumentID: string(result.Link.ToDocumentID), Kind: string(result.Link.Kind)}
+		view.Link = &LinkView{FromDocumentID: b.ShortID(ctx, string(result.Link.FromDocumentID)), ToDocumentID: b.ShortID(ctx, string(result.Link.ToDocumentID)), Kind: string(result.Link.Kind)}
 	}
 	return view, nil
 }
@@ -649,7 +651,7 @@ func (b *Box) FinalizeQuickNote(ctx context.Context, selector string) (FinalizeQ
 		UsedLLM:  result.UsedLLM,
 	}
 	if result.Document != nil {
-		out.Document = documentView(result.Document, result.Path)
+		out.Document = b.documentView(ctx, result.Document, result.Path)
 	}
 	return out, nil
 }
@@ -663,12 +665,12 @@ type TopicView struct {
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 
-func topicView(record port.DocumentRecord) TopicView {
+func (b *Box) topicView(ctx context.Context, record port.DocumentRecord) TopicView {
 	name, _ := catalog.TopicNameForDocument(record.Document)
 	if name == "" {
 		name = record.Document.Index.Title
 	}
-	return TopicView{ID: string(record.Document.ID), Name: name, Path: record.AbsolutePath, RelativePath: record.Document.Location.RelativePath, CreatedAt: record.Document.CreatedAt, UpdatedAt: record.Document.UpdatedAt}
+	return TopicView{ID: b.ShortID(ctx, string(record.Document.ID)), Name: name, Path: record.AbsolutePath, RelativePath: record.Document.Location.RelativePath, CreatedAt: record.Document.CreatedAt, UpdatedAt: record.Document.UpdatedAt}
 }
 
 type ListTopicsQuery struct{}
@@ -680,7 +682,7 @@ func (b *Box) ListTopics(ctx context.Context, _ ListTopicsQuery) ([]TopicView, e
 	}
 	views := make([]TopicView, 0, len(topics))
 	for _, record := range topics {
-		views = append(views, topicView(record))
+		views = append(views, b.topicView(ctx, record))
 	}
 	return views, nil
 }
@@ -704,14 +706,14 @@ func (b *Box) CreateTopic(ctx context.Context, command CreateTopicCommand) (Crea
 	for _, existing := range before {
 		topicName, _ := catalog.TopicNameForDocument(existing.Document)
 		if strings.EqualFold(topicName, name) || strings.EqualFold(existing.Document.Index.Title, name) {
-			return CreateTopicResult{Topic: topicView(existing), AlreadyExists: true}, nil
+			return CreateTopicResult{Topic: b.topicView(ctx, existing), AlreadyExists: true}, nil
 		}
 	}
 	created, err := b.service.CreateNote(ctx, application.CreateNoteOptions{Title: name, Topic: true})
 	if err != nil {
 		return CreateTopicResult{}, err
 	}
-	return CreateTopicResult{Topic: topicView(port.DocumentRecord{Document: created.Document, AbsolutePath: created.Path})}, nil
+	return CreateTopicResult{Topic: b.topicView(ctx, port.DocumentRecord{Document: created.Document, AbsolutePath: created.Path})}, nil
 }
 
 type TopicMembershipCommand struct {
@@ -720,6 +722,8 @@ type TopicMembershipCommand struct {
 }
 
 type TopicMembershipResult struct {
+	// DocumentID is the logical document id; physical UUIDs are a storage-layer
+	// identity and never cross the Box boundary.
 	DocumentID    string    `json:"document_id"`
 	Topic         TopicView `json:"topic"`
 	Added         bool      `json:"added"`
@@ -737,7 +741,7 @@ func (b *Box) AddDocumentTopic(ctx context.Context, command TopicMembershipComma
 		return TopicMembershipResult{}, err
 	}
 	added, err := b.service.AddDocumentTopic(ctx, command.DocumentSelector, command.TopicSelector)
-	return TopicMembershipResult{DocumentID: string(document.ID), Topic: topicView(port.DocumentRecord{Document: topic}), Added: added, AlreadyExists: !added}, err
+	return TopicMembershipResult{DocumentID: b.ShortID(ctx, string(document.ID)), Topic: b.topicView(ctx, port.DocumentRecord{Document: topic}), Added: added, AlreadyExists: !added}, err
 }
 
 func (b *Box) RemoveDocumentTopic(ctx context.Context, command TopicMembershipCommand) (TopicMembershipResult, error) {
@@ -750,7 +754,7 @@ func (b *Box) RemoveDocumentTopic(ctx context.Context, command TopicMembershipCo
 		return TopicMembershipResult{}, err
 	}
 	removed, err := b.service.RemoveDocumentTopic(ctx, command.DocumentSelector, command.TopicSelector)
-	return TopicMembershipResult{DocumentID: string(document.ID), Topic: topicView(port.DocumentRecord{Document: topic}), Removed: removed}, err
+	return TopicMembershipResult{DocumentID: b.ShortID(ctx, string(document.ID)), Topic: b.topicView(ctx, port.DocumentRecord{Document: topic}), Removed: removed}, err
 }
 
 type ListTopicDocumentsQuery struct{ Selector string }
@@ -764,9 +768,9 @@ func (b *Box) ListTopicDocuments(ctx context.Context, query ListTopicDocumentsQu
 	if err != nil {
 		return TopicDocumentsView{}, err
 	}
-	result := TopicDocumentsView{Topic: topicView(port.DocumentRecord{Document: topic, AbsolutePath: topicPath}), Documents: make([]DocumentView, 0, len(links))}
+	result := TopicDocumentsView{Topic: b.topicView(ctx, port.DocumentRecord{Document: topic, AbsolutePath: topicPath}), Documents: make([]DocumentView, 0, len(links))}
 	for _, link := range links {
-		result.Documents = append(result.Documents, documentView(link.Document, link.Path))
+		result.Documents = append(result.Documents, b.documentView(ctx, link.Document, link.Path))
 	}
 	return result, nil
 }
@@ -818,19 +822,19 @@ func (b *Box) GetDocumentGraph(ctx context.Context, query GetDocumentGraphQuery)
 		focusPath = path
 	}
 	result := DocumentGraphView{
-		Focus:    documentView(document, focusPath),
+		Focus:    b.documentView(ctx, document, focusPath),
 		Outgoing: make([]DocumentView, 0, len(graph.Outgoing)),
 		Incoming: make([]DocumentView, 0, len(graph.Incoming)),
 		Topics:   make([]TopicView, 0, len(graph.Topics)),
 	}
 	for _, link := range graph.Outgoing {
-		result.Outgoing = append(result.Outgoing, documentView(link.Document, link.Path))
+		result.Outgoing = append(result.Outgoing, b.documentView(ctx, link.Document, link.Path))
 	}
 	for _, link := range graph.Incoming {
-		result.Incoming = append(result.Incoming, documentView(link.Document, link.Path))
+		result.Incoming = append(result.Incoming, b.documentView(ctx, link.Document, link.Path))
 	}
 	for _, link := range graph.Topics {
-		result.Topics = append(result.Topics, topicView(port.DocumentRecord{Document: link.Document, AbsolutePath: link.Path}))
+		result.Topics = append(result.Topics, b.topicView(ctx, port.DocumentRecord{Document: link.Document, AbsolutePath: link.Path}))
 	}
 	return result, nil
 }
@@ -846,6 +850,8 @@ type NeighborhoodNodeView struct {
 }
 
 type NeighborhoodEdgeView struct {
+	// FromID/ToID are logical document ids; physical UUIDs are a storage-layer
+	// identity and never cross the Box boundary.
 	FromID string `json:"from"`
 	ToID   string `json:"to"`
 }
@@ -865,16 +871,16 @@ func (b *Box) GetNeighborhood(ctx context.Context, query GetNeighborhoodQuery) (
 		return NeighborhoodView{}, err
 	}
 	view := NeighborhoodView{
-		Focus: documentView(neighborhood.Focus, neighborhood.FocusPath),
+		Focus: b.documentView(ctx, neighborhood.Focus, neighborhood.FocusPath),
 		Depth: neighborhood.Depth,
 		Nodes: make([]NeighborhoodNodeView, 0, len(neighborhood.Nodes)),
 		Edges: make([]NeighborhoodEdgeView, 0, len(neighborhood.Edges)),
 	}
 	for _, node := range neighborhood.Nodes {
-		view.Nodes = append(view.Nodes, NeighborhoodNodeView{DocumentView: documentView(node.Document, node.Path), Distance: node.Distance})
+		view.Nodes = append(view.Nodes, NeighborhoodNodeView{DocumentView: b.documentView(ctx, node.Document, node.Path), Distance: node.Distance})
 	}
 	for _, edge := range neighborhood.Edges {
-		view.Edges = append(view.Edges, NeighborhoodEdgeView{FromID: string(edge.From), ToID: string(edge.To)})
+		view.Edges = append(view.Edges, NeighborhoodEdgeView{FromID: b.ShortID(ctx, string(edge.From)), ToID: b.ShortID(ctx, string(edge.To))})
 	}
 	return view, nil
 }
@@ -904,18 +910,18 @@ func (b *Box) ReadDocumentText(ctx context.Context, query ReadDocumentQuery) ([]
 
 type ToggleDocumentPinCommand struct{ Selector string }
 type ToggleDocumentPinResult struct {
-	DocumentID string `json:"document_id"`
+	DocumentID string `json:"document_id"` // logical document id
 	Pinned     bool   `json:"pinned"`
 }
 
 func (b *Box) ToggleDocumentPin(ctx context.Context, command ToggleDocumentPinCommand) (ToggleDocumentPinResult, error) {
 	result, err := b.service.ToggleDocumentPin(ctx, command.Selector)
-	return ToggleDocumentPinResult{DocumentID: string(result.DocumentID), Pinned: result.Pinned}, err
+	return ToggleDocumentPinResult{DocumentID: b.ShortID(ctx, string(result.DocumentID)), Pinned: result.Pinned}, err
 }
 
 type DeleteDocumentCommand struct{ Selector string }
 type DeleteDocumentResult struct {
-	DocumentID string `json:"document_id"`
+	DocumentID string `json:"document_id"` // logical document id
 	Path       string `json:"path"`
 	Trashed    bool   `json:"trashed"`
 }
@@ -925,7 +931,7 @@ type DeleteDocumentResult struct {
 // purged. Restore with RestoreTrashedDocument.
 func (b *Box) DeleteDocument(ctx context.Context, command DeleteDocumentCommand) (DeleteDocumentResult, error) {
 	document, path, err := b.service.TrashDocumentFile(ctx, command.Selector)
-	return DeleteDocumentResult{DocumentID: string(document.ID), Path: path, Trashed: true}, err
+	return DeleteDocumentResult{DocumentID: b.ShortID(ctx, string(document.ID)), Path: path, Trashed: true}, err
 }
 
 type TrashItemView struct {
@@ -947,7 +953,7 @@ func (b *Box) ListTrash(ctx context.Context) ([]TrashItemView, error) {
 	for _, record := range records {
 		trash := byID[string(record.Document.ID)]
 		views = append(views, TrashItemView{
-			DocumentView:       documentView(record.Document, record.AbsolutePath),
+			DocumentView:       b.documentView(ctx, record.Document, record.AbsolutePath),
 			OriginRelativePath: trash.OriginRelativePath,
 			TrashedAt:          trash.TrashedAt,
 		})
@@ -957,13 +963,13 @@ func (b *Box) ListTrash(ctx context.Context) ([]TrashItemView, error) {
 
 type RestoreDocumentCommand struct{ Selector string }
 type RestoreDocumentResult struct {
-	DocumentID string `json:"document_id"`
+	DocumentID string `json:"document_id"` // logical document id
 	Path       string `json:"path"`
 }
 
 func (b *Box) RestoreTrashedDocument(ctx context.Context, command RestoreDocumentCommand) (RestoreDocumentResult, error) {
 	document, path, err := b.service.RestoreDocument(ctx, command.Selector)
-	return RestoreDocumentResult{DocumentID: string(document.ID), Path: path}, err
+	return RestoreDocumentResult{DocumentID: b.ShortID(ctx, string(document.ID)), Path: path}, err
 }
 
 type PurgeTrashCommand struct {
@@ -1011,7 +1017,7 @@ type RenameDocumentCommand struct {
 	Title string
 }
 type RenameDocumentResult struct {
-	DocumentID string `json:"document_id"`
+	DocumentID string `json:"document_id"` // logical document id
 	Path       string `json:"path"`
 	Title      string `json:"title,omitempty"`
 }
@@ -1025,7 +1031,7 @@ func (b *Box) RenameDocument(ctx context.Context, command RenameDocumentCommand)
 	if err != nil {
 		return RenameDocumentResult{}, err
 	}
-	return RenameDocumentResult{DocumentID: string(result.DocumentID), Path: result.Path, Title: result.Title}, nil
+	return RenameDocumentResult{DocumentID: b.ShortID(ctx, string(result.DocumentID)), Path: result.Path, Title: result.Title}, nil
 }
 
 type ReindexDocumentCommand struct{ Selector string }

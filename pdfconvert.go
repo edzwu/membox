@@ -118,13 +118,13 @@ func (b *Box) ConvertPDF(ctx context.Context, command ConvertPDFCommand) (Conver
 			return ConvertPDFResult{}, fmt.Errorf("resolving converted chapter %q: %w", chapter.Title, err)
 		}
 		chapters = append(chapters, ConvertedPDFChapterView{
-			Title: chapter.Title, Filename: chapter.Filename, Document: documentView(chapterDocument, chapterPath),
+			Title: chapter.Title, Filename: chapter.Filename, Document: b.documentView(ctx, chapterDocument, chapterPath),
 			Path: chapter.Path, Created: chapter.Created,
 		})
 	}
 	return ConvertPDFResult{
-		SourceDocumentID: converted.SourceDocumentID,
-		MarkdownDocument: documentView(document, path),
+		SourceDocumentID: b.ShortID(ctx, converted.SourceDocumentID),
+		MarkdownDocument: b.documentView(ctx, document, path),
 		MarkdownPath:     converted.MarkdownPath,
 		MarkdownFilename: converted.MarkdownFilename,
 		MarkdownSHA256:   converted.MarkdownSHA256,
@@ -208,13 +208,13 @@ func (b *Box) ResplitPDF(ctx context.Context, command ResplitPDFCommand) (Conver
 			return ConvertPDFResult{}, fmt.Errorf("resolving converted chapter %q: %w", chapter.Title, resolveErr)
 		}
 		chapters = append(chapters, ConvertedPDFChapterView{
-			Title: chapter.Title, Filename: chapter.Filename, Document: documentView(chapterDocument, chapterPath),
+			Title: chapter.Title, Filename: chapter.Filename, Document: b.documentView(ctx, chapterDocument, chapterPath),
 			Path: chapter.Path, Created: chapter.Created,
 		})
 	}
 	return ConvertPDFResult{
-		SourceDocumentID: result.SourceDocumentID,
-		MarkdownDocument: documentView(indexDocument, indexPath),
+		SourceDocumentID: b.ShortID(ctx, result.SourceDocumentID),
+		MarkdownDocument: b.documentView(ctx, indexDocument, indexPath),
 		MarkdownPath:     result.MarkdownPath,
 		MarkdownFilename: result.MarkdownFilename,
 		MarkdownSHA256:   result.MarkdownSHA256,

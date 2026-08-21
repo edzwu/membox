@@ -245,9 +245,9 @@ func newDocShowCommand(runtime *runtime) *cobra.Command {
 		if jsonOutput {
 			return writeJSON(cmd, document)
 		}
-		// Human output shows only the logical id. Physical UUIDs remain the
-		// SQLite primary key and are available via --json as "id".
-		logical := document.ShortID
+		// Human output shows the logical id. Physical UUIDs are a storage-layer
+		// identity and never cross the Box boundary; DocumentView.ID is logical.
+		logical := document.ID
 		if logical == "" {
 			logical = shortID(document.ID)
 		}

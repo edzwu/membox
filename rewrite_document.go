@@ -26,11 +26,11 @@ func rewriteDocument(ctx context.Context, b *Box, command RewriteDocumentCommand
 		return RewriteDocumentResult{}, fmt.Errorf("document not found")
 	}
 	if document.Status != catalog.DocumentActive {
-		return RewriteDocumentResult{}, fmt.Errorf("document %s is %s at %s", document.ID, document.Status, absolute)
+		return RewriteDocumentResult{}, fmt.Errorf("document %s is %s at %s", b.ShortID(ctx, string(document.ID)), document.Status, absolute)
 	}
 	media := strings.TrimSpace(document.Index.MediaType)
 	if media == "application/pdf" {
-		return RewriteDocumentResult{}, fmt.Errorf("document %s is a PDF; convert to Markdown first", document.ID)
+		return RewriteDocumentResult{}, fmt.Errorf("document %s is a PDF; convert to Markdown first", b.ShortID(ctx, string(document.ID)))
 	}
 	if media != "" && media != "text/markdown" && !strings.HasPrefix(media, "text/") {
 		return RewriteDocumentResult{}, fmt.Errorf("rewrite supports Markdown documents, not %s", media)
@@ -53,7 +53,7 @@ func rewriteDocument(ctx context.Context, b *Box, command RewriteDocumentCommand
 		return RewriteDocumentResult{}, err
 	}
 	out := RewriteDocumentResult{
-		DocumentID: string(document.ID),
+		DocumentID: b.ShortID(ctx, string(document.ID)),
 		Path:       absolute,
 		Title:      title,
 		Model:      result.Model,
@@ -74,6 +74,6 @@ func rewriteDocument(ctx context.Context, b *Box, command RewriteDocumentCommand
 		return RewriteDocumentResult{}, err
 	}
 	out.Path = synced.Path
-	out.DocumentID = string(synced.DocumentID)
+	out.DocumentID = b.ShortID(ctx, string(synced.DocumentID))
 	return out, nil
 }

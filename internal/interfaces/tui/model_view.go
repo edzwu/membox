@@ -1003,8 +1003,8 @@ func documentItems(documents []membox.DocumentView) []item {
 		filename := documentFilename(document)
 		// Match haystack exposes only the logical short id — physical UUIDs
 		// stay out of TUI filtering so name search is left-to-right on what
-		// the tree actually renders.
-		logical := document.ShortID
+		// the tree actually renders. DocumentView.ID is already the logical id.
+		logical := document.ID
 		if logical == "" {
 			logical = shortID(document.ID)
 		}
