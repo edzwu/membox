@@ -346,20 +346,18 @@ func (s *Server) handleDocument(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 	s.documentMu.Lock()
-	defer s.documentMu.Unlock()
 	document, absolute, err := s.service.ResolveDocument(request.Context(), selector)
 	if err != nil {
+		s.documentMu.Unlock()
 		http.Error(writer, err.Error(), http.StatusNotFound)
 		return
 	}
-	body, err := s.service.ReadDocument(request.Context(), selector)
+	body, err := s.service.ReadDocumentAt(request.Context(), document, absolute)
 	if err != nil {
+		s.documentMu.Unlock()
 		http.Error(writer, err.Error(), http.StatusNotFound)
 		return
 	}
-	// Opening a document is reading activity even when the user does not scroll.
-	// Recency is best-effort and must never prevent the Markdown from loading.
-	_ = s.service.MarkDocumentOpened(request.Context(), selector)
 	writer.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 	writer.Header().Set("Cache-Control", "no-store")
 	// HTTP header values do not have a browser-portable Unicode encoding.
@@ -373,7 +371,15 @@ func (s *Server) handleDocument(writer http.ResponseWriter, request *http.Reques
 	}
 	writer.Header().Set("X-Membox-Title", url.PathEscape(title))
 	writer.Header().Set("X-Membox-Path", absolute)
+	// Serve the body before any recency bookkeeping so a tiny note is not held
+	// behind MarkDocumentOpened on the critical path.
 	_, _ = writer.Write(body)
+	s.documentMu.Unlock()
+	// Opening is reading activity even without a scroll. Fire-and-forget so the
+	// browser can paint as soon as the Markdown bytes land.
+	go func() {
+		_ = s.service.MarkDocumentOpened(context.Background(), selector)
+	}()
 }
 
 func (s *Server) handlePDFAsset(writer http.ResponseWriter, request *http.Request) {

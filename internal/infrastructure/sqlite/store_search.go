@@ -214,15 +214,27 @@ func (s *Store) ResolveDocument(ctx context.Context, selector string) (*catalog.
 	if !selectorPattern.MatchString(selector) {
 		return nil, "", fmt.Errorf("invalid document selector %q", selector)
 	}
-	// Physical UUID stays the SQLite primary key. Logical short ids are
-	// unique compact suffixes (4+ hex chars, lengthened on collision) so
-	// users can type the visible id left-to-right without hitting UUID v7
-	// time-prefix collisions like "01a014b8".
-	logical, err := s.logicalSnapshot(ctx)
-	if err != nil {
+	// Fast path: full physical UUID (dashed or compact). Miru always opens by
+	// full id; skipping the logical-map scan drops GET /api/doc from ~150ms
+	// of map rebuild to a single primary-key lookup.
+	if physical, ok := fullPhysicalSelector(selector); ok {
+		doc, path, err := s.getDocumentByID(ctx, physical)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil, "", fmt.Errorf("document %q not found", selector)
+			}
+			return nil, "", err
+		}
+		return doc, path, nil
+	}
+	// Short / logical selectors: match under the cache RLock — never clone the
+	// whole physical→logical map on every resolve.
+	if err := s.ensureLogicalIDs(ctx); err != nil {
 		return nil, "", err
 	}
-	physical, err := catalog.MatchLogicalSelector(selector, logical)
+	s.logicalMu.RLock()
+	physical, err := catalog.MatchLogicalSelector(selector, s.logicalByPhys)
+	s.logicalMu.RUnlock()
 	if err != nil {
 		return nil, "", err
 	}
@@ -234,6 +246,21 @@ func (s *Store) ResolveDocument(ctx context.Context, selector string) (*catalog.
 		return nil, "", err
 	}
 	return doc, path, nil
+}
+
+// fullPhysicalSelector recognizes a complete UUID (with or without dashes)
+// and returns the canonical dashed form used as documents.id.
+func fullPhysicalSelector(selector string) (string, bool) {
+	compact := catalog.CompactID(selector)
+	if len(compact) != 32 {
+		return "", false
+	}
+	for _, r := range compact {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return "", false
+		}
+	}
+	return compact[0:8] + "-" + compact[8:12] + "-" + compact[12:16] + "-" + compact[16:20] + "-" + compact[20:32], true
 }
 
 func (s *Store) getDocumentByID(ctx context.Context, id string) (*catalog.Document, string, error) {

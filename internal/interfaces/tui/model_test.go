@@ -86,6 +86,28 @@ func TestConvertedTreeLabelStripsIdentityAndShortensSuffixes(t *testing.T) {
 	}
 }
 
+func TestTreeItemLabelPrefersTitleForUntitledMarkdown(t *testing.T) {
+	untitled := item{
+		document: membox.DocumentView{
+			ID: "01a01cf6-ceaf-7173-966c-04073d03c9b4", Title: "bitmask 技巧",
+			Path: "/tmp/untitled.md", MediaType: "text/markdown",
+		},
+		filename: "untitled.md",
+	}
+	if got := treeItemLabel(untitled); got != "bitmask 技巧" {
+		t.Fatalf("untitled tree label = %q, want catalog title", got)
+	}
+	named := item{
+		document: membox.DocumentView{
+			ID: "doc-named", Title: "Other Title", Path: "/tmp/bitmask-技巧.md", MediaType: "text/markdown",
+		},
+		filename: "bitmask-技巧.md",
+	}
+	if got := treeItemLabel(named); got != "bitmask-技巧.md" {
+		t.Fatalf("named markdown must stay filesystem-authoritative: %q", got)
+	}
+}
+
 func TestConvertedPDFIDRejectsChapterAndMalformedNames(t *testing.T) {
 	if id, ok := convertedPDFID("AI-Agents中文版-pdf-019ffe54a5137da8bfac0ae403223ccf.md"); !ok || id != "019ffe54-a513-7da8-bfac-0ae403223ccf" {
 		t.Fatalf("readable converted filename resolved as (%q,%v)", id, ok)

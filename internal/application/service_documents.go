@@ -110,6 +110,15 @@ func (s *Service) ReadDocument(ctx context.Context, selector string) ([]byte, er
 	if err != nil {
 		return nil, err
 	}
+	return s.ReadDocumentAt(ctx, document, absolute)
+}
+
+// ReadDocumentAt reads body bytes for an already-resolved active document so
+// HTTP handlers that just called ResolveDocument do not pay for it twice.
+func (s *Service) ReadDocumentAt(ctx context.Context, document *catalog.Document, absolute string) ([]byte, error) {
+	if document == nil {
+		return nil, errors.New("document is required")
+	}
 	if document.Status != catalog.DocumentActive {
 		return nil, fmt.Errorf("document %s is %s at %s", document.ID, document.Status, absolute)
 	}
@@ -451,12 +460,12 @@ func (s *Service) GetDocumentReadState(ctx context.Context, selector string) (po
 
 // MarkDocumentOpened updates recency without disturbing the reader's saved
 // scroll position.
+//
+// Intentionally skips beginMutation: this is a best-effort UI-state touch on
+// every document GET. Taking the cross-process mutation lock here serialized
+// Miru opens behind TUI scans/edits and made even tiny notes feel slow to
+// render. SQLite's own locking is enough for a single ProgressAt write.
 func (s *Service) MarkDocumentOpened(ctx context.Context, selector string) error {
-	release, lockErr := s.beginMutation()
-	if lockErr != nil {
-		return lockErr
-	}
-	defer release()
 	document, _, err := s.ResolveDocument(ctx, selector)
 	if err != nil {
 		return err

@@ -1058,6 +1058,8 @@ func documentFilename(document membox.DocumentView) string {
 // treeItemLabel keeps Markdown filesystem-authoritative while letting PDFs use
 // their catalog title as a virtual, user-editable name. Generated conversion
 // Markdown gets a short label with the frozen -pdf-<uuid> segment stripped.
+// Placeholder files such as untitled.md fall back to the catalog/H1 title so
+// the TUI matches what Miru already shows in the doc chrome.
 func treeItemLabel(candidate item) string {
 	isPDF := candidate.document.MediaType == "application/pdf" || strings.EqualFold(filepath.Ext(candidate.filename), ".pdf")
 	if isPDF {
@@ -1068,7 +1070,33 @@ func treeItemLabel(candidate item) string {
 	if label := convertedTreeLabel(candidate.filename); label != candidate.filename {
 		return label
 	}
+	if isPlaceholderFilename(candidate.filename) {
+		if title := strings.TrimSpace(candidate.document.Title); title != "" && !isPlaceholderTitle(title) {
+			return title
+		}
+	}
 	return candidate.filename
+}
+
+func isPlaceholderFilename(filename string) bool {
+	stem := strings.ToLower(strings.TrimSuffix(filepath.Base(strings.TrimSpace(filename)), filepath.Ext(filename)))
+	if stem == "untitled" || stem == "new document" || stem == "new-document" {
+		return true
+	}
+	// untitled-2, untitled_3, new-document-1, …
+	return strings.HasPrefix(stem, "untitled-") ||
+		strings.HasPrefix(stem, "untitled_") ||
+		strings.HasPrefix(stem, "new-document-") ||
+		strings.HasPrefix(stem, "new_document_")
+}
+
+func isPlaceholderTitle(title string) bool {
+	switch strings.ToLower(strings.TrimSpace(title)) {
+	case "", "untitled", "new document":
+		return true
+	default:
+		return false
+	}
 }
 
 // convertedTreeLabel strips the -pdf-<uuid> segment from generated conversion

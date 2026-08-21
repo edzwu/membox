@@ -78,14 +78,25 @@ function whenIdle(task) {
 }
 
 function processArticle() {
-  // Structural pass — synchronous so folding/layout are correct at first paint.
+  // Structural pass — synchronous so folding/layout/section chrome are correct
+  // at first paint. Order matters:
+  //   foldSections → .fold-heading wrappers exist
+  //   assignHeadingIds → headingLabel for source matching
+  //   attributeSectionSources → section.dataset.source for copy
+  //   addSectionActionButtons → hover ⧉ / ↓ on each heading
+  // The progressive-render refactor briefly called addSectionActionButtons
+  // *before* foldSections, so querySelectorAll('.fold-heading') was empty
+  // and the buttons never appeared.
   wrapTables();
   wrapLeadingContent();
   stripHeadingHeaderLinks();
   renderAnnotationSyntax();
   markExternalLinks();
-  addSectionActionButtons();
   foldSections();
+  const headings = assignHeadingIds();
+  attributeSectionSources();
+  addSectionActionButtons();
+  addFoldListeners();
 
   // Per-block highlighting/math can take real time on big documents but do
   // not affect fold/TOC structure — run them in an idle callback.
@@ -95,14 +106,10 @@ function processArticle() {
     // Mermaid is async (lazy-loads vendor). Diagrams replace fences after
     // paint; fold/TOC already ran on the pre blocks, which is fine.
     void renderMermaid();
+    addCopyButtons();
 
-    // Folding + TOC need stable heading ids and the final DOM; heading ids
-    // must exist before buildToc/observeHeadings consume them.
+    // TOC panel can wait — the article is already navigable via fold headings.
     whenIdle(() => {
-      const headings = assignHeadingIds();
-      attributeSectionSources();
-      addCopyButtons();
-      addFoldListeners();
       buildToc(headings);
       observeHeadings(headings);
     });
