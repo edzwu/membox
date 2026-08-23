@@ -92,7 +92,7 @@ function captureAnnotationAnchor(entry, canonicalText, captured) {
     underline: false,
     strikethrough: false,
     note: entry.note || null,
-    // Note subtype: 'qa' for assist Q&A; omitted/empty for plain notes.
+    // Anchored-artifact subtype; omitted/empty for plain notes.
     kind: entry.kind || null,
     // Host-neutral identity for matching async persistence responses. `ref` is
     // an optional durable join key assigned by hosts such as membox.
@@ -182,7 +182,8 @@ export function parseAnnotationSidecar(text) {
       underline: false,
       strikethrough: false,
       note,
-      kind: typeof item.kind === 'string' && (item.kind === 'qa' || item.kind === 'summary') ? item.kind : '',
+      kind: typeof item.kind === 'string' &&
+        ['qa', 'summary', 'translation', 'jp-study'].includes(item.kind) ? item.kind : '',
       clientId: typeof item.clientId === 'string' ? item.clientId.slice(0, 128) : '',
       ref: typeof item.ref === 'string' ? item.ref.slice(0, 64) : '',
     };

@@ -1,9 +1,10 @@
-/* Immersive bilingual translation for the rendered Miru article.
-   Paragraphs are sent one at a time so an arbitrarily long document never
-   shares one model context. Each Pi text_delta is appended immediately below
-   its source block; translated DOM is disposable and never changes Markdown. */
+/* Translation for the rendered Miru article. Full-document immersive blocks
+   are disposable; a selected passage is committed as a durable inline
+   annotation note after streaming. Neither mode changes the source Markdown.
+   Paragraphs are sent independently so long documents share no model context. */
 
 import { scheduleNoteLayout } from '../js/annotations/layout.js';
+import { applyNote, findAnnot, setNoteOnPassage } from '../js/annotations/model.js';
 import { detachComposeSelection, registerAnnotAction } from '../js/annotations/toolbar.js';
 import { elements } from '../js/dom.js';
 import { state } from '../js/state.js';
@@ -29,10 +30,19 @@ let total = 0;
 function sourceText(element) {
   const clone = element.cloneNode(true);
   clone.querySelectorAll([
-    'button', '.annot-note-ref', `.${TRANSLATION_CLASS}`, '.membox-jp-study',
+    'button', '.annot-note-num', `.${TRANSLATION_CLASS}`, '.membox-jp-study',
     '.katex-html', '.code-copy', '.section-copy', '.section-download', '.lead-copy',
   ].join(',')).forEach((node) => node.remove());
   return (clone.textContent || '').replace(/\s+/g, ' ').trim();
+}
+
+function normalizedText(text) {
+  return String(text || '').replace(/\s+/g, ' ').trim();
+}
+
+function translationNoteBody(translated) {
+  const body = String(translated || '').trim();
+  return body ? `**翻译：**\n\n${body}\n` : '';
 }
 
 function shouldTranslate(text) {
@@ -207,10 +217,12 @@ async function translateParagraph(row, currentGeneration) {
     node.spinner.remove();
     if (!translated || translated === row.text) {
       node.wrapper.remove();
-    } else {
-      node.wrapper.dataset.sourceFp = sourceFingerprint(row.text);
+      scheduleNoteLayout();
+      return '';
     }
+    node.wrapper.dataset.sourceFp = sourceFingerprint(row.text);
     scheduleNoteLayout();
+    return translated;
   } catch (error) {
     node.wrapper.remove();
     throw error;
@@ -278,9 +290,83 @@ async function translateRows(rows, { selectionOnly, skipped = 0 } = {}) {
   }
 }
 
-/** Translate the passage blocks under a selection. */
+/** Translate the passage blocks under a selection (legacy transient helper). */
 async function runSelectionRows(rows) {
   return translateRows(rows, { selectionOnly: true, skipped: 0 });
+}
+
+function selectionHost(rangeOrElement) {
+  let node = rangeOrElement;
+  if (node && typeof node.endContainer !== 'undefined') node = node.endContainer;
+  if (node?.nodeType === Node.TEXT_NODE) node = node.parentElement;
+  if (!node || !elements.article?.contains(node)) return null;
+  return node.closest?.(TARGET_SELECTOR) || node.closest?.('.fold-body, article') || null;
+}
+
+/** Selection translation is a durable reading artifact. It streams through
+ *  the disposable translation DOM, then commits through the same annotation
+ *  note path used by Q&A and summaries. The standalone SQLite cache remains
+ *  only a computation cache. */
+async function runDurableSelectionTranslation({ text, range = null, annotEl = null, entry = null }) {
+  const source = normalizedText(annotEl ? sourceText(annotEl) : text);
+  const host = selectionHost(annotEl || range);
+  if (!source || !shouldTranslate(source) || !host) {
+    throw new Error('选区没有可翻译的内容');
+  }
+  if (!annotEl && range) {
+    const overlaps = [...elements.article.querySelectorAll('span.annot')].some((el) => {
+      try { return range.intersectsNode(el); } catch { return false; }
+    });
+    if (overlaps) {
+      throw new Error('选区与已有笔记重叠；请调整选区后再翻译');
+    }
+  }
+
+  window.dispatchEvent(new CustomEvent('membox-stop-immersive', { detail: { source: 'translate' } }));
+  generation++;
+  controller?.abort();
+  controller = new AbortController();
+  active = true;
+  running = true;
+  completed = 0;
+  failed = 0;
+  total = 1;
+  const currentGeneration = ++generation;
+  const row = { id: 'selection-1', element: host, text: source };
+  showToast(entry ? '重新翻译中…' : '翻译中…');
+
+  try {
+    const translated = await translateParagraph(row, currentGeneration);
+    if (!translated) throw new Error('模型返回空翻译');
+    if (!annotEl && (!range || !range.commonAncestorContainer?.isConnected)) {
+      throw new Error('选区已失效，请重新选择');
+    }
+
+    // Replace the stream preview with a durable annotation card. The note
+    // persistence adapter writes an independent *-note.md automatically.
+    clearTranslationFor(host);
+    const noteText = translationNoteBody(translated);
+    if (annotEl && entry) {
+      setNoteOnPassage(entry, annotEl, noteText, { kind: 'translation' });
+    } else {
+      applyNote(range, noteText, { kind: 'translation' });
+    }
+    completed = 1;
+    active = false;
+    running = false;
+    controller = null;
+    scheduleNoteLayout();
+    showToast(entry ? '翻译已更新' : '翻译已写入原文');
+    return { translated };
+  } catch (error) {
+    clearTranslationFor(host);
+    active = false;
+    running = false;
+    failed = 1;
+    controller = null;
+    scheduleNoteLayout();
+    throw error;
+  }
 }
 
 /** Full-document immersive translation (keyboard-only entry). */
@@ -315,15 +401,16 @@ function stopTranslation() {
 }
 
 export function initTranslation() {
-  // Selection translate lives inside the compose dialog: pick text, then tap
-  // 「译」. Full-document immersive translation stays available via
-  // Cmd/Ctrl+Alt+T.
+  // Selection translate lives inside the compose dialog and persists as an
+  // anchored translation note. Full-document immersive translation stays
+  // disposable and available via Cmd/Ctrl+Alt+T.
   registerAnnotAction({
     id: 'translate',
     icon: '译',
-    title: '翻译选中内容 · Cmd+Alt+T 全文沉浸',
-    when: ({ mode, text }) => mode === 'create' && Boolean(text),
-    run: () => {
+    title: '翻译选中内容并保存 · Cmd+Alt+T 全文沉浸',
+    when: ({ mode, text, entry }) =>
+      (mode === 'create' && Boolean(text)) || (mode === 'edit' && entry?.kind === 'translation'),
+    run: (ctx) => {
       if (active) {
         stopTranslation();
         return;
@@ -332,14 +419,22 @@ export function initTranslation() {
         showToast('需要连接 membox 才能翻译');
         return;
       }
-      const detached = detachComposeSelection();
-      if (!detached) return;
-      const rows = selectionRows(detached.range);
-      if (!rows?.length) {
-        showToast('选区没有可翻译的内容');
+
+      if (ctx.mode === 'edit' && ctx.annotEl) {
+        const annotEl = ctx.annotEl;
+        const entry = findAnnot(annotEl.dataset.annotId);
+        if (!entry || entry.kind !== 'translation') return;
+        const text = sourceText(annotEl);
+        ctx.hide?.();
+        void runDurableSelectionTranslation({ text, annotEl, entry })
+          .catch((error) => showToast(error?.message || '翻译失败'));
         return;
       }
-      void runSelectionRows(rows);
+
+      const detached = detachComposeSelection();
+      if (!detached) return;
+      void runDurableSelectionTranslation(detached)
+        .catch((error) => showToast(error?.message || '翻译失败'));
     },
   });
 

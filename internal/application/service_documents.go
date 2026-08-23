@@ -228,16 +228,17 @@ type SaveAnnotationNoteOptions struct {
 	Highlight      bool
 	Underline      bool
 	Strikethrough  bool
-	// Kind is optional note subtype: "" (plain) or "qa" (assist Q&A).
+	// Kind is an optional anchored-artifact subtype. Empty means a plain note.
 	Kind string
 }
 
 // Annotation note kinds stored on annotation_notes.kind and note front matter.
 const (
-	AnnotationNoteKindPlain   = ""
-	AnnotationNoteKindQA      = "qa"
-	AnnotationNoteKindSummary = "summary"
-	AnnotationNoteKindJPStudy = "jp-study" // 语：furigana + chunking + grammar + zh
+	AnnotationNoteKindPlain       = ""
+	AnnotationNoteKindQA          = "qa"
+	AnnotationNoteKindSummary     = "summary"
+	AnnotationNoteKindTranslation = "translation"
+	AnnotationNoteKindJPStudy     = "jp-study" // 语：furigana + chunking + grammar + zh
 )
 
 // NormalizeAnnotationNoteKind returns a canonical kind or empty for plain notes.
@@ -247,6 +248,8 @@ func NormalizeAnnotationNoteKind(kind string) string {
 		return AnnotationNoteKindQA
 	case AnnotationNoteKindSummary:
 		return AnnotationNoteKindSummary
+	case AnnotationNoteKindTranslation, "translate":
+		return AnnotationNoteKindTranslation
 	case AnnotationNoteKindJPStudy, "jp_study", "study":
 		return AnnotationNoteKindJPStudy
 	default:
@@ -276,6 +279,12 @@ func DetectAnnotationNoteKind(body string) string {
 	}
 	if strings.Contains(body, "**Q:**") || strings.Contains(body, "**Q**:") {
 		return AnnotationNoteKindQA
+	}
+	if strings.Contains(body, "**总结：**") || strings.Contains(body, "**总结:**") || strings.Contains(body, "**总结**:") {
+		return AnnotationNoteKindSummary
+	}
+	if strings.Contains(body, "**翻译：**") || strings.Contains(body, "**翻译:**") || strings.Contains(body, "**翻译**:") {
+		return AnnotationNoteKindTranslation
 	}
 	// Japanese study notes from the 语 button carry an explicit **语：** marker.
 	if strings.Contains(body, "**语：**") || strings.Contains(body, "**语**:") || strings.Contains(body, "**语:**") {

@@ -132,7 +132,8 @@ type annotationAnchorPayload struct {
 	Underline     bool   `json:"underline"`
 	Strikethrough bool   `json:"strikethrough"`
 	Note          any    `json:"note"`
-	// Kind is the note subtype: "" plain selection note, "qa" assist Q&A.
+	// Kind is the anchored-artifact subtype (plain, qa, summary, translation,
+	// or jp-study).
 	Kind     string `json:"kind,omitempty"`
 	ClientID string `json:"clientId,omitempty"`
 	Ref      string `json:"ref,omitempty"`
@@ -337,14 +338,23 @@ func (s *Server) reconcileAnnotationNotes(ctx context.Context, pageID string, pa
 
 		// A newly created Miru annotation has no ref until the first save. Match
 		// it to the same anchor on subsequent saves rather than creating copies.
+		kind := application.NormalizeAnnotationNoteKind(anchor.Kind)
+		if kind == "" {
+			kind = application.DetectAnnotationNoteKind(note)
+		}
+
 		if ref == "" {
 			bestDistance := int(^uint(0) >> 1)
+			// Match an unsaved browser artifact only to the same passage AND kind.
+			// A translation, summary and personal note may intentionally share an
+			// anchor; excerpt-only matching would overwrite one with another.
 			// Iterate each stored relation once. `byRef` contains both physical
 			// and logical keys, so ranging over it doubles file reads.
 			for _, candidate := range existing {
 				physical := string(candidate.NoteDocumentID)
 				logical := logicalByPhysical[physical]
-				if seen[physical] || seen[logical] {
+				if seen[physical] || seen[logical] ||
+					application.NormalizeAnnotationNoteKind(candidate.Kind) != kind {
 					continue
 				}
 				candidateBody, ok := bodyByPhysical[physical]
@@ -363,11 +373,6 @@ func (s *Server) reconcileAnnotationNotes(ctx context.Context, pageID string, pa
 					bestDistance, ref = distance, physical
 				}
 			}
-		}
-
-		kind := application.NormalizeAnnotationNoteKind(anchor.Kind)
-		if kind == "" {
-			kind = application.DetectAnnotationNoteKind(note)
 		}
 		body := selectionNoteMarkdown("", exact, note, kind)
 		var matched port.AnnotationNoteRecord

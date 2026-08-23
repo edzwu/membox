@@ -152,6 +152,10 @@ function notePlainForInline(entry) {
     const m = raw.match(/\*\*总结：?\*\*\s*\n+([\s\S]*)/);
     if (m) raw = m[1].trim();
   }
+  if (entry.kind === 'translation' || /\*\*翻译：?\*\*/.test(raw)) {
+    const m = raw.match(/\*\*翻译：?\*\*\s*\n+([\s\S]*)/);
+    if (m) raw = m[1].trim();
+  }
   if (entry.kind === 'jp-study' || /\*\*语：?\*\*/.test(raw)) {
     const m = raw.match(/\*\*语：?\*\*\s*\n+([\s\S]*)/);
     if (m) raw = m[1].trim();
@@ -182,6 +186,7 @@ function inlineNoteTitle(entry, plain) {
   let title = plain.split(/[。！？\n]/)[0].trim() || plain;
   if (!title) {
     if (kind === 'summary') title = '总结';
+    else if (kind === 'translation') title = '翻译';
     else if (kind === 'qa') title = 'Q&A';
     else if (kind === 'jp-study') title = '语';
     else title = '笔记';
@@ -231,9 +236,10 @@ function renderLongNotePreviews() {
       continue;
     }
 
-    // DeepSeek / assist Q&A always stays full inline under the passage — the
-    // answer is the point of the note, not a titled link to another page.
-    if (entry.kind === 'qa' || card.classList.contains('is-qa')) {
+    // Generated Q&A and translations always stay full inline under the
+    // passage — their body is the reading aid, not a link to another page.
+    if (entry.kind === 'qa' || entry.kind === 'translation' ||
+        card.classList.contains('is-qa') || card.classList.contains('is-translation')) {
       text.hidden = false;
       if (link) link.remove();
       card.classList.remove('membox-note-preview', 'membox-note-link-only');

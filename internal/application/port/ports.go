@@ -134,8 +134,9 @@ type AnnotationNoteRecord struct {
 	Highlight        bool
 	Underline        bool
 	Strikethrough    bool
-	// Kind distinguishes note subtypes in the DB (empty = plain selection note,
-	// "qa" = assist Q&A). Mirrored in note Markdown front matter as kind:.
+	// Kind distinguishes anchored-artifact subtypes in the DB (empty = plain
+	// note; qa, summary, translation, and jp-study are generated variants).
+	// Mirrored in note Markdown front matter as kind:.
 	Kind      string
 	CreatedAt time.Time
 	UpdatedAt time.Time

@@ -159,15 +159,14 @@ function buildNoteLabel(id) {
 const NOTE_URL_RE = /(?:https?:\/\/|www\.)[A-Za-z0-9._~:\/?#@!$&()*+,;=%-]+/gi;
 let noteMarkdown = null;
 
-// summaryCardMarkdown keeps only the generated summary for kind=summary cards.
-// Selection-summary notes store the excerpt as a restore blockquote (and older
-// notes may still carry a duplicated plain-text excerpt before **总结：**).
-function summaryCardMarkdown(note) {
+// Generated cards keep their restore excerpt in the durable Markdown file but
+// show only the generated content inline.
+function generatedCardMarkdown(note, markerName) {
   const text = String(note || '');
-  const marker = text.match(/\*\*总结：?\*\*\s*\n+([\s\S]*)/);
-  if (marker && marker[1].trim()) {
-    return marker[1].trim();
-  }
+  const escaped = markerName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const marker = text.match(new RegExp(`\\*\\*${escaped}：?\\*\\*\\s*\\n+([\\s\\S]*)`));
+  if (marker && marker[1].trim()) return marker[1].trim();
+
   // No marker: drop leading blockquotes and keep remaining prose.
   const lines = text.split('\n');
   const out = [];
@@ -189,7 +188,11 @@ function summaryCardMarkdown(note) {
 
 function renderNoteText(el, note, opts = {}) {
   el.textContent = '';
-  const source = opts.kind === 'summary' ? summaryCardMarkdown(note) : note;
+  const source = opts.kind === 'summary'
+    ? generatedCardMarkdown(note, '总结')
+    : opts.kind === 'translation'
+      ? generatedCardMarkdown(note, '翻译')
+      : note;
 
   if (typeof window.markdownit === 'function' && typeof window.DOMPurify === 'function') {
     if (!noteMarkdown) {
@@ -276,6 +279,9 @@ function detectNoteKind(noteText) {
   if (/\*\*总结：?\*\*|^---[\s\S]*?\nkind:\s*["']?summary["']?/m.test(text)) {
     return 'summary';
   }
+  if (/\*\*翻译：?\*\*|^---[\s\S]*?\nkind:\s*["']?translation["']?/m.test(text)) {
+    return 'translation';
+  }
   // Japanese study (语) notes: furigana / chunking / grammar / zh translation.
   if (/\*\*语：?\*\*|^---[\s\S]*?\nkind:\s*["']?jp-study["']?/m.test(text)) {
     return 'jp-study';
@@ -287,6 +293,7 @@ function insertNoteCard(id, noteText, kind) {
   const card = document.createElement('aside');
   const kindClass = kind === 'qa' ? ' is-qa'
     : kind === 'summary' ? ' is-summary'
+    : kind === 'translation' ? ' is-translation'
     : kind === 'jp-study' ? ' is-jp-study'
     : '';
   card.className = 'annot-note' + kindClass;
@@ -379,6 +386,7 @@ export function setNoteOnPassage(entry, annotEl, text, opts = {}) {
     if (card) {
       card.classList.toggle('is-qa', kind === 'qa');
       card.classList.toggle('is-summary', kind === 'summary');
+      card.classList.toggle('is-translation', kind === 'translation');
       card.classList.toggle('is-jp-study', kind === 'jp-study');
       if (kind) card.dataset.noteKind = kind;
       else delete card.dataset.noteKind;

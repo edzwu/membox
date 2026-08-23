@@ -1880,6 +1880,29 @@ dt > .annot-note.membox-inline-note {
   opacity: 0.45;
 }
 
+/* Durable selection translations — same quiet reading treatment as the
+   transient immersive layer, with a small type stamp for management. */
+.annot-note.is-translation {
+  border-left-color: color-mix(in srgb, var(--accent) 52%, var(--line));
+  background: transparent;
+  color: color-mix(in srgb, var(--ink-soft) 84%, var(--accent));
+  line-height: 1.75;
+}
+.annot-note.is-translation::before {
+  content: '译';
+  position: absolute;
+  top: 4px;
+  right: 8px;
+  font-size: 10px;
+  font-weight: 700;
+  color: color-mix(in srgb, var(--accent) 68%, var(--muted));
+  opacity: 0.82;
+  pointer-events: none;
+}
+.annot-note.is-translation .annot-note-label {
+  opacity: 0.42;
+}
+
 /* Local-model selection summaries — green-ish tint, distinct from QA. */
 .annot-note.is-summary {
   border-left-color: color-mix(in srgb, var(--accent) 70%, #3d9a5f);

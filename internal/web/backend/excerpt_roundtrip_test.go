@@ -8,6 +8,20 @@ import (
 // Multi-line excerpts (code blocks) round-trip through note Markdown without
 // losing newlines or indentation, and the ref-less matcher binds them to
 // existing notes instead of creating duplicates.
+func TestTranslationArtifactRoundTripKeepsKindAndBody(t *testing.T) {
+	body := selectionNoteMarkdown("", "Translate this passage.", "**翻译：**\n\n翻译这段文字。", "translation")
+	if !strings.Contains(body, `kind: "translation"`) {
+		t.Fatalf("translation kind missing from note front matter: %q", body)
+	}
+	exact, note, _ := parseClipBody(body)
+	if strings.TrimSpace(exact) != "Translate this passage." {
+		t.Fatalf("translation anchor=%q", exact)
+	}
+	if note != "**翻译：**\n\n翻译这段文字。" {
+		t.Fatalf("translation note=%q", note)
+	}
+}
+
 func TestExcerptRoundTripBindsMultilineSelections(t *testing.T) {
 	browserExact := "c := make(chan int)  // Allocate a channel.\n// Start the sort in a goroutine.\ngo func() {\n    list.Sort()\n    c <- 1\n}()\n<-c"
 
