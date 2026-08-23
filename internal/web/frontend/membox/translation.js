@@ -27,6 +27,8 @@ let controller = null;
 let completed = 0;
 let failed = 0;
 let total = 0;
+/** @type {Array<{id: string, element: Element, text: string}> | null} */
+let pendingSelectionRows = null;
 
 function createButton() {
   const value = document.createElement('button');
@@ -35,6 +37,11 @@ function createButton() {
   value.className = 'membox-translate';
   value.hidden = true;
   value.innerHTML = '<span class="membox-translate-glyph" aria-hidden="true">译</span><span class="membox-translate-progress" aria-hidden="true"></span>';
+  // Focus/click on the dock button collapses the page selection — snapshot
+  // intersecting blocks on pointerdown while the range still exists.
+  value.addEventListener('pointerdown', () => {
+    pendingSelectionRows = selectionRows();
+  });
   value.addEventListener('click', () => {
     if (active) stopTranslation();
     else void startTranslation();
@@ -43,6 +50,10 @@ function createButton() {
   const extras = getStatusExtras();
   (extras || document.body).appendChild(value);
   return value;
+}
+
+function hasArticleSelection() {
+  return Boolean(selectionRows());
 }
 
 function renderButton() {
@@ -54,10 +65,18 @@ function renderButton() {
   button.dataset.active = String(active);
   button.dataset.running = String(running);
   button.setAttribute('aria-pressed', String(active));
-  button.setAttribute('aria-label', active ? 'Stop immersive translation' : 'Start immersive translation');
-  button.title = active
-    ? `Stop immersive translation${total ? ` · ${completed}/${total}` : ''}`
-    : 'Immersive translation · qwen3:14b';
+  const selectionMode = !active && hasArticleSelection();
+  button.dataset.selection = String(selectionMode);
+  if (active) {
+    button.setAttribute('aria-label', 'Stop immersive translation');
+    button.title = `Stop immersive translation${total ? ` · ${completed}/${total}` : ''}`;
+  } else if (selectionMode) {
+    button.setAttribute('aria-label', 'Translate selected passage');
+    button.title = 'Translate selection · qwen3:14b';
+  } else {
+    button.setAttribute('aria-label', 'Start immersive translation');
+    button.title = 'Immersive translation (select text to translate one passage) · qwen3:14b';
+  }
   const progress = button.querySelector('.membox-translate-progress');
   progress.textContent = active && total ? `${completed}/${total}` : '';
   setStatusExtrasPinned('translate', active);
@@ -83,12 +102,104 @@ function shouldTranslate(text) {
   return true;
 }
 
+function isTranslatableBlock(element) {
+  if (!element || element.nodeType !== 1) return false;
+  if (!element.matches?.(TARGET_SELECTOR)) return false;
+  if (element.closest(`.${TRANSLATION_CLASS}, pre, code, .mermaid-diagram, .doc-title`)) return false;
+  // Nested list containers are translated via their leaf items / paragraphs.
+  if (element.matches('li') && element.querySelector(':scope > p, :scope > ul, :scope > ol')) return false;
+  return true;
+}
+
+function clearTranslationFor(element) {
+  if (!element) return;
+  if (element.matches('li, td, th, dd, dt')) {
+    element.querySelectorAll(`:scope > .${TRANSLATION_CLASS}`).forEach((node) => node.remove());
+    return;
+  }
+  let next = element.nextElementSibling;
+  while (next && next.classList.contains(TRANSLATION_CLASS)) {
+    const node = next;
+    next = next.nextElementSibling;
+    node.remove();
+  }
+}
+
+/** Stable-enough fingerprint so full-doc runs can skip unchanged blocks. */
+function sourceFingerprint(text) {
+  const value = String(text || '');
+  let hash = 2166136261;
+  for (let i = 0; i < value.length; i++) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `${value.length.toString(36)}:${(hash >>> 0).toString(36)}`;
+}
+
+function translationNodesFor(element) {
+  if (!element) return [];
+  if (element.matches('li, td, th, dd, dt')) {
+    return [...element.querySelectorAll(`:scope > .${TRANSLATION_CLASS}`)];
+  }
+  const nodes = [];
+  let next = element.nextElementSibling;
+  while (next && next.classList.contains(TRANSLATION_CLASS)) {
+    nodes.push(next);
+    next = next.nextElementSibling;
+  }
+  return nodes;
+}
+
+/** Finished translation that still matches this source text (idempotent hit). */
+function hasUsableTranslation(element, text) {
+  const want = sourceFingerprint(text);
+  return translationNodesFor(element).some((node) => {
+    if (node.querySelector('.membox-translation-spinner')) return false;
+    const body = node.querySelector('.membox-translation-text')?.textContent?.trim() || '';
+    if (!body) return false;
+    const got = node.dataset.sourceFp || '';
+    // Legacy nodes (no fingerprint): treat non-empty body as reusable so a
+    // later full-doc pass does not duplicate selection translations.
+    return !got || got === want;
+  });
+}
+
+/** Blocks intersecting the current article selection, or null if none. */
+function selectionRows() {
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed || !selection.rangeCount || !elements.article) return null;
+  let range;
+  try {
+    range = selection.getRangeAt(0);
+  } catch {
+    return null;
+  }
+  if (!elements.article.contains(range.commonAncestorContainer)) return null;
+  if (!String(selection.toString() || '').replace(/\s+/g, ' ').trim()) return null;
+
+  const candidates = [...elements.article.querySelectorAll(TARGET_SELECTOR)];
+  const rows = [];
+  for (const element of candidates) {
+    if (!isTranslatableBlock(element)) continue;
+    let hits = false;
+    try {
+      hits = range.intersectsNode(element);
+    } catch {
+      hits = false;
+    }
+    if (!hits) continue;
+    const text = sourceText(element);
+    if (!shouldTranslate(text)) continue;
+    rows.push({ id: `selection-${rows.length + 1}`, element, text });
+  }
+  return rows.length ? rows : null;
+}
+
 function collectParagraphs() {
   const candidates = [...elements.article.querySelectorAll(TARGET_SELECTOR)];
   const rows = [];
   for (const element of candidates) {
-    if (element.closest(`.${TRANSLATION_CLASS}, pre, code, .mermaid-diagram, .doc-title`)) continue;
-    if (element.matches('li') && element.querySelector(':scope > p, :scope > ul, :scope > ol')) continue;
+    if (!isTranslatableBlock(element)) continue;
     const text = sourceText(element);
     if (!shouldTranslate(text)) continue;
     rows.push({ id: `paragraph-${rows.length + 1}`, element, text });
@@ -106,9 +217,12 @@ function collectParagraphs() {
 }
 
 function translationNode(row) {
+  // Never stack a second body under an already-translated block.
+  clearTranslationFor(row.element);
   const wrapper = document.createElement('div');
   wrapper.className = TRANSLATION_CLASS;
   wrapper.dataset.translationId = row.id;
+  wrapper.dataset.sourceFp = sourceFingerprint(row.text);
   wrapper.lang = 'zh-CN';
   wrapper.setAttribute('translate', 'no');
 
@@ -142,7 +256,11 @@ async function translateParagraph(row, currentGeneration) {
     if (!done) throw new Error('Translation stream ended before completion');
     const translated = node.text.textContent.trim();
     node.spinner.remove();
-    if (!translated || translated === row.text) node.wrapper.remove();
+    if (!translated || translated === row.text) {
+      node.wrapper.remove();
+    } else {
+      node.wrapper.dataset.sourceFp = sourceFingerprint(row.text);
+    }
     scheduleNoteLayout();
   } catch (error) {
     node.wrapper.remove();
@@ -151,19 +269,52 @@ async function translateParagraph(row, currentGeneration) {
 }
 
 async function startTranslation() {
-  const rows = collectParagraphs();
-  if (!rows.length) {
-    showToast('No paragraphs need translation');
+  // Selection wins: translate only the passage blocks under the caret range.
+  // Empty selection keeps the existing full-document immersive behavior.
+  // Prefer the pointerdown snapshot — click focus often clears the live range.
+  const selectedRows = pendingSelectionRows || selectionRows();
+  pendingSelectionRows = null;
+  const selectionOnly = Boolean(selectedRows?.length);
+  const candidates = selectionOnly ? selectedRows : collectParagraphs();
+  if (!candidates.length) {
+    showToast(selectionOnly ? 'Selection has nothing to translate' : 'No paragraphs need translation');
     return;
   }
+
+  // Idempotency: reuse finished translations whose source fingerprint still
+  // matches. Full-doc must NOT wipe earlier selection translations.
+  // Selection re-click forces a refresh of only the chosen blocks.
+  let skipped = 0;
+  let rows = candidates;
+  if (!selectionOnly) {
+    rows = [];
+    for (const row of candidates) {
+      if (hasUsableTranslation(row.element, row.text)) skipped++;
+      else rows.push(row);
+    }
+  }
+  if (!rows.length) {
+    showToast(skipped
+      ? `Already translated (${skipped} kept)`
+      : 'No paragraphs need translation');
+    return;
+  }
+
   // Drop any sibling immersive overlay (jp-study) before starting.
   window.dispatchEvent(new CustomEvent('membox-stop-immersive', { detail: { source: 'translate' } }));
-  stopTranslation({ render: false });
+  // Abort in-flight work but keep finished DOM (unless selection refresh).
+  generation++;
+  if (controller) controller.abort();
+  controller = null;
+  if (selectionOnly) {
+    for (const row of rows) clearTranslationFor(row.element);
+  }
+
   active = true;
   running = true;
   completed = 0;
   failed = 0;
-  total = rows.length;
+  total = rows.length + skipped;
   const currentGeneration = ++generation;
   controller = new AbortController();
   renderButton();
@@ -183,13 +334,23 @@ async function startTranslation() {
       renderButton();
     }
     running = false;
+    // Selection jobs are one-shot; full-doc stays toggleable until stop.
+    if (selectionOnly) active = false;
     renderButton();
-    showToast(failed
-      ? `Translated ${completed}/${total} paragraphs · ${failed} failed`
-      : `Translated ${completed} paragraphs with qwen3:14b`);
+    const kept = skipped ? ` · ${skipped} kept` : '';
+    if (selectionOnly) {
+      showToast(failed
+        ? `Selection: ${completed}/${rows.length} translated · ${failed} failed`
+        : (rows.length === 1 ? 'Selection translated' : `Selection: ${completed} blocks translated`));
+    } else {
+      showToast(failed
+        ? `Translated ${completed}/${rows.length}${kept} · ${failed} failed`
+        : `Translated ${completed} paragraphs${kept}`);
+    }
   } catch (error) {
     if (error && error.name === 'AbortError') return;
     running = false;
+    if (selectionOnly) active = false;
     renderButton();
     showToast(error instanceof Error ? error.message : 'Translation failed');
   }
@@ -214,6 +375,10 @@ export function initTranslation() {
   onRender(() => {
     if (!session.connected && active) stopTranslation();
     else renderButton();
+  });
+  // Refresh tooltip so 「译」 advertises selection mode while text is highlighted.
+  document.addEventListener('selectionchange', () => {
+    if (!active) renderButton();
   });
   window.addEventListener('miru-document-change', () => {
     stopTranslation();
