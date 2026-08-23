@@ -21,6 +21,13 @@ export function exportSiteZip() {
     const layout = document.createElement('div');
     layout.className = 'layout';
 
+    const main = document.createElement('main');
+    main.className = 'main';
+    const articleClone = cleanArticleForExport('site');
+    await inlineArticleImages(articleClone);
+    main.appendChild(articleClone);
+    layout.appendChild(main);
+
     const toc = document.createElement('aside');
     toc.className = 'toc';
     toc.setAttribute('aria-label', 'Table of contents');
@@ -28,13 +35,6 @@ export function exportSiteZip() {
     tocNavClone.removeAttribute('id');
     toc.appendChild(tocNavClone);
     layout.appendChild(toc);
-
-    const main = document.createElement('main');
-    main.className = 'main';
-    const articleClone = cleanArticleForExport('site');
-    await inlineArticleImages(articleClone);
-    main.appendChild(articleClone);
-    layout.appendChild(main);
 
     const title = state.docTitle || 'Article';
 

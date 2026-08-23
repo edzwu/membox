@@ -27,6 +27,7 @@ function bindEvents() {
   elements.tocPin.addEventListener('click', toggleTocPin);
   elements.tocBackdrop.addEventListener('click', closeToc);
   elements.tocNav.addEventListener('click', onTocClick);
+  if (elements.tocRail) elements.tocRail.addEventListener('click', onTocClick);
   elements.copyAll.addEventListener('click', copyAllMarkdown);
   elements.downloadAll.addEventListener('click', downloadAllMarkdown);
   elements.pngAll.addEventListener('click', exportPNG);

@@ -11,6 +11,8 @@ export const elements = {
   annotationLayer: document.getElementById('annotation-layer'),
   toc: document.getElementById('toc'),
   tocNav: document.getElementById('toc-nav'),
+  tocPane: document.getElementById('toc-pane'),
+  tocRail: document.getElementById('toc-rail'),
   tocBackdrop: document.getElementById('toc-backdrop'),
   tocToggle: document.getElementById('toc-toggle'),
   tocPin: document.getElementById('toc-pin'),

@@ -60,19 +60,31 @@ export function closeToc() {
   elements.tocBackdrop.hidden = true;
 }
 
-function applyTocPinState(isCollapsed) {
-  elements.toc.classList.toggle('is-collapsed', isCollapsed);
-  const label = isCollapsed ? 'Expand contents' : 'Collapse contents';
-  elements.tocPin.setAttribute('aria-expanded', String(!isCollapsed));
+// Desktop TOC always keeps the narrow rail slot. Pin only toggles whether the
+// overlay pane stays open — it must never change layout width (no jitter).
+function applyTocPinState(isPinned) {
+  // Rail layout is permanent on desktop; mobile drawer CSS ignores it.
+  elements.toc.classList.add('is-collapsed');
+  elements.toc.classList.toggle('is-pinned', isPinned);
+  if (isPinned) {
+    elements.toc.classList.remove('is-hover-expanded');
+  }
+  const label = isPinned ? 'Unpin contents' : 'Pin contents open';
+  elements.tocPin.setAttribute('aria-expanded', String(isPinned));
   elements.tocPin.setAttribute('aria-label', label);
   elements.tocPin.setAttribute('title', label);
+  if (elements.tocRail) {
+    elements.tocRail.setAttribute('aria-hidden', String(isPinned));
+  }
 }
 
 export function toggleTocPin() {
-  const isCollapsed = !elements.toc.classList.contains('is-collapsed');
-  applyTocPinState(isCollapsed);
+  const isPinned = !elements.toc.classList.contains('is-pinned');
+  applyTocPinState(isPinned);
   try {
-    localStorage.setItem('miru-toc-collapsed', String(isCollapsed));
+    localStorage.setItem('miru-toc-pinned', String(isPinned));
+    // Clear legacy key so old collapsed semantics cannot fight the new model.
+    localStorage.removeItem('miru-toc-collapsed');
   } catch (e) {
     // Storage may be unavailable in private mode or when quota is full.
   }
@@ -80,13 +92,64 @@ export function toggleTocPin() {
 
 export function initTocCollapse() {
   if (!elements.tocPin) return;
-  let isCollapsed = false;
+  // Default: rail + hover-to-open. Pin keeps the same pane fixed open.
+  let isPinned = false;
   try {
-    isCollapsed = localStorage.getItem('miru-toc-collapsed') === 'true';
+    const pinned = localStorage.getItem('miru-toc-pinned');
+    if (pinned !== null) {
+      isPinned = pinned === 'true';
+    } else {
+      // Migrate: old "not collapsed" meant the wide pinned-open TOC.
+      const legacy = localStorage.getItem('miru-toc-collapsed');
+      if (legacy === 'false') isPinned = true;
+    }
   } catch (e) {
     // Storage may be unavailable in private mode or when cookies are disabled.
   }
-  applyTocPinState(isCollapsed);
+  applyTocPinState(isPinned);
+  initTocHoverExpand();
+}
+
+// Opens the overlay pane while the pointer is over the rail or the floating
+// pane. The pane overflows the 28px .toc box, so parent pointerleave is not
+// reliable — use elementFromPoint against rail+pane hit targets instead.
+function initTocHoverExpand() {
+  if (!elements.toc) return;
+
+  const isPinned = () => elements.toc.classList.contains('is-pinned');
+
+  const hitTargets = () =>
+    [elements.tocRail, elements.tocPane, elements.tocPin, elements.toc].filter(Boolean);
+
+  const isPointerOverToc = (clientX, clientY) => {
+    const stack = typeof document.elementsFromPoint === 'function'
+      ? document.elementsFromPoint(clientX, clientY)
+      : [document.elementFromPoint(clientX, clientY)].filter(Boolean);
+    const targets = hitTargets();
+    return stack.some((node) =>
+      targets.some((root) => root === node || root.contains(node)),
+    );
+  };
+
+  const setHoverExpanded = (open) => {
+    if (isPinned()) return;
+    elements.toc.classList.toggle('is-hover-expanded', open);
+  };
+
+  const syncFromEvent = (event) => {
+    if (event.pointerType === 'touch') return;
+    setHoverExpanded(isPointerOverToc(event.clientX, event.clientY));
+  };
+
+  // Track continuously: leaving the overflowing pane must collapse immediately.
+  document.addEventListener('pointermove', syncFromEvent, { passive: true });
+  document.addEventListener('pointerdown', syncFromEvent, { passive: true });
+
+  // Keyboard: open while focus is inside TOC chrome; close when it leaves.
+  elements.toc.addEventListener('focusin', () => setHoverExpanded(true));
+  elements.toc.addEventListener('focusout', (event) => {
+    if (!elements.toc.contains(event.relatedTarget)) setHoverExpanded(false);
+  });
 }
 
 export function updateEmptyKbd() {

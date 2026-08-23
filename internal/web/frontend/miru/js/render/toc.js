@@ -20,6 +20,7 @@ export function resetToc() {
     tocObserver = null;
   }
   elements.tocNav.innerHTML = '';
+  if (elements.tocRail) elements.tocRail.innerHTML = '';
   activeHeadingId = null;
 }
 
@@ -139,6 +140,52 @@ export function buildToc(headings) {
 
   elements.tocNav.appendChild(title);
   elements.tocNav.appendChild(list);
+  buildTocRail();
+}
+
+// Collapsed rail: one tick per top-level TOC root (same roots as `.toc-list > li`).
+// Segment flex-grow tracks the on-page span of that section so the rail reads
+// as a coarse reading progress map, not an equal hash mark strip.
+function buildTocRail() {
+  if (!elements.tocRail) return;
+  elements.tocRail.innerHTML = '';
+
+  const roots = Array.from(elements.tocNav.querySelectorAll('.toc-list > li > a[data-target]'));
+  if (!roots.length) return;
+
+  const articleBottom = elements.article
+    ? elements.article.getBoundingClientRect().bottom + window.scrollY
+    : 0;
+
+  const spans = roots.map((link, index) => {
+    const heading = document.getElementById(link.dataset.target);
+    const start = heading
+      ? heading.getBoundingClientRect().top + window.scrollY
+      : 0;
+    const nextHeading = index + 1 < roots.length
+      ? document.getElementById(roots[index + 1].dataset.target)
+      : null;
+    const end = nextHeading
+      ? nextHeading.getBoundingClientRect().top + window.scrollY
+      : articleBottom || start + 1;
+    return Math.max(48, end - start);
+  });
+  // Normalize to small integers — huge flex-grow values made Edge paint a
+  // continuous bar instead of discrete ticks.
+  const minSpan = Math.min(...spans);
+  const grows = spans.map((span) => Math.max(1, Math.round(span / minSpan)));
+
+  roots.forEach((link, index) => {
+    const tick = document.createElement('button');
+    tick.type = 'button';
+    tick.className = 'toc-rail-tick';
+    tick.dataset.target = link.dataset.target;
+    tick.style.flexGrow = String(grows[index]);
+    const label = link.getAttribute('aria-label') || link.textContent.trim();
+    tick.setAttribute('aria-label', label);
+    tick.title = label;
+    elements.tocRail.appendChild(tick);
+  });
 }
 
 function setActiveToc(id) {
@@ -155,6 +202,19 @@ function setActiveToc(id) {
   elements.tocNav.querySelectorAll('.toc-group').forEach((grp) => {
     grp.classList.toggle('is-expanded', Boolean(activeLink && grp.contains(activeLink)));
   });
+
+  // Rail highlights the top-level root that owns the active heading.
+  if (elements.tocRail) {
+    let rootTarget = '';
+    if (activeLink) {
+      const rootItem = activeLink.closest('.toc-list > li');
+      const rootLink = rootItem && rootItem.querySelector(':scope > a[data-target]');
+      rootTarget = rootLink ? rootLink.dataset.target : activeLink.dataset.target;
+    }
+    elements.tocRail.querySelectorAll('.toc-rail-tick').forEach((tick) => {
+      tick.classList.toggle('active', Boolean(rootTarget) && tick.dataset.target === rootTarget);
+    });
+  }
 }
 
 export function observeHeadings(headings) {
@@ -187,15 +247,20 @@ export function observeHeadings(headings) {
 }
 
 export function onTocClick(event) {
+  const railTick = event.target.closest('.toc-rail-tick[data-target]');
   const link = event.target.closest('a[data-target], a[href^="#"]');
-  if (!link || !elements.tocNav.contains(link)) return;
+  const fromRail = Boolean(railTick && elements.tocRail && elements.tocRail.contains(railTick));
+  const fromNav = Boolean(link && elements.tocNav.contains(link));
+  if (!fromRail && !fromNav) return;
 
   event.preventDefault();
   event.stopPropagation();
 
   // data-target is authoritative (assigned heading id). Fall back to hash only
   // for exported/static TOC markup that may omit the dataset.
-  const id = (link.dataset.target || '').trim() ||
+  const id = fromRail
+    ? (railTick.dataset.target || '').trim()
+    : (link.dataset.target || '').trim() ||
     (() => {
       const href = link.getAttribute('href') || '';
       const hash = href.includes('#') ? href.slice(href.indexOf('#') + 1) : '';

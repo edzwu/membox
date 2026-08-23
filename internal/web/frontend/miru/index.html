@@ -43,14 +43,6 @@
   </header>
 
   <div class="layout" id="layout">
-    <aside class="toc" id="toc" aria-label="Table of contents">
-      <button type="button" class="toc-pin" id="toc-pin" aria-label="Toggle contents" title="Toggle contents">
-        <svg class="toc-pin-icon" viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z" fill="currentColor"/>
-        </svg>
-      </button>
-      <nav class="toc-nav" id="toc-nav"></nav>
-    </aside>
     <div class="toc-backdrop" id="toc-backdrop" hidden></div>
     <main class="main">
       <div class="reading-surface" id="reading-surface">
@@ -58,6 +50,17 @@
         <aside class="annotation-layer" id="annotation-layer" aria-label="Document notes"></aside>
       </div>
     </main>
+    <aside class="toc" id="toc" aria-label="Table of contents">
+      <!-- Collapsed desktop mode: one tick per top-level TOC root. -->
+      <div class="toc-rail" id="toc-rail" aria-hidden="true"></div>
+      <!-- Pin lives inside the pane so top/right margins stay correct while sticky-scrolling. -->
+      <div class="toc-pane" id="toc-pane">
+        <button type="button" class="toc-pin" id="toc-pin" aria-label="Toggle contents" title="Toggle contents">
+          <span class="toc-pin-dot" aria-hidden="true"></span>
+        </button>
+        <nav class="toc-nav" id="toc-nav"></nav>
+      </div>
+    </aside>
   </div>
 
   <div class="empty" id="empty">
