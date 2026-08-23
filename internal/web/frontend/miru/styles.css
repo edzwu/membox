@@ -667,40 +667,26 @@ body.is-reading .topbar.is-auto-hidden {
   width: 100%;
 }
 
-/* Notes are a sibling layer, never descendants of article content. */
-.annotation-layer:empty {
+/* Notes live inline under their passage. The layer only parks orphans / jp chips. */
+.annotation-layer:empty,
+.annotation-layer.is-inline-park:not(:has(.annot-note:not([hidden]))) {
   display: none;
 }
 
-.annotation-layer.is-rail {
+.annotation-layer.is-inline-park {
+  /* Keep out of flow so parked cards never reappear as a bottom stack. */
   position: absolute;
-  inset: 0 auto 0 calc(var(--article-max) + var(--annot-rail-gap));
-  width: var(--annot-rail-width);
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
   pointer-events: none;
 }
 
-.annotation-layer.is-rail .annot-note {
-  pointer-events: auto;
-}
-
+/* Legacy rail/stack classes kept harmless if an old snapshot still has them. */
+.annotation-layer.is-rail,
 .annotation-layer.is-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  max-width: var(--article-max);
-  margin: 32px auto 0;
-  padding-top: 18px;
-  border-top: 1px solid var(--line);
-}
-
-.annotation-layer.is-stack::before {
-  content: 'Notes';
-  color: var(--muted);
-  font-family: var(--font-sans);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  display: none;
 }
 
 @media (min-width: 1200px) {
@@ -1060,7 +1046,7 @@ body.is-snippet .toc {
 }
 
 /* --------------------------------------------------------------------------
-   Annotations — selection toolbar, highlight, underline, margin notes
+   Annotations — selection toolbar, highlight, inline notes
    -------------------------------------------------------------------------- */
 .annot-toolbar {
   position: absolute;
@@ -1078,6 +1064,149 @@ body.is-snippet .toc {
 .annot-toolbar[hidden] {
   display: none;
 }
+
+/* Selection compose dialog — same silhouette as the deepseek assist panel:
+   full-width input, controls on a footer row. */
+.annot-toolbar.is-compose {
+  align-items: stretch;
+  padding: 0;
+  max-width: min(380px, calc(100vw - 24px));
+  gap: 0;
+}
+
+.annot-compose {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: min(280px, calc(100vw - 40px));
+  width: min(360px, calc(100vw - 40px));
+  padding: 10px 12px 10px;
+  box-sizing: border-box;
+}
+
+.annot-compose-mode {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 8px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+
+.annot-compose-mode-icon {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+}
+
+.annot-compose-mode-icon svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+}
+
+.annot-toolbar.is-mode-ask .annot-compose-mode {
+  color: color-mix(in srgb, var(--accent) 50%, #5b7cfa);
+}
+
+.annot-compose-mode:hover {
+  background: var(--accent-soft);
+}
+
+.annot-compose-input {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  min-height: 56px;
+  max-height: 180px;
+  resize: none;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--paper);
+  color: var(--ink);
+  caret-color: var(--accent);
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  line-height: 1.45;
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--ink) 3%, transparent);
+}
+
+.annot-compose-input::placeholder {
+  color: var(--muted);
+}
+
+.annot-compose-input:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-soft) 72%, transparent);
+}
+
+.annot-compose-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.annot-compose-foot-left,
+.annot-compose-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.annot-compose-hl,
+.annot-compose-send,
+.annot-compose-ext {
+  appearance: none;
+  border: 0;
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease, filter 0.14s ease;
+}
+
+.annot-compose-ext,
+.annot-compose-hl {
+  background: transparent;
+  color: var(--ink-soft);
+}
+
+.annot-compose-ext:hover,
+.annot-compose-hl:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.annot-compose-send {
+  background: var(--accent);
+  color: var(--paper);
+}
+
+.annot-compose-send:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+
+.annot-compose-send:disabled,
+.annot-compose-send.is-busy {
+  opacity: 0.5;
+  cursor: default;
+}
+
 
 .annot-toolbar button {
   appearance: none;
@@ -1578,29 +1707,6 @@ textarea.annot-note-input {
   border-radius: 2px;
 }
 
-/* Underline */
-.article .annot-ul {
-  text-decoration: underline;
-  text-decoration-color: var(--accent);
-  text-decoration-thickness: 2px;
-  text-underline-offset: 3px;
-}
-
-/* Strikethrough */
-.article .annot-sl {
-  text-decoration: line-through;
-  text-decoration-color: var(--accent);
-  text-decoration-thickness: 2px;
-}
-
-/* Underline + strikethrough on the same passage */
-.article .annot-ul.annot-sl {
-  text-decoration: underline line-through;
-  text-decoration-color: var(--accent);
-  text-decoration-thickness: 2px;
-  text-underline-offset: 3px;
-}
-
 /* Note anchor: dotted underline + numbered superscript */
 .annot-note-ref {
   border-bottom: 1px dotted var(--accent);
@@ -1612,51 +1718,129 @@ textarea.annot-note-input {
   font-size: 0.68em;
   font-weight: 600;
   margin-left: 1px;
+  padding: 0 0.15em;
+  border-radius: 3px;
   user-select: none;
   cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease, opacity 0.15s ease;
 }
 
-/* Note cards live exclusively in .annotation-layer. */
-.annot-note {
+.annot-note-num:hover,
+.annot-note-num:focus-visible {
+  background: color-mix(in srgb, var(--accent-soft) 70%, transparent);
+  outline: none;
+}
+
+/* Collapsed via reference-number toggle — number stays as the affordance. */
+.annot-note-num.is-collapsed {
+  opacity: 0.55;
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
+.annot-note-ref.note-collapsed {
+  border-bottom-style: dashed;
+  border-bottom-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+}
+
+.annot-note.is-collapsed {
+  display: none !important;
+}
+
+/* Note cards sit inline under the annotated passage (translation-style). */
+.annot-note,
+.annot-note.membox-inline-note {
   position: relative;
-  width: 100%;
+  display: block;
+  width: auto;
   max-width: 100%;
   box-sizing: border-box;
-  margin: 0;
-  padding: 0.4em 0.65em;
-  background: var(--paper-raised);
-  border: 1px solid var(--line);
-  border-left: 3px solid var(--accent);
-  border-radius: 7px;
-  font-family: var(--font-sans);
-  font-size: 12px;
-  line-height: 1.4;
-  color: var(--ink-soft);
-  box-shadow: 0 1px 3px var(--shadow);
+  margin: 0.38em 0 0.95em;
+  padding: 0.45em 0.75em;
+  background: color-mix(in srgb, var(--paper-raised) 92%, var(--accent) 8%);
+  border: 0;
+  border-left: 2px solid color-mix(in srgb, var(--accent) 48%, var(--line));
+  border-radius: 0 6px 6px 0;
+  font-family: var(--font-serif);
+  font-size: 0.96em;
+  font-weight: 400;
+  line-height: 1.7;
+  letter-spacing: 0.01em;
+  color: color-mix(in srgb, var(--ink-soft) 88%, var(--accent));
+  box-shadow: none;
   cursor: pointer;
-  transition: box-shadow 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+li > .annot-note.membox-inline-note,
+td > .annot-note.membox-inline-note,
+th > .annot-note.membox-inline-note,
+dd > .annot-note.membox-inline-note,
+dt > .annot-note.membox-inline-note {
+  margin-bottom: 0.45em;
+}
+
+/* Long notes collapse to a titled hyperlink only. */
+.annot-note.membox-note-link-only {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35em;
+  width: auto;
+  max-width: 100%;
+  margin: 0.15em 0 0.55em;
+  padding: 0.12em 0.2em 0.12em 0.55em;
+  background: transparent;
+  border-left-width: 2px;
+  font-family: var(--font-sans);
+  font-size: 0.9em;
+  line-height: 1.45;
+}
+
+.annot-note.membox-note-link-only .annot-note-body {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4em;
+  grid-template-columns: none;
+}
+
+.annot-note.membox-note-link-only .annot-note-label {
+  opacity: 0.55;
+}
+
+.annot-note.membox-note-link-only .annot-note-text {
+  display: none !important;
+}
+
+.annot-note.membox-note-link-only .membox-open-note {
+  margin: 0;
+  font-size: inherit;
+  font-weight: 550;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+.annot-note.membox-note-link-only .membox-open-note.is-pending {
+  opacity: 0.65;
+  text-decoration-style: dotted;
+  cursor: default;
 }
 
 .annot-note:hover {
   border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
 }
 
-/* Assist Q&A notes — distinct left rail so they read as dialogue, not scribbles. */
+/* Assist Q&A — translation-style inline under the passage (no card stamp). */
 .annot-note.is-qa {
-  border-left-color: color-mix(in srgb, var(--accent) 70%, #5b7cfa);
-  background: color-mix(in srgb, var(--paper-raised) 88%, #5b7cfa 12%);
+  border-left-color: color-mix(in srgb, var(--accent) 55%, #5b7cfa);
+  background: transparent;
+  color: color-mix(in srgb, var(--ink-soft) 86%, #5b7cfa);
 }
 .annot-note.is-qa::before {
-  content: 'QA';
-  position: absolute;
-  top: 4px;
-  right: 8px;
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  color: color-mix(in srgb, var(--accent) 55%, #5b7cfa);
-  opacity: 0.85;
-  pointer-events: none;
+  display: none;
+}
+.annot-note.is-qa .annot-note-label {
+  opacity: 0.45;
 }
 
 /* Local-model selection summaries — green-ish tint, distinct from QA. */

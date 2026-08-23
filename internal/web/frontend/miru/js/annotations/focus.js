@@ -1,13 +1,11 @@
 /* Miru — note ↔ passage focus.
-   Notes stay in the margin rail (or in-flow asides on narrow screens).
-   This module only links the two sides: hover glow, click-to-scroll, and a
-   short pulse so the pair is easy to find without ever punching holes in the
-   reading column. */
+   Notes sit inline under their passage (translation-style). This module only
+   links the two sides: hover glow, click-to-scroll, and a short pulse. */
 
 import { elements } from '../dom.js';
 import { prefersReducedMotion } from '../utils.js';
 import { expandSectionForHeading } from '../render/folding.js';
-import { scheduleNoteLayout } from './layout.js';
+import { findNoteCard, scheduleNoteLayout } from './layout.js';
 
 let clearTimer = null;
 let activeId = null;
@@ -17,13 +15,13 @@ function pairFor(id) {
   return {
     id: key,
     anchor: elements.article.querySelector(`span.annot[data-annot-id="${key}"]`),
-    card: elements.annotationLayer.querySelector(`.annot-note[data-annot-id="${key}"]`),
+    card: findNoteCard(key),
   };
 }
 
 function clearFocusClasses() {
   elements.article.querySelectorAll('.anchor-active').forEach((el) => el.classList.remove('anchor-active'));
-  elements.annotationLayer.querySelectorAll('.note-focus').forEach((el) => el.classList.remove('note-focus'));
+  document.querySelectorAll('.annot-note.note-focus').forEach((el) => el.classList.remove('note-focus'));
 }
 
 export function clearNoteFocus() {
@@ -54,6 +52,41 @@ function scrollToEl(el) {
   el.scrollIntoView({ behavior, block: 'center' });
 }
 
+/** Toggle the inline note body under a passage. Returns the new collapsed state. */
+export function toggleNoteInline(id) {
+  const { anchor, card } = pairFor(id);
+  if (!card) return false;
+  // jp-study keeps chips only — never toggle a body card.
+  if (card.classList.contains('is-jp-study') || card.classList.contains('membox-jp-card-hidden')) {
+    return true;
+  }
+  const collapsed = !card.classList.contains('is-collapsed');
+  card.classList.toggle('is-collapsed', collapsed);
+  card.hidden = collapsed;
+  if (anchor) {
+    anchor.classList.toggle('note-collapsed', collapsed);
+    const badge = anchor.querySelector('.annot-note-num');
+    if (badge) {
+      badge.classList.toggle('is-collapsed', collapsed);
+      badge.title = collapsed ? '显示笔记' : '隐藏笔记';
+      badge.setAttribute('aria-expanded', String(!collapsed));
+    }
+  }
+  if (!collapsed) {
+    // Brief pulse when reopening — no scroll (inline is already nearby).
+    focusNote(id, { duration: 900 });
+  } else {
+    clearNoteFocus();
+  }
+  scheduleNoteLayout();
+  return collapsed;
+}
+
+export function isNoteInlineCollapsed(id) {
+  const card = findNoteCard(id);
+  return Boolean(card?.classList.contains('is-collapsed') || card?.hidden);
+}
+
 // Highlight the note/passage pair. Optionally scroll the opposite side into
 // view (`scrollTo`: 'anchor' | 'card' | null).
 export function focusNote(id, options = {}) {
@@ -75,10 +108,25 @@ export function focusNote(id, options = {}) {
     requestAnimationFrame(() => scrollToEl(anchor));
   } else if (scrollTo === 'card' && card) {
     expandFor(card);
-    // Unhide if a previous layout pass hid a card whose anchor was collapsed.
-    card.hidden = false;
+    // Reveal if the user had collapsed it via the reference number.
+    if (card.classList.contains('is-collapsed')) {
+      card.classList.remove('is-collapsed');
+      card.hidden = false;
+      const badge = anchor?.querySelector('.annot-note-num');
+      if (badge) {
+        badge.classList.remove('is-collapsed');
+        badge.title = '隐藏笔记';
+        badge.setAttribute('aria-expanded', 'true');
+      }
+      anchor?.classList.remove('note-collapsed');
+    } else {
+      card.hidden = false;
+    }
     scheduleNoteLayout();
-    requestAnimationFrame(() => scrollToEl(card));
+    // Inline notes sit next to the passage — avoid jumping the viewport.
+    if (!card.classList.contains('membox-inline-note')) {
+      requestAnimationFrame(() => scrollToEl(card));
+    }
   }
 
   if (duration > 0) {

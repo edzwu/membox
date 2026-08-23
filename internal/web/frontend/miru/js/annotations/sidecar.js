@@ -63,8 +63,10 @@ function captureAnnotationAnchor(entry, canonicalText) {
     prefix: canonicalText.slice(Math.max(0, start - ANNOTATION_CONTEXT_LENGTH), start),
     suffix: canonicalText.slice(end, end + ANNOTATION_CONTEXT_LENGTH),
     highlight: !!entry.hl,
-    underline: !!entry.ul,
-    strikethrough: !!entry.sl,
+    // underline/strikethrough retired from the product surface; keep wire
+    // keys false so older readers stay schema-compatible.
+    underline: false,
+    strikethrough: false,
     note: entry.note || null,
     // Note subtype: 'qa' for assist Q&A; omitted/empty for plain notes.
     kind: entry.kind || null,
@@ -140,11 +142,10 @@ export function parseAnnotationSidecar(text) {
       throw new Error('Invalid annotation anchor');
     }
     const highlight = !!item.highlight;
-    const underline = !!item.underline;
-    const strikethrough = !!item.strikethrough;
     const note = typeof item.note === 'string' && item.note ? item.note : null;
-    if (!highlight && !underline && !strikethrough && !note) {
-      throw new Error('Empty annotation entry');
+    // Drop underline/strikethrough-only legacy entries (product surface retired).
+    if (!highlight && !note) {
+      return null;
     }
     return {
       start: item.start,
@@ -153,14 +154,14 @@ export function parseAnnotationSidecar(text) {
       prefix: typeof item.prefix === 'string' ? item.prefix.slice(-ANNOTATION_CONTEXT_LENGTH) : '',
       suffix: typeof item.suffix === 'string' ? item.suffix.slice(0, ANNOTATION_CONTEXT_LENGTH) : '',
       highlight,
-      underline,
-      strikethrough,
+      underline: false,
+      strikethrough: false,
       note,
       kind: typeof item.kind === 'string' && (item.kind === 'qa' || item.kind === 'summary') ? item.kind : '',
       clientId: typeof item.clientId === 'string' ? item.clientId.slice(0, 128) : '',
       ref: typeof item.ref === 'string' ? item.ref.slice(0, 64) : '',
     };
-  });
+  }).filter(Boolean);
 
   return {
     format: data.format,
@@ -350,10 +351,12 @@ export function restoreAnnotationSidecar(data) {
         return;
       }
       try {
+        // Drop underline/strikethrough-only legacy marks (no note, no highlight).
+        if (!anchor.highlight && !anchor.note) {
+          return;
+        }
         applyAnnotationRange(range, {
-          hl: anchor.highlight,
-          ul: anchor.underline,
-          sl: anchor.strikethrough,
+          hl: !!anchor.highlight,
           note: anchor.note,
           kind: anchor.kind || null,
           clientId: anchor.clientId || null,

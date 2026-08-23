@@ -1,11 +1,11 @@
-/* Miru — annotation data model: create/toggle/delete highlights, underlines
-   and margin notes. Inline anchors live in `.article`; note cards live in the
-   sibling `.annotation-layer`, linked only by data-annot-id and model state. */
+/* Miru — annotation data model: create/toggle/delete highlights and notes.
+   Inline anchors live in `.article`; note cards are placed under their
+   passage (translation-style), linked by data-annot-id and model state. */
 
 import { elements } from '../dom.js';
 import { state } from '../state.js';
 import { configureTechnicalMarkdown } from '../markdown/cjk-emphasis.js';
-import { refreshNoteNumbers, scheduleNoteLayout } from './layout.js';
+import { findNoteCard, refreshNoteNumbers, scheduleNoteLayout } from './layout.js';
 import { focusNote } from './focus.js';
 import { createAnnotationClientId, notifyAnnotationsChanged } from './session.js';
 
@@ -108,8 +108,6 @@ function absorbOverlappingAnnotations(range, flags) {
     if (entry) {
       absorbed.push(entry);
       if (entry.hl) flags.hl = true;
-      if (entry.ul) flags.ul = true;
-      if (entry.sl) flags.sl = true;
       if (entry.note && !flags.note) {
         flags.note = entry.note;
         flags.kind = entry.kind || flags.kind || null;
@@ -307,16 +305,13 @@ function insertNoteCard(id, noteText, kind) {
   return card;
 }
 
-// `flags` carries the four orthogonal annotation aspects (highlight /
-// underline / strikethrough / note); named to avoid colliding with the
-// shared app `state`.
+// `flags` carries highlight + note (underline/strikethrough removed from the
+// product surface; legacy fields stay false on write).
 export function applyAnnotationRange(range, flags) {
   const id = ++state.noteCounter;
   const span = document.createElement('span');
   const classes = ['annot'];
   if (flags.hl) classes.push('annot-hl');
-  if (flags.ul) classes.push('annot-ul');
-  if (flags.sl) classes.push('annot-sl');
   if (flags.note) classes.push('annot-note-ref');
   span.className = classes.join(' ');
   span.dataset.annotId = id;
@@ -332,8 +327,8 @@ export function applyAnnotationRange(range, flags) {
     id,
     clientId: flags.clientId || createAnnotationClientId(),
     hl: !!flags.hl,
-    ul: !!flags.ul,
-    sl: !!flags.sl,
+    ul: false,
+    sl: false,
     note: flags.note || null,
     // kind: '' plain note, 'qa' assist Q&A — persisted on annotation_notes.kind
     kind: flags.kind || detectNoteKind(flags.note) || null,
@@ -357,10 +352,9 @@ export function applyAnnotationRange(range, flags) {
 }
 
 export function applyMark(type, range) {
+  if (type !== 'highlight') return;
   applyAnnotationRange(range, {
-    hl: type === 'highlight',
-    ul: type === 'underline',
-    sl: type === 'strikethrough',
+    hl: true,
     note: null,
   });
 }
@@ -380,7 +374,7 @@ export function setNoteOnPassage(entry, annotEl, text, opts = {}) {
   if (entry.note) {
     entry.note = text;
     entry.kind = kind || null;
-    const card = elements.annotationLayer.querySelector(`.annot-note[data-annot-id="${entry.id}"]`);
+    const card = findNoteCard(entry.id);
     if (card) {
       card.classList.toggle('is-qa', kind === 'qa');
       card.classList.toggle('is-summary', kind === 'summary');
@@ -389,7 +383,10 @@ export function setNoteOnPassage(entry, annotEl, text, opts = {}) {
       else delete card.dataset.noteKind;
     }
     const textEl = card && card.querySelector('.annot-note-text');
-    if (textEl) renderNoteText(textEl, text, { kind });
+    if (textEl) {
+      textEl.hidden = false;
+      renderNoteText(textEl, text, { kind });
+    }
   } else {
     entry.note = text;
     entry.kind = kind || null;
@@ -407,7 +404,7 @@ export function setNoteOnPassage(entry, annotEl, text, opts = {}) {
 
 export function deleteAnnotation(id) {
   const annotEl = elements.article.querySelector(`span.annot[data-annot-id="${id}"]`);
-  const card = elements.annotationLayer.querySelector(`.annot-note[data-annot-id="${id}"]`);
+  const card = findNoteCard(id);
   if (card) card.remove();
   if (annotEl) unwrapAnnotEl(annotEl);
   refreshNoteNumbers();
@@ -417,6 +414,11 @@ export function deleteAnnotation(id) {
 export function startEditNoteCard(card, entry) {
   const textEl = card.querySelector('.annot-note-text');
   if (!textEl) return;
+  // Expand link-only long notes so the editor has a place to sit.
+  card.classList.remove('membox-note-link-only', 'membox-note-preview');
+  textEl.hidden = false;
+  const pendingLink = card.querySelector('.membox-open-note');
+  if (pendingLink) pendingLink.hidden = true;
   const input = document.createElement('textarea');
   input.rows = 2;
   input.title = 'Enter for a new line \u00b7 \u2318Enter to save';

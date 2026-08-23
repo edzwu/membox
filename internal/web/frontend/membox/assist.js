@@ -1,12 +1,18 @@
 /* Selection assist: ask about a selection via deepseek-v4-flash (Companion → Pi).
-   Minimal panel: model status · reply · single input row · save Q&A note. */
+   Answers stream inline under the passage (translation-style) and auto-save as
+   a kind=qa note — no sidebar card. The toolbar only holds the question input. */
 
 import { applyNote, findAnnot, setNoteOnPassage } from '../js/annotations/model.js';
-import { onAnnotToolbarHide, registerAnnotAction } from '../js/annotations/toolbar.js';
+import { scheduleNoteLayout } from '../js/annotations/layout.js';
+import { onAnnotToolbarHide } from '../js/annotations/toolbar.js';
+import { elements } from '../js/dom.js';
 import { state } from '../js/state.js';
 import { showToast } from '../js/ui/feedback.js';
 import { streamAssist } from './api.js';
 import { session } from './session.js';
+
+const INLINE_HOST_SELECTOR = 'p, li, blockquote, pre, td, th, dd, dt, h1, h2, h3, h4, h5, h6';
+const ASSIST_INLINE_CLASS = 'membox-assist-inline';
 
 const MODEL_LABEL = 'deepseek-v4-flash';
 
@@ -90,6 +96,70 @@ function noteBodyFromAnswer(instruction, answer) {
   return `**Q:** ${q}\n\n${a}\n`;
 }
 
+function assistHostBlock(rangeOrEl) {
+  let node = null;
+  if (rangeOrEl && rangeOrEl.nodeType === 1) {
+    node = rangeOrEl;
+  } else if (rangeOrEl && typeof rangeOrEl.endContainer !== 'undefined') {
+    node = rangeOrEl.endContainer;
+    if (node.nodeType === 3) node = node.parentElement;
+  }
+  if (!node || !elements.article?.contains(node)) return null;
+  // Multi-block selection wrap: prefer the last inner block.
+  if (node.classList?.contains('annot') && node.querySelector(INLINE_HOST_SELECTOR)) {
+    const inner = node.querySelectorAll(INLINE_HOST_SELECTOR);
+    if (inner.length) return inner[inner.length - 1];
+  }
+  const outer = node.closest?.(INLINE_HOST_SELECTOR);
+  if (outer) return outer;
+  const root = node.closest?.('.fold-body, .article, article') || elements.article;
+  let el = node;
+  while (el.parentElement && el.parentElement !== root) el = el.parentElement;
+  return el && el !== root ? el : node;
+}
+
+function removeAssistInline() {
+  elements.article?.querySelectorAll(`.${ASSIST_INLINE_CLASS}`).forEach((node) => node.remove());
+}
+
+function ensureAssistInline(ctx) {
+  let el = elements.article?.querySelector(`.${ASSIST_INLINE_CLASS}`);
+  if (el?.isConnected) return el;
+  el = document.createElement('div');
+  el.className = ASSIST_INLINE_CLASS;
+  el.setAttribute('translate', 'no');
+  el.dataset.assistInline = '1';
+  const text = document.createElement('div');
+  text.className = 'membox-assist-inline-text';
+  const spinner = document.createElement('span');
+  spinner.className = 'membox-assist-inline-spinner';
+  spinner.setAttribute('aria-hidden', 'true');
+  el.append(text, spinner);
+
+  const anchor = ctx.annotEl?.isConnected ? ctx.annotEl : null;
+  const host = assistHostBlock(anchor || ctx.range);
+  if (!host) {
+    // Fallback: after article lead so the stream is still visible.
+    elements.article?.appendChild(el);
+    return el;
+  }
+  if (host.matches('li, td, th, dd, dt')) host.appendChild(el);
+  else if (anchor?.contains?.(host)) anchor.insertAdjacentElement('afterend', el);
+  else host.insertAdjacentElement('afterend', el);
+  scheduleNoteLayout();
+  return el;
+}
+
+function paintAssistInline(assembled, { streaming = false } = {}) {
+  const el = elements.article?.querySelector(`.${ASSIST_INLINE_CLASS}`);
+  if (!el) return;
+  const text = el.querySelector('.membox-assist-inline-text');
+  const spinner = el.querySelector('.membox-assist-inline-spinner');
+  if (text) text.textContent = assembled || '';
+  el.classList.toggle('is-streaming', streaming);
+  if (spinner) spinner.hidden = !streaming;
+}
+
 async function probeModelStatus() {
   if (!session.connected) {
     modelStatus = 'bad';
@@ -117,7 +187,9 @@ function renderPanel({
   running = false,
   model = modelStatus,
 }) {
-  const showResult = Boolean(result) || running;
+  // Answers stream under the passage; the toolbar only carries the question.
+  void result;
+  void canSave;
   const err = status && /fail|error|empty|unavail/i.test(status);
 
   return (
@@ -126,22 +198,14 @@ function renderPanel({
         `<span class="annot-assist-dot annot-assist-dot-${model}" title="${escapeHTML(statusTitle(model))}"></span>` +
         `<span class="annot-assist-model-name" title="${escapeHTML(statusTitle(model))}">${escapeHTML(MODEL_LABEL)}</span>` +
         '<span class="annot-assist-spacer"></span>' +
+        (running ? '<span class="annot-assist-live" aria-live="polite">回答写入原文…</span>' : '') +
         `<button type="button" class="annot-assist-close" data-assist-close aria-label="Close">${ICON_CLOSE}</button>` +
       '</div>' +
-      (showResult
-        ? `<div class="annot-assist-result${running ? ' is-streaming' : ''}">` +
-            (running && !result ? '<span class="annot-assist-placeholder">…</span>' : '') +
-          '</div>'
-        : '') +
       (status ? `<p class="annot-assist-status${err ? ' is-error' : ''}">${escapeHTML(status)}</p>` : '') +
       '<div class="annot-assist-composer">' +
-        '<textarea class="annot-assist-input" rows="1" placeholder="Ask…" autocomplete="off" ' +
+        '<textarea class="annot-assist-input" rows="1" placeholder="Ask…（回答将直接写入原文）" autocomplete="off" ' +
           'aria-label="Question (⌘↵ to send)"></textarea>' +
         '<div class="annot-assist-actions">' +
-          (canSave
-            ? '<button type="button" class="annot-assist-save" title="Save note" aria-label="Save note">' +
-                `${ICON_BOOKMARK}</button>`
-            : '') +
           `<button type="button" class="annot-assist-run"${running ? ' disabled' : ''} title="Send (⌘↵)" aria-label="Send">` +
             `${running ? ICON_SPIN : ICON_SEND}</button>` +
         '</div>' +
@@ -227,7 +291,7 @@ function openAssist(ctx) {
   const bind = () => {
     ctx.toolbar.querySelector('[data-assist-close]')?.addEventListener('click', () => ctx.hide());
     ctx.toolbar.querySelector('.annot-assist-run')?.addEventListener('click', () => { void run(); });
-    ctx.toolbar.querySelector('.annot-assist-save')?.addEventListener('click', () => { applyNoteAnswer(); });
+    // Save is automatic after a successful stream; no toolbar save button.
     const field = ctx.toolbar.querySelector('.annot-assist-input');
     field?.addEventListener('input', () => {
       autosizeInput(field);
@@ -244,18 +308,33 @@ function openAssist(ctx) {
     });
   };
 
-  const ensureResultEl = () => {
-    let el = ctx.toolbar.querySelector('.annot-assist-result');
-    if (!el) {
-      const head = ctx.toolbar.querySelector('.annot-assist-head');
-      el = document.createElement('div');
-      el.className = 'annot-assist-result is-streaming';
-      el.innerHTML = '<span class="annot-assist-placeholder">…</span>';
-      const panel = ctx.toolbar.querySelector('.annot-assist-panel') || ctx.toolbar;
-      if (head?.nextSibling) panel.insertBefore(el, head.nextSibling);
-      else panel.appendChild(el);
+  const applyNoteAnswer = ({ silent = false } = {}) => {
+    const noteText = noteBodyFromAnswer(lastInstruction, answer);
+    if (!noteText) {
+      if (!silent) showToast('Nothing to save');
+      return false;
     }
-    return el;
+    if (!hasNoteAnchor(ctx)) {
+      if (!silent) showToast('Selection lost — select again');
+      return false;
+    }
+    try {
+      if (ctx.annotEl && ctx.annotEl.isConnected) {
+        const entry = findAnnot(ctx.annotEl.dataset.annotId);
+        if (!entry) throw new Error('annotation missing');
+        setNoteOnPassage(entry, ctx.annotEl, noteText, { kind: 'qa' });
+      } else {
+        applyNote(ctx.range, noteText, { kind: 'qa' });
+      }
+      removeAssistInline();
+      scheduleNoteLayout();
+      if (!silent) showToast('已写入原文');
+      return true;
+    } catch (err) {
+      console.error('membox: assist note failed', err);
+      if (!silent) showToast(err.message || 'Could not save note');
+      return false;
+    }
   };
 
   const run = async () => {
@@ -272,6 +351,9 @@ function openAssist(ctx) {
     answer = '';
     if (abortController) abortController.abort();
     abortController = new AbortController();
+    removeAssistInline();
+    ensureAssistInline(ctx);
+    paintAssistInline('', { streaming: true });
     paint({ running: true, result: '', canSave: false });
 
     let assembled = '';
@@ -294,14 +376,14 @@ function openAssist(ctx) {
         }
         if (event.type === 'delta' && event.text) {
           assembled += event.text;
-          const el = ensureResultEl();
-          el.classList.add('is-streaming', 'has-content');
-          el.textContent = assembled;
-          ctx.position(ctx.range || ctx.annotEl);
+          // Stream into the article under the selection (translation-style).
+          ensureAssistInline(ctx);
+          paintAssistInline(assembled, { streaming: true });
         }
         if (event.type === 'done') {
           answer = (event.text || assembled || '').trim();
           assembled = answer;
+          paintAssistInline(assembled, { streaming: false });
         }
         if (event.type === 'error') {
           modelStatus = 'bad';
@@ -309,18 +391,29 @@ function openAssist(ctx) {
         }
       }, abortController.signal);
 
-      paint({
-        running: false,
-        result: assembled,
-        canSave: canSaveNow(),
-      });
+      answer = (answer || assembled || '').trim();
+      // Auto-save into an inline qa note so the answer lives with the passage.
+      if (answer && applyNoteAnswer({ silent: true })) {
+        paint({ running: false, result: '', canSave: false });
+        ctx.finish();
+        showToast('回答已写入原文');
+      } else {
+        paint({
+          running: false,
+          result: assembled,
+          canSave: canSaveNow(),
+          status: answer ? '回答已显示，但未能保存笔记' : '',
+        });
+      }
     } catch (err) {
       if (err && err.name === 'AbortError') {
+        removeAssistInline();
         busy = false;
         return;
       }
       console.error('membox: assist failed', err);
       modelStatus = 'bad';
+      paintAssistInline(assembled, { streaming: false });
       paint({
         running: false,
         status: (err && err.message) || 'Assist failed',
@@ -333,33 +426,85 @@ function openAssist(ctx) {
     }
   };
 
-  const applyNoteAnswer = () => {
-    const noteText = noteBodyFromAnswer(lastInstruction, answer);
-    if (!noteText) {
-      showToast('Nothing to save');
-      return;
-    }
-    if (!hasNoteAnchor(ctx)) {
-      showToast('Selection lost — select again');
-      return;
-    }
-    try {
-      if (ctx.annotEl && ctx.annotEl.isConnected) {
-        const entry = findAnnot(ctx.annotEl.dataset.annotId);
-        if (!entry) throw new Error('annotation missing');
-        setNoteOnPassage(entry, ctx.annotEl, noteText, { kind: 'qa' });
-      } else {
-        applyNote(ctx.range, noteText, { kind: 'qa' });
-      }
-      showToast('Saved as note');
-      ctx.finish();
-    } catch (err) {
-      console.error('membox: assist note failed', err);
-      showToast(err.message || 'Could not save note');
-    }
-  };
-
   bind();
+}
+
+/** Ask about a selection from the unified compose dialog (note/ask toggle). */
+export async function runAssistAsk(ctx, instruction) {
+  const selection = String(ctx?.text || '').trim();
+  const question = String(instruction || '').trim();
+  if (!selection) throw new Error('Select some text first');
+  if (!question) throw new Error('Ask a question');
+  if (!session.connected || !session.documentID) {
+    throw new Error('Open a membox document to use assist');
+  }
+  if (busy) throw new Error('Assist is already running');
+
+  const markdown = state.currentMarkdown || '';
+  const { prefix, suffix } = contextAround(markdown, selection);
+  let answer = '';
+  let assembled = '';
+
+  busy = true;
+  if (abortController) abortController.abort();
+  abortController = new AbortController();
+  removeAssistInline();
+  ensureAssistInline(ctx);
+  paintAssistInline('', { streaming: true });
+
+  try {
+    await streamAssist(session.documentID, {
+      mode: 'ask',
+      instruction: question,
+      selection,
+      prefix,
+      suffix,
+      title: state.docTitle || '',
+    }, (event) => {
+      if (event.type === 'delta' && event.text) {
+        assembled += event.text;
+        ensureAssistInline(ctx);
+        paintAssistInline(assembled, { streaming: true });
+      }
+      if (event.type === 'done') {
+        answer = (event.text || assembled || '').trim();
+        assembled = answer;
+        paintAssistInline(assembled, { streaming: false });
+      }
+      if (event.type === 'error') {
+        throw new Error(event.error || 'Assist failed');
+      }
+    }, abortController.signal);
+
+    answer = (answer || assembled || '').trim();
+    if (!answer) throw new Error('Empty answer');
+
+    const noteText = noteBodyFromAnswer(question, answer);
+    if (ctx.annotEl && ctx.annotEl.isConnected) {
+      const entry = findAnnot(ctx.annotEl.dataset.annotId);
+      if (!entry) throw new Error('annotation missing');
+      setNoteOnPassage(entry, ctx.annotEl, noteText, { kind: 'qa' });
+    } else if (ctx.range) {
+      applyNote(ctx.range, noteText, { kind: 'qa' });
+    } else {
+      throw new Error('Selection lost — select again');
+    }
+    removeAssistInline();
+    scheduleNoteLayout();
+    showToast('回答已写入原文');
+    ctx.finish?.();
+    return { answer };
+  } catch (err) {
+    if (err && err.name === 'AbortError') {
+      removeAssistInline();
+      throw err;
+    }
+    paintAssistInline(assembled, { streaming: false });
+    throw err;
+  } finally {
+    busy = false;
+    abortController = null;
+  }
 }
 
 export function initAssist() {
@@ -369,18 +514,9 @@ export function initAssist() {
       abortController.abort();
       abortController = null;
     }
+    // Drop an unfinished stream preview if the user dismissed the panel.
+    removeAssistInline();
   });
-  registerAnnotAction({
-    id: 'assist',
-    icon: ASSIST_ICON,
-    title: 'Ask about selection',
-    when: ({ mode, text }) => {
-      if (mode !== 'create') return false;
-      const value = String(text || '').trim();
-      if (value.length < 8) return false;
-      if (/^[A-Za-z]+(?:['\u2019-][A-Za-z]+)*$/.test(value) && value.length <= 40) return false;
-      return true;
-    },
-    run: (ctx) => openAssist(ctx),
-  });
+  // Ask is hosted by the selection compose dialog (note/ask toggle), not a
+  // separate toolbar glyph.
 }

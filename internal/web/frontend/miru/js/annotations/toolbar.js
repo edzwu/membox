@@ -1,5 +1,5 @@
-/* Miru — the floating selection toolbar: create highlights/underlines/notes
-   from a fresh text selection, or edit/delete an existing annotated passage.
+/* Miru — the floating selection toolbar: create highlights/notes from a
+   fresh text selection, or edit/delete an existing annotated passage.
    Owns the toolbar DOM element and the transient "what am I acting on"
    pointers (currentRange / currentAnnotEl), none of which are shared with
    other modules. */
@@ -8,7 +8,7 @@ import { elements } from '../dom.js';
 import { ANNOTATION_TEXT_EXCLUDE } from '../constants.js';
 import { showToast } from '../ui/feedback.js';
 import { scheduleNoteLayout } from './layout.js';
-import { initNoteFocus, focusNote } from './focus.js';
+import { initNoteFocus, focusNote, toggleNoteInline } from './focus.js';
 import { annotationTextFromRange } from './sidecar.js';
 import { notifyAnnotationsChanged } from './session.js';
 import {
@@ -24,9 +24,8 @@ import {
 
 const ANNOT_ICONS = {
   highlight: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M15.5 3l5.5 5.5-8.5 8.5H7v-5.5L15.5 3zM5 19h14v2H5v-2z"/></svg>',
-  underline: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M6 3v7a6 6 0 0 0 12 0V3h-2v7a4 4 0 0 1-8 0V3H6zM4 20h16v2H4v-2z"/></svg>',
-  strikethrough: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M6.85 10h10.3v2H6.85v-2zM12 4c-2.8 0-5 1.34-5 3.5h2.2c0-.9 1.2-1.7 2.8-1.7s2.8.8 2.8 1.7c0 .5-.2.9-.6 1.2l1.7 1.3c.8-.7 1.3-1.6 1.3-2.5 0-2.16-2.2-3.5-5.2-3.5zM7 16.5c0 2.16 2.2 3.5 5 3.5s5-1.34 5-3.5h-2.2c0 .9-1.2 1.7-2.8 1.7s-2.8-.8-2.8-1.7c0-.5.2-.9.6-1.2L8.3 14c-.8.7-1.3 1.6-1.3 2.5z"/></svg>',
   note: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M4 4h16v12H8l-4 4V4z"/></svg>',
+  ask: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M12 3l1.2 3.6L17 8l-3.8 1.4L12 13l-1.2-3.6L7 8l3.8-1.4L12 3z"/><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" d="M18 14l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7.7-2z"/></svg>',
   trash: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M3 6h18M8 6V4h8v2m1 0v14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2V6h10z"/></svg>',
 };
 
@@ -59,7 +58,7 @@ let currentSelectionText = '';
 export function hideAnnotToolbar() {
   if (annotToolbar) {
     annotToolbar.hidden = true;
-    annotToolbar.classList.remove('is-dict', 'is-assist');
+    annotToolbar.classList.remove('is-dict', 'is-assist', 'is-compose', 'is-mode-note', 'is-mode-ask');
   }
   currentRange = null;
   currentAnnotEl = null;
@@ -80,34 +79,153 @@ function positionAnnotToolbar(target) {
   annotToolbar.style.left = Math.max(8, Math.min(left, Math.max(8, maxLeft))) + 'px';
 }
 
-const MARK_FLAGS = {
-  highlight: ['hl', 'annot-hl'],
-  underline: ['ul', 'annot-ul'],
-  strikethrough: ['sl', 'annot-sl'],
-};
+const ICON_SEND =
+  '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M3.4 4.2 21 12 3.4 19.8l2.1-6.3L15 12l-9.5-1.5L3.4 4.2z"/></svg>';
 
-// Build the toolbar for create mode (fresh selection) or edit mode (an
-// existing annotated passage, given its entry to reflect toggle states).
+/** @type {'note' | 'ask'} */
+let composeMode = 'note';
+
+// Build the toolbar for create mode (compose dialog) or edit mode (icon row).
 function buildAnnotToolbar(mode, entry, text = '') {
   const i = ANNOT_ICONS;
+  annotToolbar.classList.remove('is-dict', 'is-assist', 'is-compose');
+
+  if (mode === 'create') {
+    composeMode = 'note';
+    openComposeDialog();
+    return;
+  }
+
+  // Edit existing annotation: compact icon row.
   let html =
     `<button type="button" data-action="highlight" class="${entry && entry.hl ? 'active' : ''}" title="Highlight" aria-label="Highlight">${i.highlight}</button>` +
-    `<button type="button" data-action="underline" class="${entry && entry.ul ? 'active' : ''}" title="Underline" aria-label="Underline">${i.underline}</button>` +
-    `<button type="button" data-action="strikethrough" class="${entry && entry.sl ? 'active' : ''}" title="Strikethrough" aria-label="Strikethrough">${i.strikethrough}</button>` +
     `<button type="button" data-action="note" title="${entry && entry.note ? 'Edit note' : 'Add note'}" aria-label="Note">${i.note}</button>`;
   for (const action of extraAnnotActions) {
     const visible = typeof action.when === 'function'
       ? action.when({ mode, text, entry })
-      : mode === 'create';
+      : false;
     if (!visible) continue;
     const title = action.title || action.id;
     html += `<button type="button" data-action="ext:${action.id}" title="${escapeAttr(title)}" aria-label="${escapeAttr(title)}">${action.icon || title}</button>`;
   }
-  if (mode === 'edit') {
-    html += `<button type="button" data-action="delete" class="annot-del" title="Delete annotation" aria-label="Delete annotation">${i.trash}</button>`;
-  }
-  annotToolbar.classList.remove('is-dict', 'is-assist');
+  html += `<button type="button" data-action="delete" class="annot-del" title="Delete annotation" aria-label="Delete annotation">${i.trash}</button>`;
   annotToolbar.innerHTML = html;
+}
+
+function openComposeDialog(presetText = '') {
+  annotToolbar.classList.add('is-compose');
+  annotToolbar.classList.toggle('is-mode-ask', composeMode === 'ask');
+  annotToolbar.classList.toggle('is-mode-note', composeMode === 'note');
+  const modeLabel = composeMode === 'ask' ? 'Ask' : 'Note';
+  const modeIcon = composeMode === 'ask' ? ANNOT_ICONS.ask : ANNOT_ICONS.note;
+  const modeTitle = composeMode === 'ask'
+    ? 'Ask mode · click to switch to Note'
+    : 'Note mode · click to switch to Ask';
+  const placeholder = composeMode === 'ask'
+    ? 'Ask about the selection…'
+    : 'Add a note…';
+  let extras = '';
+  for (const action of extraAnnotActions) {
+    const visible = typeof action.when === 'function'
+      ? action.when({ mode: 'create', text: currentSelectionText, entry: null })
+      : false;
+    if (!visible) continue;
+    const title = action.title || action.id;
+    extras += `<button type="button" class="annot-compose-ext" data-action="ext:${escapeAttr(action.id)}" title="${escapeAttr(title)}" aria-label="${escapeAttr(title)}">${action.icon || title}</button>`;
+  }
+
+  // Deepseek-style panel: full-width input on top; mode toggle bottom-left,
+  // highlight + send bottom-right.
+  annotToolbar.innerHTML =
+    '<div class="annot-compose" role="dialog" aria-label="Selection actions">' +
+      `<textarea class="annot-compose-input" rows="2" placeholder="${escapeAttr(placeholder)}" ` +
+        'title="Enter for a new line · ⌘Enter to send" ' +
+        `aria-label="${escapeAttr(placeholder)}" spellcheck="true"></textarea>` +
+      '<div class="annot-compose-foot">' +
+        '<div class="annot-compose-foot-left">' +
+          `<button type="button" class="annot-compose-mode" data-action="toggle-mode" title="${escapeAttr(modeTitle)}" aria-label="${escapeAttr(modeTitle)}">` +
+            `<span class="annot-compose-mode-icon" aria-hidden="true">${modeIcon}</span>` +
+          '</button>' +
+          extras +
+        '</div>' +
+        '<div class="annot-compose-actions">' +
+          `<button type="button" class="annot-compose-hl" data-action="highlight" title="Highlight selection" aria-label="Highlight">${ANNOT_ICONS.highlight}</button>` +
+          `<button type="button" class="annot-compose-send" data-action="send" title="Send (⌘Enter)" aria-label="Send">${ICON_SEND}</button>` +
+        '</div>' +
+      '</div>' +
+    '</div>';
+
+  const input = annotToolbar.querySelector('.annot-compose-input');
+  if (presetText) input.value = presetText;
+  autosizeNoteInput(input);
+  input.addEventListener('input', () => {
+    autosizeNoteInput(input);
+    positionAnnotToolbar(currentAnnotEl || currentRange);
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.isComposing && e.keyCode !== 229) {
+      e.preventDefault();
+      void commitComposeSend();
+    } else if (e.key === 'Escape' && !e.isComposing) {
+      hideAnnotToolbar();
+    }
+  });
+  // Do not blur-commit — accidental focus loss should not save empty notes.
+  positionAnnotToolbar(currentAnnotEl || currentRange);
+  // Focus after layout so the caret is visible (mousedown preventDefault on
+  // non-fields must not block this).
+  requestAnimationFrame(() => {
+    input.focus({ preventScroll: true });
+    const len = input.value.length;
+    try { input.setSelectionRange(len, len); } catch { /* ignore */ }
+  });
+}
+
+function toggleComposeMode() {
+  const input = annotToolbar.querySelector('.annot-compose-input');
+  const keep = input ? input.value : '';
+  composeMode = composeMode === 'note' ? 'ask' : 'note';
+  openComposeDialog(keep);
+}
+
+async function commitComposeSend() {
+  const input = annotToolbar.querySelector('.annot-compose-input');
+  const text = (input?.value || '').trim();
+  const sendBtn = annotToolbar.querySelector('.annot-compose-send');
+
+  if (composeMode === 'note') {
+    if (!text) {
+      showToast('Write a note first');
+      input?.focus();
+      return;
+    }
+    commitNoteInput(text);
+    return;
+  }
+
+  // Ask mode → deepseek assist, streams inline under the passage.
+  if (!text) {
+    showToast('Ask a question');
+    input?.focus();
+    return;
+  }
+  if (sendBtn) {
+    sendBtn.disabled = true;
+    sendBtn.classList.add('is-busy');
+  }
+  try {
+    const { runAssistAsk } = await import('../../membox/assist.js');
+    await runAssistAsk(extensionContext(), text);
+  } catch (err) {
+    if (err && err.name === 'AbortError') return;
+    console.error('compose ask failed', err);
+    showToast(err?.message || 'Ask failed');
+    if (sendBtn) {
+      sendBtn.disabled = false;
+      sendBtn.classList.remove('is-busy');
+    }
+    input?.focus();
+  }
 }
 
 function escapeAttr(value) {
@@ -195,13 +313,15 @@ function handleEditAction(action, annotEl, entry, btn) {
     openNoteInput();
     return;
   }
-  // Idempotent toggle of highlight / underline / strikethrough on the passage.
-  const [flag, className] = MARK_FLAGS[action] || [];
-  if (!flag) return;
-  entry[flag] = !entry[flag];
-  annotEl.classList.toggle(className, entry[flag]);
-  btn.classList.toggle('active', entry[flag]);
-  if (!entry.hl && !entry.ul && !entry.sl && !entry.note) {
+  // Idempotent toggle of highlight on the passage.
+  if (action !== 'highlight') return;
+  entry.hl = !entry.hl;
+  entry.ul = false;
+  entry.sl = false;
+  annotEl.classList.toggle('annot-hl', entry.hl);
+  annotEl.classList.remove('annot-ul', 'annot-sl');
+  btn.classList.toggle('active', entry.hl);
+  if (!entry.hl && !entry.note) {
     unwrapAnnotEl(annotEl);
     removeAnnot(entry.id);
     hideAnnotToolbar();
@@ -214,6 +334,15 @@ function onAnnotToolbarClick(e) {
   const btn = e.target.closest('button[data-action]');
   if (!btn) return;
   const action = btn.dataset.action;
+
+  if (action === 'toggle-mode') {
+    toggleComposeMode();
+    return;
+  }
+  if (action === 'send') {
+    void commitComposeSend();
+    return;
+  }
 
   if (action.startsWith('ext:')) {
     const ext = extraAnnotActions.find((item) => item.id === action.slice(4));
@@ -232,11 +361,16 @@ function onAnnotToolbarClick(e) {
   }
 
   if (currentRange) {
+    if (action === 'highlight') {
+      applyMark('highlight', currentRange);
+      // Keep compose open so the user can still note/ask on the same selection.
+      // Re-clone range after DOM wrap may invalidate it — finish for safety.
+      finishAnnotation();
+      return;
+    }
     if (action === 'note') {
       openNoteInput();
-    } else {
-      applyMark(action, currentRange);
-      finishAnnotation();
+      return;
     }
   }
 }
@@ -250,7 +384,9 @@ function onAnnotMouseUp(e) {
     // Focusing the prompt input collapses the page selection; that must NOT
     // tear down an in-flight deepseek request or the panel itself.
     if (annotToolbar && !annotToolbar.hidden &&
-        (annotToolbar.classList.contains('is-assist') || annotToolbar.classList.contains('is-dict'))) {
+        (annotToolbar.classList.contains('is-assist')
+          || annotToolbar.classList.contains('is-dict')
+          || annotToolbar.classList.contains('is-compose'))) {
       return;
     }
     const sel = window.getSelection();
@@ -322,12 +458,33 @@ function onAnnotPassageClick(e) {
     return;
   }
 
+  // Reference number on the passage toggles the nearby inline note body.
+  // No scroll — the note sits right under the block.
+  const badge = e.target.closest('.annot-note-num');
+  if (badge) {
+    const host = badge.closest('span.annot.annot-note-ref');
+    const id = host?.dataset?.annotId;
+    if (id) {
+      e.preventDefault();
+      e.stopPropagation();
+      toggleNoteInline(id);
+      return;
+    }
+  }
+
   const annotEl = e.target.closest('span.annot');
   if (!annotEl) return;
 
-  // Note anchors also light up their card in the rail.
+  // Clicking the highlighted passage (not the number) still opens the edit bar
+  // and briefly pulses the inline note without forcing a scroll jump.
   if (annotEl.classList.contains('annot-note-ref') && annotEl.dataset.annotId) {
-    focusNote(annotEl.dataset.annotId, { scrollTo: 'card' });
+    const id = annotEl.dataset.annotId;
+    const card = document.querySelector(`.annot-note[data-annot-id="${id}"]`);
+    if (card?.classList.contains('is-collapsed') || card?.hidden) {
+      toggleNoteInline(id); // expand
+    } else {
+      focusNote(id, { duration: 1200 });
+    }
   }
 
   currentAnnotEl = annotEl;
@@ -344,8 +501,13 @@ export function initAnnotations() {
   annotToolbar.hidden = true;
   document.body.appendChild(annotToolbar);
 
-  // Prevent the toolbar from stealing the selection/focus.
-  annotToolbar.addEventListener('mousedown', (e) => e.preventDefault());
+  // Keep page selection while clicking icon buttons, but allow real fields
+  // (textarea/input) to take focus so the caret is visible and typing works.
+  annotToolbar.addEventListener('mousedown', (e) => {
+    const field = e.target.closest('textarea, input, [contenteditable="true"]');
+    if (field) return;
+    e.preventDefault();
+  });
   annotToolbar.addEventListener('click', onAnnotToolbarClick);
 
   document.addEventListener('mouseup', onAnnotMouseUp);

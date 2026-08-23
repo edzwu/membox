@@ -81,26 +81,12 @@ function cleanExportClone(source, mode = 'site') {
 }
 
 function cleanAnnotationLayerForExport(mode, annotationIds = null) {
-  const layer = cleanExportClone(elements.annotationLayer, mode);
-  if (annotationIds) {
-    layer.querySelectorAll('.annot-note').forEach((note) => {
-      if (!annotationIds.has(String(note.dataset.annotId))) note.remove();
-    });
-  }
-  if (!layer.querySelector('.annot-note')) return null;
-  // Portable sites and isolated sections use a dedicated stacked notes region;
-  // full PNG snapshots retain the live rail geometry.
-  if (mode !== 'pin' || annotationIds) {
-    layer.classList.remove('is-rail');
-    layer.classList.add('is-stack');
-    layer.querySelectorAll('.annot-note-in-rail').forEach((note) => {
-      note.classList.remove('annot-note-in-rail');
-      note.style.removeProperty('top');
-      note.style.removeProperty('z-index');
-      note.hidden = false;
-    });
-  }
-  return layer;
+  // Notes now live inline under their passage inside the article clone.
+  // The annotation layer is only a park for orphans / jp-study shells — skip
+  // exporting it as a bottom stack so we do not duplicate inline notes.
+  void mode;
+  void annotationIds;
+  return null;
 }
 
 function exportSurface(article, annotationLayer) {

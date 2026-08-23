@@ -1,6 +1,6 @@
-/* Miru — render literal `==highlight==` and `<u>underline</u>` markdown
-   syntax as display-only annotations (not tracked as editable session
-   marks). Skips code and math regions. */
+/* Miru — render literal `==highlight==` and `<u>…</u>` markdown syntax as
+   display-only emphasis (not tracked as editable session marks). Skips code
+   and math regions. */
 
 import { elements } from '../dom.js';
 
@@ -20,7 +20,6 @@ function annotateTextNode(textNode) {
       frag.appendChild(mark);
     } else {
       const u = document.createElement('u');
-      u.className = 'annot-ul';
       u.textContent = m[2];
       frag.appendChild(u);
     }

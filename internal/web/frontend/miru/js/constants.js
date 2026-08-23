@@ -4,7 +4,7 @@
 export const STORAGE_KEY = 'miru-theme';
 
 export const ANNOTATION_FORMAT = 'miru-annotations';
-// v2 adds strikethrough; v1 sidecars remain readable (fields default off).
+// v2 wire format retained; underline/strikethrough fields stay false.
 export const ANNOTATION_VERSION = 2;
 export const ANNOTATION_LEGACY_VERSIONS = [1];
 export const ANNOTATION_CONTEXT_LENGTH = 32;
