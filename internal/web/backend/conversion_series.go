@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"membox/internal/application/port"
 	"membox/internal/domain/catalog"
 )
 
@@ -87,8 +88,16 @@ func (s *Server) buildConversionSeries(ctx context.Context, selector string) (co
 		return conversionSeriesResponse{Kind: "none"}, nil
 	}
 	// statusFilter on ListDocuments is read_status, not location status — leave
-	// it empty and filter active conversion siblings ourselves.
-	records, err := s.service.ListDocuments(ctx, 1000, false, "")
+	// it empty and filter active conversion siblings ourselves. Confine the scan
+	// to the focus path so a busy notes directory (>1000 files) cannot push
+	// chapter siblings past the global list limit; PDF cross-path scans keep
+	// the wider net.
+	var records []port.DocumentRecord
+	if !crossPath {
+		records, err = s.service.ListDocumentsByPathID(ctx, document.Location.PathID, 5000, false)
+	} else {
+		records, err = s.service.ListDocuments(ctx, 5000, false, "")
+	}
 	if err != nil {
 		return conversionSeriesResponse{}, err
 	}

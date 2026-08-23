@@ -155,15 +155,31 @@ func plainFTSQuery(query string, exact bool) string {
 }
 
 func (s *Store) ListDocuments(ctx context.Context, limit int, includeUnavailable bool, statusFilter string) ([]port.DocumentRecord, error) {
+	return s.listDocuments(ctx, limit, includeUnavailable, statusFilter, nil)
+}
+
+// ListDocumentsByPathID lists documents confined to one scan path. Series
+// navigation uses it so a busy notes directory cannot push chapter siblings
+// past the global list limit.
+func (s *Store) ListDocumentsByPathID(ctx context.Context, pathID catalog.IndexedPathID, limit int, includeUnavailable bool) ([]port.DocumentRecord, error) {
+	return s.listDocuments(ctx, limit, includeUnavailable, "", &pathID)
+}
+
+func (s *Store) listDocuments(ctx context.Context, limit int, includeUnavailable bool, statusFilter string, pathID *catalog.IndexedPathID) ([]port.DocumentRecord, error) {
 	where := "WHERE l.status='active' AND " + notTrashedClause
 	if includeUnavailable {
 		where = "WHERE " + notTrashedClause
 	}
-	args := []any{limit}
+	var args []any
+	if pathID != nil {
+		where += " AND l.path_id=?"
+		args = append(args, *pathID)
+	}
 	if statusFilter != "" {
 		where += " AND COALESCE(r.read_status,'unread')=?"
-		args = append([]any{statusFilter}, args...)
+		args = append(args, statusFilter)
 	}
+	args = append(args, limit)
 	rows, err := s.db.QueryContext(ctx, `SELECT d.id,d.created_at,d.updated_at,d.pinned,l.path_id,l.relative_path,l.file_key,l.status,
 COALESCE(i.title,''),COALESCE(i.summary,''),COALESCE(i.media_type,'text/markdown'),COALESCE(i.metadata_overrides,0),COALESCE(i.authors,''),
 COALESCE(i.publication_year,0),COALESCE(i.keywords,''),COALESCE(i.page_count,0),

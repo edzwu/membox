@@ -24,6 +24,18 @@ func (s *Service) ListDocuments(ctx context.Context, limit int, includeUnavailab
 	return s.store.ListDocuments(ctx, limit, includeUnavailable, statusFilter)
 }
 
+// ListDocumentsByPathID lists documents confined to one scan path so busy
+// notes directories cannot push conversion siblings past the global limit.
+func (s *Service) ListDocumentsByPathID(ctx context.Context, pathID catalog.IndexedPathID, limit int, includeUnavailable bool) ([]port.DocumentRecord, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 5000 {
+		return nil, errors.New("document list limit cannot exceed 5000")
+	}
+	return s.store.ListDocumentsByPathID(ctx, pathID, limit, includeUnavailable)
+}
+
 // SetDocumentReadStatus records the semantic reading state (unread/reading/
 // finished) for a document. Opening marks reading; scrolling to the end marks
 // finished; the TUI cycles the state with tab.

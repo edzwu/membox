@@ -296,6 +296,12 @@ type CatalogStore interface {
 		includeUnavailable bool,
 		statusFilter string,
 	) ([]DocumentRecord, error)
+	ListDocumentsByPathID(
+		ctx context.Context,
+		pathID catalog.IndexedPathID,
+		limit int,
+		includeUnavailable bool,
+	) ([]DocumentRecord, error)
 	ResolveDocument(ctx context.Context, selector string) (*catalog.Document, string, error)
 	// LogicalID/LogicalIDs expose unique short abbreviations of physical UUIDs
 	// for display and left-to-right selector typing. Physical ids are unchanged.
