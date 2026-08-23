@@ -33,6 +33,19 @@ export function preprocessMath(source) {
       continue;
     }
 
+    // A Markdown link/image destination — `](url)` — must never be scanned
+    // for math delimiters: URL query strings routinely contain `$` (e.g.
+    // Substack's /image/fetch/$s_!xxx!,...), and pairing two of them across a
+    // single line (as in [![img](a$…)](b$…)) corrupted the destination.
+    if (source[index] === ']' && source[index + 1] === '(') {
+      const close = findClosingParen(source, index + 1);
+      if (close >= 0) {
+        output += source.slice(index, close + 1);
+        index = close + 1;
+        continue;
+      }
+    }
+
     if (source[index] === '$') {
       const math = readDollarMath(source, index);
       if (math) {
@@ -66,6 +79,25 @@ function readDollarMath(source, start) {
     text: `\\(${display ? content.replace(/\s+/g, ' ').trim() : content}\\)`,
     end: close + width,
   };
+}
+
+function findClosingParen(source, open) {
+  // `open` points at '(' — copy the balanced destination verbatim so URL
+  // query strings can never be mistaken for math ($...$ inside links/images).
+  let depth = 1;
+  for (let i = open + 1; i < source.length; i++) {
+    const ch = source[i];
+    if (ch === '\\') {
+      i++;
+      continue;
+    }
+    if (ch === '(') depth++;
+    else if (ch === ')') {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
 }
 
 function findUnescapedDelimiter(source, start, delimiter, stopAtNewline) {
