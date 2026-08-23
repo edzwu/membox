@@ -6,7 +6,6 @@ import { showToast } from '../../js/ui/feedback.js';
 import { session } from '../session.js';
 import { replaceDocumentID, loadFromMembox } from '../document.js';
 import { closeOtherModals, registerModal } from '../modals.js';
-import { getStatusExtras, setStatusExtrasPinned } from '../status.js';
 import { postSync } from '../api.js';
 import {
   abortAgentRun,
@@ -51,8 +50,6 @@ const HISTORY_ICON =
   '<path d="M12 9v3.4l2.4 1.4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>' +
   '</svg>';
 
-/** @type {HTMLButtonElement | null} */
-let toggleBtn = null;
 /** @type {HTMLElement | null} */
 let panel = null;
 /** @type {HTMLElement | null} */
@@ -177,9 +174,6 @@ function updateSendButton() {
   sendBtn.innerHTML = busy && runID ? STOP_ICON : SEND_ICON;
   sendBtn.title = busy && runID ? 'Stop' : 'Search (⌘↵)';
   sendBtn.setAttribute('aria-label', busy && runID ? 'Stop' : 'Search');
-  toggleBtn?.classList.toggle('is-busy', busy);
-  toggleBtn?.classList.toggle('is-open', open);
-  setStatusExtrasPinned('search', open || busy);
 }
 
 function scheduleTranscriptPaint() {
@@ -661,9 +655,6 @@ function openPanel() {
   closeOtherModals(modalHandle);
   open = true;
   panel.hidden = false;
-  toggleBtn?.classList.add('is-open');
-  toggleBtn?.setAttribute('aria-expanded', 'true');
-  setStatusExtrasPinned('search', true);
   setTimeout(() => inputEl?.focus(), 0);
   if (session.connected) {
     void probeAgent()
@@ -677,9 +668,6 @@ function openPanel() {
 function closePanel() {
   open = false;
   if (panel) panel.hidden = true;
-  toggleBtn?.classList.remove('is-open');
-  toggleBtn?.setAttribute('aria-expanded', 'false');
-  setStatusExtrasPinned('search', busy);
   // Keep SSE alive while a run is in flight so results finish in the background.
   if (!busy) stopSubscription();
 }
@@ -690,24 +678,6 @@ const modalHandle = {
 };
 
 function buildDOM() {
-  const extras = getStatusExtras();
-  if (!extras) {
-    console.warn('membox: status extras missing; agent search not mounted');
-    return;
-  }
-
-  // Low-frequency tray, rightmost: [save] [+] | [译] [search]
-  toggleBtn = document.createElement('button');
-  toggleBtn.type = 'button';
-  toggleBtn.id = 'membox-agent-search';
-  toggleBtn.className = 'membox-agent-search';
-  toggleBtn.setAttribute('aria-label', 'Agentic search');
-  toggleBtn.setAttribute('aria-expanded', 'false');
-  toggleBtn.setAttribute('aria-controls', 'membox-agent-search-panel');
-  toggleBtn.title = 'Search all notes';
-  toggleBtn.innerHTML = SEARCH_ICON;
-  extras.appendChild(toggleBtn);
-
   panel = document.createElement('section');
   panel.id = 'membox-agent-search-panel';
   panel.className = 'membox-agent-search-panel';
@@ -737,10 +707,6 @@ function buildDOM() {
   statusEl = panel.querySelector('.membox-agent-search-status');
   historyBtn = panel.querySelector('.membox-agent-search-history');
 
-  toggleBtn.addEventListener('click', () => {
-    if (open) closePanel();
-    else openPanel();
-  });
   panel.querySelector('.membox-agent-search-close')?.addEventListener('click', closePanel);
   historyBtn?.addEventListener('click', toggleHistoryView);
   sendBtn.addEventListener('click', () => { void runSearch(); });
@@ -755,6 +721,15 @@ function buildDOM() {
     }
   });
 
+  // Cmd/Ctrl+K toggles the search panel (dock magnifier removed).
+  document.addEventListener('keydown', (event) => {
+    if (event.repeat || event.isComposing || event.keyCode === 229) return;
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+      event.preventDefault();
+      if (open) closePanel();
+      else openPanel();
+    }
+  });
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && open) {
       event.stopPropagation();
@@ -768,6 +743,6 @@ function buildDOM() {
 }
 
 export function initAgentSearch() {
-  if (toggleBtn) return;
+  if (panel) return;
   buildDOM();
 }
