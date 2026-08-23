@@ -299,6 +299,29 @@ function clearComposeMaskBeforeAction() {
   currentRange = preserved || recomputeRangeForSelection(currentSelectionText);
 }
 
+/** Read-only access for host adapters (membox docks). The compose dialog
+ *  parks the page selection inside a mask span, so window.getSelection() has
+ *  nothing to copy/translate/summarize while the dialog is open. Returns the
+ *  selected text, or null when no compose selection is active. */
+export function getComposeSelection() {
+  return currentSelectionText ? { text: currentSelectionText } : null;
+}
+
+/** Hand the compose selection over to a host action (dock 摘/译): close the
+ *  dialog, restore the text into the live DOM, and return a fresh anchorable
+ *  Range for the passage. Idempotent — null when no compose selection is
+ *  active. The returned range stays valid because the mask unwrap preserves
+ *  its boundaries and does not normalize the surrounding text nodes. */
+export function detachComposeSelection() {
+  if (!currentSelectionText) return null;
+  const text = currentSelectionText;
+  const preserved = clearComposeSelectionMask({ preserveRange: true });
+  const range = preserved || recomputeRangeForSelection(text);
+  hideAnnotToolbar();
+  if (!range) return null;
+  return { text, range };
+}
+
 async function commitComposeSend() {
   const input = annotToolbar.querySelector('.annot-compose-input');
   const text = (input?.value || '').trim();

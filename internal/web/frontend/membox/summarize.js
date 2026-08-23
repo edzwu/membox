@@ -6,6 +6,7 @@
 
 import { applyNote, findAnnot, setNoteOnPassage } from '../js/annotations/model.js';
 import { focusNote } from '../js/annotations/focus.js';
+import { detachComposeSelection, getComposeSelection } from '../js/annotations/toolbar.js';
 import { elements } from '../js/dom.js';
 import { state } from '../js/state.js';
 import { session } from './session.js';
@@ -99,8 +100,17 @@ export function findExistingSummaryForSelection(range, selectionText) {
   return best;
 }
 
-/** Snapshot article selection text + a Range before focus steals the selection. */
+/** Snapshot article selection text + a Range before focus steals the selection.
+ *  A compose dialog selection (masked out of the live DOM) is handed over
+ *  first: the dialog closes, the text returns to the article, and the range
+ *  is rebuilt so anchoring works. */
 export function captureArticleSelection() {
+  const compose = detachComposeSelection();
+  if (compose) {
+    const text = normalizeSelectionText(compose.text);
+    if (text.length < 20) return null;
+    return { text, range: compose.range };
+  }
   const selection = window.getSelection();
   if (!selection || selection.isCollapsed || !selection.rangeCount || !elements.article) {
     return null;
@@ -115,6 +125,15 @@ export function captureArticleSelection() {
   const text = normalizeSelectionText(selection.toString());
   if (text.length < 20) return null;
   return { text, range };
+}
+
+/** Read-only selection presence check for chrome (dock titles): never closes
+ *  a compose dialog — just reports whether a passage is targeted. */
+export function hasArticleSelectionText() {
+  if (getComposeSelection()?.text) return true;
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed) return false;
+  return normalizeSelectionText(selection.toString()).length >= 20;
 }
 
 /**

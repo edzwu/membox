@@ -8,7 +8,7 @@ import { onRender } from './events.js';
 import { getStatusExtras, setStatusExtrasPinned } from './status.js';
 import { replaceDocumentID, loadFromMembox } from './document.js';
 import { streamDocSummarize } from './api.js';
-import { captureArticleSelection, runSelectionSummarize } from './summarize.js';
+import { captureArticleSelection, hasArticleSelectionText, runSelectionSummarize } from './summarize.js';
 
 let button = null;
 let labelEl = null;
@@ -61,7 +61,7 @@ function stageText(event) {
 }
 
 function hasSelectionHint() {
-  return Boolean(pendingSelection || captureArticleSelection());
+  return Boolean(pendingSelection || hasArticleSelectionText());
 }
 
 function renderButton(progressText = '') {

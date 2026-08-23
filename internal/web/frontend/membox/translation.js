@@ -4,6 +4,7 @@
    its source block; translated DOM is disposable and never changes Markdown. */
 
 import { scheduleNoteLayout } from '../js/annotations/layout.js';
+import { detachComposeSelection, getComposeSelection } from '../js/annotations/toolbar.js';
 import { elements } from '../js/dom.js';
 import { state } from '../js/state.js';
 import { showToast } from '../js/ui/feedback.js';
@@ -38,9 +39,11 @@ function createButton() {
   value.hidden = true;
   value.innerHTML = '<span class="membox-translate-glyph" aria-hidden="true">译</span><span class="membox-translate-progress" aria-hidden="true"></span>';
   // Focus/click on the dock button collapses the page selection — snapshot
-  // intersecting blocks on pointerdown while the range still exists.
+  // intersecting blocks on pointerdown while the range still exists. A compose
+  // dialog selection is handed over first (closes dialog, restores DOM).
   value.addEventListener('pointerdown', () => {
-    pendingSelectionRows = selectionRows();
+    const compose = detachComposeSelection();
+    pendingSelectionRows = compose ? selectionRows(compose.range) : selectionRows();
   });
   value.addEventListener('click', () => {
     if (active) stopTranslation();
@@ -53,7 +56,7 @@ function createButton() {
 }
 
 function hasArticleSelection() {
-  return Boolean(selectionRows());
+  return Boolean(getComposeSelection()?.text || selectionRows());
 }
 
 function renderButton() {
@@ -164,18 +167,23 @@ function hasUsableTranslation(element, text) {
   });
 }
 
-/** Blocks intersecting the current article selection, or null if none. */
-function selectionRows() {
+/** Blocks intersecting the current article selection, or null if none.
+ *  Accepts a range from detachComposeSelection() — the compose dialog masks
+ *  the page selection out of window.getSelection(), so dock actions must
+ *  hand the passage over instead of reading the live selection. */
+function selectionRows(rangeArg) {
   const selection = window.getSelection();
-  if (!selection || selection.isCollapsed || !selection.rangeCount || !elements.article) return null;
-  let range;
-  try {
-    range = selection.getRangeAt(0);
-  } catch {
-    return null;
+  let range = rangeArg || null;
+  if (!range) {
+    if (!selection || selection.isCollapsed || !selection.rangeCount || !elements.article) return null;
+    try {
+      range = selection.getRangeAt(0);
+    } catch {
+      return null;
+    }
   }
   if (!elements.article.contains(range.commonAncestorContainer)) return null;
-  if (!String(selection.toString() || '').replace(/\s+/g, ' ').trim()) return null;
+  if (!rangeArg && !String(selection.toString() || '').replace(/\s+/g, ' ').trim()) return null;
 
   const candidates = [...elements.article.querySelectorAll(TARGET_SELECTOR)];
   const rows = [];
