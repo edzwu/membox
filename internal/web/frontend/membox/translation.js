@@ -4,14 +4,12 @@
    its source block; translated DOM is disposable and never changes Markdown. */
 
 import { scheduleNoteLayout } from '../js/annotations/layout.js';
-import { detachComposeSelection, getComposeSelection } from '../js/annotations/toolbar.js';
+import { detachComposeSelection, registerAnnotAction } from '../js/annotations/toolbar.js';
 import { elements } from '../js/dom.js';
 import { state } from '../js/state.js';
 import { showToast } from '../js/ui/feedback.js';
 import { streamTranslation } from './api.js';
-import { onRender } from './events.js';
 import { session } from './session.js';
-import { getStatusExtras, setStatusExtrasPinned } from './status.js';
 
 const TARGET_SELECTOR = 'h1, h2, h3, h4, h5, h6, p, li, dt, dd, figcaption, th, td';
 const TRANSLATION_CLASS = 'membox-translation';
@@ -20,7 +18,6 @@ const MAX_SEGMENT_BYTES = 32 * 1024;
 const textEncoder = new TextEncoder();
 const byteLength = (text) => textEncoder.encode(text).length;
 
-let button = null;
 let active = false;
 let running = false;
 let generation = 0;
@@ -28,62 +25,6 @@ let controller = null;
 let completed = 0;
 let failed = 0;
 let total = 0;
-/** @type {Array<{id: string, element: Element, text: string}> | null} */
-let pendingSelectionRows = null;
-
-function createButton() {
-  const value = document.createElement('button');
-  value.type = 'button';
-  value.id = 'membox-translation-toggle';
-  value.className = 'membox-translate';
-  value.hidden = true;
-  value.innerHTML = '<span class="membox-translate-glyph" aria-hidden="true">译</span><span class="membox-translate-progress" aria-hidden="true"></span>';
-  // Focus/click on the dock button collapses the page selection — snapshot
-  // intersecting blocks on pointerdown while the range still exists. A compose
-  // dialog selection is handed over first (closes dialog, restores DOM).
-  value.addEventListener('pointerdown', () => {
-    const compose = detachComposeSelection();
-    pendingSelectionRows = compose ? selectionRows(compose.range) : selectionRows();
-  });
-  value.addEventListener('click', () => {
-    if (active) stopTranslation();
-    else void startTranslation();
-  });
-  // Low-frequency tray inside the bottom-left pill (collapsed until hover).
-  const extras = getStatusExtras();
-  (extras || document.body).appendChild(value);
-  return value;
-}
-
-function hasArticleSelection() {
-  return Boolean(getComposeSelection()?.text || selectionRows());
-}
-
-function renderButton() {
-  if (!button) return;
-  const canTranslate = session.connected
-    && document.body.classList.contains('is-reading')
-    && !document.body.classList.contains('is-snippet');
-  button.hidden = !canTranslate;
-  button.dataset.active = String(active);
-  button.dataset.running = String(running);
-  button.setAttribute('aria-pressed', String(active));
-  const selectionMode = !active && hasArticleSelection();
-  button.dataset.selection = String(selectionMode);
-  if (active) {
-    button.setAttribute('aria-label', 'Stop immersive translation');
-    button.title = `Stop immersive translation${total ? ` · ${completed}/${total}` : ''}`;
-  } else if (selectionMode) {
-    button.setAttribute('aria-label', 'Translate selected passage');
-    button.title = 'Translate selection · qwen3:14b';
-  } else {
-    button.setAttribute('aria-label', 'Start immersive translation');
-    button.title = 'Immersive translation (select text to translate one passage) · qwen3:14b';
-  }
-  const progress = button.querySelector('.membox-translate-progress');
-  progress.textContent = active && total ? `${completed}/${total}` : '';
-  setStatusExtrasPinned('translate', active);
-}
 
 function sourceText(element) {
   const clone = element.cloneNode(true);
@@ -276,34 +217,10 @@ async function translateParagraph(row, currentGeneration) {
   }
 }
 
-async function startTranslation() {
-  // Selection wins: translate only the passage blocks under the caret range.
-  // Empty selection keeps the existing full-document immersive behavior.
-  // Prefer the pointerdown snapshot — click focus often clears the live range.
-  const selectedRows = pendingSelectionRows || selectionRows();
-  pendingSelectionRows = null;
-  const selectionOnly = Boolean(selectedRows?.length);
-  const candidates = selectionOnly ? selectedRows : collectParagraphs();
-  if (!candidates.length) {
-    showToast(selectionOnly ? 'Selection has nothing to translate' : 'No paragraphs need translation');
-    return;
-  }
-
-  // Idempotency: reuse finished translations whose source fingerprint still
-  // matches. Full-doc must NOT wipe earlier selection translations.
-  // Selection re-click forces a refresh of only the chosen blocks.
-  let skipped = 0;
-  let rows = candidates;
-  if (!selectionOnly) {
-    rows = [];
-    for (const row of candidates) {
-      if (hasUsableTranslation(row.element, row.text)) skipped++;
-      else rows.push(row);
-    }
-  }
+async function translateRows(rows, { selectionOnly, skipped = 0 } = {}) {
   if (!rows.length) {
-    showToast(skipped
-      ? `Already translated (${skipped} kept)`
+    showToast(selectionOnly
+      ? 'Selection has nothing to translate'
       : 'No paragraphs need translation');
     return;
   }
@@ -325,7 +242,7 @@ async function startTranslation() {
   total = rows.length + skipped;
   const currentGeneration = ++generation;
   controller = new AbortController();
-  renderButton();
+  showToast(selectionOnly ? '翻译中…' : `沉浸翻译中 · ${rows.length} 段…`);
 
   try {
     for (const row of rows) {
@@ -339,12 +256,10 @@ async function startTranslation() {
         // remaining document. Skip it and keep translating.
         failed++;
       }
-      renderButton();
     }
     running = false;
     // Selection jobs are one-shot; full-doc stays toggleable until stop.
     if (selectionOnly) active = false;
-    renderButton();
     const kept = skipped ? ` · ${skipped} kept` : '';
     if (selectionOnly) {
       showToast(failed
@@ -359,12 +274,34 @@ async function startTranslation() {
     if (error && error.name === 'AbortError') return;
     running = false;
     if (selectionOnly) active = false;
-    renderButton();
     showToast(error instanceof Error ? error.message : 'Translation failed');
   }
 }
 
-function stopTranslation({ render = true } = {}) {
+/** Translate the passage blocks under a selection. */
+async function runSelectionRows(rows) {
+  return translateRows(rows, { selectionOnly: true, skipped: 0 });
+}
+
+/** Full-document immersive translation (keyboard-only entry). */
+async function startFullTranslation() {
+  if (!session.connected) {
+    showToast('Connect to membox before translating');
+    return;
+  }
+  const candidates = collectParagraphs();
+  // Idempotency: reuse finished translations whose source fingerprint still
+  // matches. Full-doc must NOT wipe earlier selection translations.
+  let skipped = 0;
+  const rows = [];
+  for (const row of candidates) {
+    if (hasUsableTranslation(row.element, row.text)) skipped++;
+    else rows.push(row);
+  }
+  return translateRows(rows, { selectionOnly: false, skipped });
+}
+
+function stopTranslation() {
   generation++;
   if (controller) controller.abort();
   controller = null;
@@ -375,19 +312,46 @@ function stopTranslation({ render = true } = {}) {
   total = 0;
   elements.article.querySelectorAll(`.${TRANSLATION_CLASS}`).forEach((node) => node.remove());
   scheduleNoteLayout();
-  if (render) renderButton();
 }
 
 export function initTranslation() {
-  button = createButton();
-  onRender(() => {
-    if (!session.connected && active) stopTranslation();
-    else renderButton();
+  // Selection translate lives inside the compose dialog: pick text, then tap
+  // 「译」. Full-document immersive translation stays available via
+  // Cmd/Ctrl+Alt+T.
+  registerAnnotAction({
+    id: 'translate',
+    icon: '译',
+    title: '翻译选中内容 · Cmd+Alt+T 全文沉浸',
+    when: ({ mode, text }) => mode === 'create' && Boolean(text),
+    run: () => {
+      if (active) {
+        stopTranslation();
+        return;
+      }
+      if (!session.connected) {
+        showToast('需要连接 membox 才能翻译');
+        return;
+      }
+      const detached = detachComposeSelection();
+      if (!detached) return;
+      const rows = selectionRows(detached.range);
+      if (!rows?.length) {
+        showToast('选区没有可翻译的内容');
+        return;
+      }
+      void runSelectionRows(rows);
+    },
   });
-  // Refresh tooltip so 「译」 advertises selection mode while text is highlighted.
-  document.addEventListener('selectionchange', () => {
-    if (!active) renderButton();
+
+  document.addEventListener('keydown', (e) => {
+    if (e.repeat || e.isComposing || e.keyCode === 229) return;
+    if (e.metaKey && e.altKey && e.key.toLowerCase() === 't') {
+      e.preventDefault();
+      if (active) stopTranslation();
+      else void startFullTranslation();
+    }
   });
+
   window.addEventListener('miru-document-change', () => {
     stopTranslation();
   });
@@ -395,5 +359,4 @@ export function initTranslation() {
     if (event.detail?.source === 'translate') return;
     if (active) stopTranslation();
   });
-  renderButton();
 }

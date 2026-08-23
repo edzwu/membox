@@ -97,7 +97,7 @@ func TestServerServesReaderAndMarkdown(t *testing.T) {
 		"document.js":    {"membox-document-switcher", "Switch document · Ctrl+O", "membox-document-navigation"},
 		"notes.js":       {"membox-browse-notes", "Notes in this document", "noteDocumentURL"},
 		"pdf-import.js":  {"Drop one PDF at a time", "importPDF(file)"},
-		"translation.js": {"membox-translation-toggle", "streamTranslation", "qwen3:14b"},
+		"translation.js": {"streamTranslation", "runSelectionRows", "registerAnnotAction"},
 		"jp-study.js":    {"membox-jp-study-toggle", "mode: 'jp-study'", "日语精读"},
 	}
 	for module, markers := range featureModules {

@@ -488,7 +488,7 @@ function onAnnotToolbarClick(e) {
 
   if (action.startsWith('ext:')) {
     const ext = extraAnnotActions.find((item) => item.id === action.slice(4));
-    if (ext) ext.run(extensionContext());
+    if (ext) ext.run(extensionContext(), e);
     return;
   }
 

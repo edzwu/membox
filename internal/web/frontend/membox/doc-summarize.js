@@ -1,98 +1,21 @@
-/* 「摘」 button: selection summarize when text is highlighted; otherwise
-   full-document map-reduce summarize through the local mmd model.
-   Lives in the low-frequency extras tray next to translate/search. */
+/* 「摘」 compose action: summarize the selected passage through the local mmd
+   model and save it as an inline summary note. Selection-only — the full-doc
+   map-reduce summarize keeps its code path but no longer has a dock entry. */
 
 import { showToast } from '../js/ui/feedback.js';
+import { detachComposeSelection, registerAnnotAction } from '../js/annotations/toolbar.js';
 import { session } from './session.js';
-import { onRender } from './events.js';
-import { getStatusExtras, setStatusExtrasPinned } from './status.js';
 import { replaceDocumentID, loadFromMembox } from './document.js';
 import { streamDocSummarize } from './api.js';
-import { captureArticleSelection, hasArticleSelectionText, runSelectionSummarize } from './summarize.js';
+import { runSelectionSummarize } from './summarize.js';
 
-let button = null;
-let labelEl = null;
 let running = false;
 let controller = null;
-/** @type {{ text: string, range: Range } | null} */
-let pendingSelection = null;
-
-function createButton() {
-  const value = document.createElement('button');
-  value.type = 'button';
-  value.id = 'membox-doc-summarize';
-  value.className = 'membox-doc-summarize';
-  value.hidden = true;
-  value.innerHTML =
-    '<span class="membox-doc-summarize-glyph" aria-hidden="true">摘</span>' +
-    '<span class="membox-doc-summarize-progress" aria-hidden="true"></span>';
-  // Click focus collapses the page selection — snapshot on pointerdown.
-  value.addEventListener('pointerdown', () => {
-    pendingSelection = captureArticleSelection();
-  });
-  value.addEventListener('click', (event) => {
-    if (running) {
-      controller?.abort();
-      return;
-    }
-    void startSummarize({
-      force: Boolean(event?.altKey),
-      selection: pendingSelection,
-    });
-    pendingSelection = null;
-  });
-  // Leftmost of the low-frequency tray: [摘] [译] [search]
-  const extras = getStatusExtras();
-  if (extras) extras.insertBefore(value, extras.firstChild);
-  else document.body.appendChild(value);
-  labelEl = value.querySelector('.membox-doc-summarize-progress');
-  return value;
-}
-
-function stageText(event) {
-  switch (event.stage) {
-    case 'split': return `0/${event.total || '?'}`;
-    case 'segment': return `${event.index}/${event.total}`;
-    case 'merge': return event.total ? `合${event.index}/${event.total}` : `合${event.depth || ''}`;
-    case 'final': return '润色';
-    case 'save': return '保存';
-    default: return '';
-  }
-}
-
-function hasSelectionHint() {
-  return Boolean(pendingSelection || hasArticleSelectionText());
-}
-
-function renderButton(progressText = '') {
-  if (!button) return;
-  const canSummarize = session.connected
-    && Boolean(session.documentID)
-    && document.body.classList.contains('is-reading')
-    && !document.body.classList.contains('is-snippet');
-  button.hidden = !canSummarize && !running;
-  button.dataset.running = String(running);
-  button.setAttribute('aria-pressed', String(running));
-  const selectionMode = !running && hasSelectionHint();
-  button.dataset.selection = String(selectionMode);
-  if (running) {
-    button.title = `Summarizing… ${progressText} · click to stop`;
-    button.setAttribute('aria-label', `Summarizing ${progressText}, click to stop`);
-  } else if (selectionMode) {
-    button.title = '总结选中内容 · 本地模型 · 已有总结则复用 · Alt-click 强制重摘';
-    button.setAttribute('aria-label', '总结选中内容');
-  } else {
-    button.title = '全文摘录 · 本地模型 · 已有则打开 · Alt-click 强制重摘 · 选中文字可摘选段';
-    button.setAttribute('aria-label', 'Summarize document');
-  }
-  if (labelEl) labelEl.textContent = progressText;
-  setStatusExtrasPinned('doc-summarize', running);
-}
 
 async function startSelectionSummarize(captured, force = false) {
   running = true;
   controller = new AbortController();
-  renderButton('选…');
+  showToast('总结中…');
   try {
     // Fast path: existing summary for the same passage (unless Alt-click force).
     const result = await runSelectionSummarize(captured, { force });
@@ -115,25 +38,34 @@ async function startSelectionSummarize(captured, force = false) {
   } finally {
     running = false;
     controller = null;
-    renderButton('');
   }
 }
 
-async function startDocSummarize(force = false) {
+/** Full-document map-reduce summarize. No dock entry after the 「摘」/「译」
+ *  tray was moved into the compose dialog; kept for programmatic reuse. */
+export async function startDocSummarize(force = false) {
+  if (!session.connected) {
+    showToast('Connect to membox before summarizing');
+    return;
+  }
+  if (!session.documentID) {
+    showToast('Open a membox document to summarize');
+    return;
+  }
   running = true;
   controller = new AbortController();
-  renderButton('…');
+  showToast('全文摘录中…');
   try {
     let done = null;
     await streamDocSummarize(session.documentID, { force }, (event) => {
       if (event.type === 'progress') {
-        renderButton(stageText(event));
+        // progress surfaced via toast only; the compose dialog owns no dock slot
+        showToast(`全文摘录 ${stageText(event)}`);
       } else if (event.type === 'done') {
         done = event;
       }
     }, controller.signal);
     running = false;
-    renderButton('');
     if (done?.id) {
       showToast(done.existing ? 'Summary already exists — opening' : `Summary saved · ${done.chars || ''}字`);
       replaceDocumentID(done.id);
@@ -143,7 +75,6 @@ async function startDocSummarize(force = false) {
     }
   } catch (err) {
     running = false;
-    renderButton('');
     if (err?.name === 'AbortError') {
       showToast('Summarize stopped');
       return;
@@ -155,28 +86,39 @@ async function startDocSummarize(force = false) {
   }
 }
 
-async function startSummarize({ force = false, selection = null } = {}) {
-  if (!session.connected) {
-    showToast('Connect to membox before summarizing');
-    return;
+function stageText(event) {
+  switch (event.stage) {
+    case 'split': return `0/${event.total || '?'}`;
+    case 'segment': return `${event.index}/${event.total}`;
+    case 'merge': return event.total ? `合${event.index}/${event.total}` : `合${event.depth || ''}`;
+    case 'final': return '润色';
+    case 'save': return '保存';
+    default: return '';
   }
-  if (!session.documentID) {
-    showToast('Open a membox document to summarize');
-    return;
-  }
-  const captured = selection || captureArticleSelection();
-  if (captured) {
-    await startSelectionSummarize(captured, force);
-    return;
-  }
-  await startDocSummarize(force);
 }
 
 export function initDocSummarize() {
-  if (button) return;
-  button = createButton();
-  onRender(() => { if (!running) renderButton(); });
-  document.addEventListener('selectionchange', () => {
-    if (!running) renderButton();
+  registerAnnotAction({
+    id: 'summarize',
+    icon: '摘',
+    title: '总结选中内容 · 已有总结则复用 · Alt-click 强制重摘',
+    when: ({ mode, text }) => mode === 'create' && Boolean(text) && text.trim().length >= 20,
+    run: (_ctx, event) => {
+      if (running) {
+        controller?.abort();
+        return;
+      }
+      if (!session.connected) {
+        showToast('Connect to membox before summarizing');
+        return;
+      }
+      if (!session.documentID) {
+        showToast('Open a membox document to summarize');
+        return;
+      }
+      const detached = detachComposeSelection();
+      if (!detached) return;
+      void startSelectionSummarize(detached, Boolean(event?.altKey));
+    },
   });
 }
