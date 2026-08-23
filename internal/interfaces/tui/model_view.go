@@ -992,10 +992,13 @@ func isClippedNote(filename string) bool {
 }
 
 func documentItems(documents []membox.DocumentView) []item {
-	convertedPDFs := make(map[string]bool)
+	// Compact physical ids embedded in conversion filenames (32 hex, no dashes).
+	convertedSources := make([]string, 0)
 	for _, document := range documents {
 		if sourceID, ok := convertedPDFID(documentFilename(document)); ok {
-			convertedPDFs[sourceID] = true
+			if compact := compactDocumentID(sourceID); compact != "" {
+				convertedSources = append(convertedSources, compact)
+			}
 		}
 	}
 	items := make([]item, 0, len(documents))
@@ -1011,10 +1014,45 @@ func documentItems(documents []membox.DocumentView) []item {
 		match := document.Title + " " + document.Path + " " + filename + " " + document.Status + " " + logical
 		items = append(items, item{
 			document: document, title: displayTitle(document.Title, document.Path), filename: filename, match: match,
-			pdfConverted: document.MediaType == "application/pdf" && convertedPDFs[strings.ToLower(document.ID)],
+			pdfConverted: document.MediaType == "application/pdf" && pdfHasConvertedIndex(document.ID, convertedSources),
 		})
 	}
 	return items
+}
+
+// compactDocumentID strips UUID dashes for suffix matching against logical ids.
+func compactDocumentID(id string) string {
+	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(id), "-", ""))
+}
+
+// pdfHasConvertedIndex reports whether any conversion filename embeds this PDF
+// identity. DocumentView.ID is a logical short suffix after the Box boundary,
+// while filenames carry the full physical compact UUID — match by unique suffix.
+func pdfHasConvertedIndex(pdfDocumentID string, convertedSourceCompacts []string) bool {
+	pdfCompact := compactDocumentID(pdfDocumentID)
+	if pdfCompact == "" {
+		return false
+	}
+	for _, source := range convertedSourceCompacts {
+		if documentIDsReferToSamePDF(pdfCompact, source) {
+			return true
+		}
+	}
+	return false
+}
+
+func documentIDsReferToSamePDF(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	if a == b {
+		return true
+	}
+	// Logical short ids are unique suffixes of the physical compact id.
+	if len(a) < len(b) {
+		return strings.HasSuffix(b, a)
+	}
+	return strings.HasSuffix(a, b)
 }
 
 func convertedPDFID(filename string) (string, bool) {
@@ -1108,11 +1146,22 @@ func convertedTreeLabel(filename string) string {
 	stem := strings.TrimSuffix(base, ".md")
 	marker := strings.LastIndex(stem, "-pdf-")
 	if marker < 0 {
+		// Legacy UUID-only names: pdf-<32hex>[...]
+		if strings.HasPrefix(stem, "pdf-") && len(stem) >= 4+32 {
+			rest := stem[4:]
+			if isCompactHex32(rest[:32]) {
+				rest = rest[32:]
+				if rest == "" {
+					return "pdf"
+				}
+				return "pdf" + compactConversionSuffix(rest)
+			}
+		}
 		return filename
 	}
 	prefix := strings.TrimRight(stem[:marker], "-")
 	rest := stem[marker+len("-pdf-"):]
-	if len(rest) < 32 {
+	if len(rest) < 32 || !isCompactHex32(rest[:32]) {
 		return filename // no 32-hex identity: not a generated conversion
 	}
 	rest = rest[32:] // drop the document identity, keep -chapter-NNN / -part-xxx
@@ -1120,6 +1169,20 @@ func convertedTreeLabel(filename string) string {
 		return prefix
 	}
 	return prefix + compactConversionSuffix(rest)
+}
+
+func isCompactHex32(s string) bool {
+	if len(s) != 32 {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= '0' && r <= '9', r >= 'a' && r <= 'f', r >= 'A' && r <= 'F':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // compactConversionSuffix shortens common generated suffixes to what fits a

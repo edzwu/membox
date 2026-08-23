@@ -136,7 +136,7 @@ Press `d` to move the focused document file to the trash after a `y/n` confirmat
 
 The TUI reuses the bottom input field for distinct modes, identified by the colored badge:
 
-- Space × 2 opens `NAME` filename/ID filtering; `ctrl+f` toggles name/content search.
+- `/` opens `NAME` filename/ID filtering (vim-style); `ctrl+f` toggles name/content search.
 - `:` opens `CMD` deterministic commands.
 - `ctrl+k` opens `AGENT` natural-language prompts.
 - `ctrl+p` keeps its global meaning while the input is focused: cycle the tree's media scope.

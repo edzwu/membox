@@ -18,8 +18,6 @@ import (
 	"membox/internal/interfaces/host"
 )
 
-const doubleSpaceWindow = 320 * time.Millisecond
-
 const (
 	searchModeName = "name"
 	searchModeFull = "full"
@@ -348,7 +346,6 @@ type pdfConversionProgressMsg struct {
 	progress membox.PDFConversionProgress
 }
 type pdfProgressTickMsg struct{ sequence uint64 }
-type spaceTimeoutMsg struct{ sequence uint64 }
 
 func startPDFConversionCmd(ctx context.Context, app App, selector string, sequence uint64) tea.Cmd {
 	run := &pdfConversionRun{events: make(chan tea.Msg, 32)}
@@ -413,7 +410,7 @@ func inputPlaceholder(mode string) string {
 	case inputModeAgent:
 		return "ask the agent about your documents…"
 	default:
-		return "filter documents (enter opens · tab pins · ↑↓ history · esc tree)"
+		return "filter documents (enter pins → tree · empty opens · ↑↓ history · esc)"
 	}
 }
 
@@ -918,13 +915,6 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.pdfProgressFrame++
 			commands = append(commands, pdfProgressTickCmd(msg.sequence))
 		}
-	case spaceTimeoutMsg:
-		if msg.sequence == m.spaceSequence {
-			m.spaceSequence = 0
-			m.lastKeyAt = time.Time{}
-			m.detailsVisible = !m.detailsVisible
-			m.keepSelectionVisible()
-		}
 	case spinner.TickMsg:
 		if m.loading {
 			var command tea.Cmd
@@ -975,15 +965,16 @@ func (m Model) selectedItem() (item, bool) {
 }
 
 // findConvertedPDFIndex locates the Markdown TOC index produced by PDF→MD
-// conversion for the given PDF UUID (…-pdf-<compact>.md, no chapter suffix).
+// conversion for the given PDF id (logical short or physical UUID).
+// Index files are …-pdf-<compact>.md with no chapter/part suffix.
 func (m Model) findConvertedPDFIndex(pdfID string) (membox.DocumentView, bool) {
-	want := strings.ToLower(strings.TrimSpace(pdfID))
+	want := compactDocumentID(pdfID)
 	if want == "" {
 		return membox.DocumentView{}, false
 	}
 	for _, candidate := range m.items {
 		sourceID, ok := convertedPDFID(candidate.filename)
-		if !ok || strings.ToLower(sourceID) != want {
+		if !ok || !documentIDsReferToSamePDF(want, compactDocumentID(sourceID)) {
 			continue
 		}
 		return candidate.document, true

@@ -347,13 +347,10 @@ func TestModel_HelpModalTogglesWithQuestionMark(t *testing.T) {
 func TestModel_HelpDoesNotOpenWhileTyping(t *testing.T) {
 	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
 	model.width, model.height = 100, 30
-	space := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}}
-	updated, _ := model.Update(space)
-	model = updated.(Model)
-	updated, _ = model.Update(space)
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
 	model = updated.(Model)
 	if !model.inputVisible {
-		t.Fatal("double space did not open the filter input")
+		t.Fatal("/ did not open the filter input")
 	}
 	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
 	model = updated.(Model)
@@ -668,21 +665,22 @@ func TestModel_PDFConvertCommandUsesSelectedPDF(t *testing.T) {
 }
 
 func TestModel_TabOnConvertedPDFOpensTOCIndex(t *testing.T) {
-	const pdfID = "019ffe54-a513-7da8-bfac-0ae403223ccf"
+	// DocumentView.ID is the logical short suffix after the Box boundary.
+	const pdfLogicalID = "223ccf"
 	const indexID = "019fff46-e442-7de6-b54f-046273b919f6"
 	app := &fakeApp{}
 	model := New(context.Background(), app, fakeLauncher{})
 	model.width, model.height = 100, 30
 	model.viewerMode = "native"
 	model.items = documentItems([]membox.DocumentView{
-		{ID: pdfID, Title: "AI Agents", Path: "/pdfs/book.pdf", RelativePath: "book.pdf", MediaType: "application/pdf"},
+		{ID: pdfLogicalID, Title: "AI Agents", Path: "/pdfs/book.pdf", RelativePath: "book.pdf", MediaType: "application/pdf"},
 		{ID: indexID, Title: "深入理解 AI Agent", Path: "/notes/AI-Agents-in-Depth-zh-CN-pdf-019ffe54a5137da8bfac0ae403223ccf.md", RelativePath: "AI-Agents-in-Depth-zh-CN-pdf-019ffe54a5137da8bfac0ae403223ccf.md", MediaType: "text/markdown"},
 		{ID: "chapter", Title: "Ch1", Path: "/notes/AI-Agents-in-Depth-zh-CN-pdf-019ffe54a5137da8bfac0ae403223ccf-chapter-001.md", RelativePath: "AI-Agents-in-Depth-zh-CN-pdf-019ffe54a5137da8bfac0ae403223ccf-chapter-001.md", MediaType: "text/markdown"},
 	})
 	model.refreshFilter()
 	// Select the PDF (has ◆ because index exists).
 	for i, it := range model.filtered {
-		if it.document.ID == pdfID {
+		if it.document.ID == pdfLogicalID {
 			model.selected = i
 			break
 		}

@@ -106,7 +106,7 @@ func TestModel_EnterOpensViewerSubprocess(t *testing.T) {
 }
 
 // deliverNameFilter simulates the catalog identity-search response the name
-// filter now awaits: after a Tab commit (or draft edit) the filter runs a
+// filter now awaits: after an Enter commit (or draft edit) the filter runs a
 // full-catalog SQLite query (SuggestDocuments); tests feed the backend-like
 // hit list back through Update so local exact/case/date/notes semantics apply.
 func deliverNameFilter(t *testing.T, model *Model, ids ...string) {
@@ -118,6 +118,31 @@ func deliverNameFilter(t *testing.T, model *Model, ids ...string) {
 	}
 	updated, _ := model.Update(searchMsg{query: query, nameSearch: true, results: results})
 	*model = updated.(Model)
+}
+
+func TestNameFilterORsDocumentIDAndTitle(t *testing.T) {
+	// Name filter is OR: id hit or title/path hit. Pure-hex English words
+	// like "eff" must still match titles ("Effective Go").
+	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.items = documentItems([]membox.DocumentView{
+		{ID: "019fbeff-0001", Title: "Effective Go", Path: "/tmp/effective-go.md", RelativePath: "effective-go.md"},
+		{ID: "019fbee0-0002", Title: "Rust Notes", Path: "/tmp/rust.md", RelativePath: "rust.md"},
+		{ID: "3ccf", Title: "Other", Path: "/tmp/other.md", RelativePath: "other.md"},
+	})
+	model.inputVisible = true
+
+	model.input.SetValue("eff")
+	model.refreshFilter()
+	if len(model.filtered) != 1 || model.filtered[0].document.Title != "Effective Go" {
+		t.Fatalf("name filter 'eff' did not match Effective Go: %+v", model.filtered)
+	}
+
+	// Short logical id still matches via the id arm of the OR.
+	model.input.SetValue("3ccf")
+	model.refreshFilter()
+	if len(model.filtered) != 1 || model.filtered[0].document.ID != "3ccf" {
+		t.Fatalf("name filter '3ccf' did not match logical id: %+v", model.filtered)
+	}
 }
 
 func TestModel_EnterWithWebViewerOpensBrowser(t *testing.T) {
@@ -816,12 +841,17 @@ func TestModel_FilterOptionsPanelCtrlOAndStatusBar(t *testing.T) {
 		{ID: "019fbe56-64c3-7e3c-861d-000000000002", Title: "The Rust I Wanted Had No Future", Path: "/tmp/the-rust-i-wanted-had-no-future.md", RelativePath: "the-rust-i-wanted-had-no-future.md"},
 	})
 	model.filterExact, model.filterCase = true, false
+	model.inputVisible, model.inputActive = true, true
+	model.input.Focus()
 	model.input.SetValue("rust")
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(Model)
 	if len(model.textFilters) != 1 || !model.textFilters[0].Exact || model.textFilters[0].Case {
 		t.Fatalf("committed filter did not freeze semantics: %+v", model.textFilters)
 	}
+	// Reopen filter to inspect the tag chip in the input chrome.
+	model.inputVisible, model.inputActive = true, true
+	model.input.Focus()
 	if !strings.Contains(model.inputView(), "N=: rust") {
 		t.Fatalf("tag does not encode word mode: %q", model.inputView())
 	}
@@ -835,8 +865,10 @@ func TestModel_FilterOptionsPanelCtrlOAndStatusBar(t *testing.T) {
 	// Substring mode selects both (Trust contains rust).
 	model.textFilters = nil
 	model.filterExact = false
+	model.inputVisible, model.inputActive = true, true
+	model.input.Focus()
 	model.input.SetValue("rust")
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(Model)
 	// Backend returns both LIKE hits; local substring semantics keep both.
 	deliverNameFilter(t, &model, "019fbe56-64c3-7e3c-861d-000000000001", "019fbe56-64c3-7e3c-861d-000000000002")
@@ -847,8 +879,10 @@ func TestModel_FilterOptionsPanelCtrlOAndStatusBar(t *testing.T) {
 	// Word + case-sensitive: "RUST" matches neither (title has Rust, slug rust).
 	model.textFilters = nil
 	model.filterExact, model.filterCase = true, true
+	model.inputVisible, model.inputActive = true, true
+	model.input.Focus()
 	model.input.SetValue("RUST")
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(Model)
 	deliverNameFilter(t, &model, "019fbe56-64c3-7e3c-861d-000000000001", "019fbe56-64c3-7e3c-861d-000000000002")
 	if len(model.filtered) != 0 {

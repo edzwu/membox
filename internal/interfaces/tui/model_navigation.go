@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -74,20 +75,15 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				commands = append(commands, m.spinner.Tick, resolveViewerCmd(m.ctx, m.app, document.ID))
 			}
 		}
+	case "/":
+		// vim-style search: "/" opens the document filter input.
+		m.spaceSequence, m.lastKeyAt = 0, time.Time{}
+		return m, m.openInput(inputModeSearch)
 	case "space", " ":
-		if m.lastKeyAt.Add(doubleSpaceWindow).After(time.Now()) {
-			// Double space always opens the filter input, regardless of which
-			// mode (cmd / agent) was used last.
-			m.spaceSequence++
-			m.lastKeyAt = time.Time{}
-			commands = append(commands, m.openInput(inputModeSearch))
-			return m, tea.Batch(commands...)
-		}
-		// first space: schedule delayed details toggle
-		m.lastKeyAt = time.Now()
-		m.spaceSequence++
-		sequence := m.spaceSequence
-		commands = append(commands, tea.Tick(doubleSpaceWindow, func(time.Time) tea.Msg { return spaceTimeoutMsg{sequence: sequence} }))
+		// Toggle the details pane immediately (filter moved to "/").
+		m.spaceSequence, m.lastKeyAt = 0, time.Time{}
+		m.detailsVisible = !m.detailsVisible
+		m.keepSelectionVisible()
 	case ":":
 		// vim-style: ":" jumps straight to the command palette.
 		m.spaceSequence, m.lastKeyAt = 0, time.Time{}
@@ -1099,61 +1095,43 @@ func matchesTextFilters(title, filename, match, documentID string, filters []tex
 	return true
 }
 
-// matchNameFilter applies one name-mode filter. Word (全匹配) requires the
-// query to occur as a whole word (word chars = [A-Za-z0-9_]; CJK and
-// punctuation act as boundaries, so Chinese substrings still match):
-// "rust" hits "The Rust I Wanted…" but not the "Trust" inside
-// "Don't Trust the Agent". Case keeps the original casing.
-//
-// UUID priority: queries that look like short IDs / UUID fragments (e.g.
-// "3ccf", "01a0", full UUID) match only against the document ID — never
-// title/path — so typing the 4-char selector shown in the tree does not also
-// pull every converted chapter that embeds the same hex in its filename.
+// matchNameFilter applies one name-mode filter with per-term OR semantics:
+// each whitespace-separated term must hit the document id OR the readable
+// title/filename. Embedded -pdf-<uuid> hex is stripped from the name haystack
+// so short logical ids do not also drag every converted chapter that embeds
+// the same hex tail, and physical UUID time-prefixes stay invisible.
 func matchNameFilter(title, filename, match, documentID string, filter textFilter) bool {
 	query := strings.TrimSpace(filter.Value)
 	if query == "" {
 		return true
 	}
-	if isUUIDFilterQuery(query) {
-		return matchDocumentIDFilter(documentID, query, filter.Case)
-	}
-	if filter.Exact {
-		// Every query word must appear as a whole word somewhere in the
-		// title/path/filename/status/id haystack (space-joined as `match`).
-		for _, word := range strings.Fields(query) {
-			if !wholeWordMatch(match, word, filter.Case) {
-				return false
-			}
+	nameText := nameFilterHaystack(title, filename)
+	for _, word := range strings.Fields(query) {
+		idHit := matchDocumentIDFilter(documentID, word, filter.Case)
+		var nameHit bool
+		if filter.Exact {
+			nameHit = wholeWordMatch(nameText, word, filter.Case)
+		} else if filter.Case {
+			nameHit = strings.Contains(nameText, word)
+		} else {
+			nameHit = strings.Contains(strings.ToLower(nameText), strings.ToLower(word))
 		}
-		return true
-	}
-	if filter.Case {
-		return wordsMatchCase(title, query) || wordsMatchCase(filename, query) || wordsMatchCase(match, query)
-	}
-	return wordsMatch(title+" "+filename+" "+match, strings.ToLower(query))
-}
-
-// isUUIDFilterQuery reports whether q is a logical-id / hex selector: 3–32
-// hex chars with optional hyphens (covers visible short ids like "3ccf" and
-// rare pasted full UUIDs). Multi-word or non-hex queries stay on title/path.
-func isUUIDFilterQuery(q string) bool {
-	if strings.ContainsAny(q, " \t") {
-		return false
-	}
-	n := 0
-	for _, r := range q {
-		switch {
-		case r >= '0' && r <= '9', r >= 'a' && r <= 'f', r >= 'A' && r <= 'F':
-			n++
-		case r == '-':
-			// uuid separators ok
-		default:
+		if !idHit && !nameHit {
 			return false
 		}
 	}
-	// Logical ids are usually 4–5 hex chars; allow up to a full compact UUID.
-	return n >= 3 && n <= 32
+	return true
 }
+
+// nameFilterHaystack is title + conversion-stripped filename, with any bare
+// 32-hex identity runs removed so id selectors cannot leak through paths.
+func nameFilterHaystack(title, filename string) string {
+	label := convertedTreeLabel(filename)
+	text := strings.TrimSpace(title + " " + label)
+	return hex32IdentityRE.ReplaceAllString(text, "")
+}
+
+var hex32IdentityRE = regexp.MustCompile(`(?i)[0-9a-f]{32}`)
 
 // matchDocumentIDFilter matches the user-visible logical id left-to-right
 // (prefix). Physical UUIDs stay inside the DB layer — the TUI never filters

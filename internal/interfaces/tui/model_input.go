@@ -45,18 +45,7 @@ func (m Model) updateFilterInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.hideInput()
 		return m, m.filterChanged(nil)
 	case "tab":
-		// Pin the current draft as a filter tag (date token or text).
-		handled, err := m.commitFilterToken()
-		if handled {
-			m.filterErr = err
-			if err != nil {
-				return m, nil
-			}
-			return m, m.filterChanged(nil)
-		}
-		if m.commitTextFilter() {
-			return m, m.filterChanged(nil)
-		}
+		// Tab is free in filter mode (pinning moved back to Enter).
 		return m, nil
 	case "ctrl+f":
 		// Scope toggle (name ⇄ full content). Also available under ctrl+o → scope.
@@ -67,9 +56,21 @@ func (m Model) updateFilterInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.keepSelectionVisible()
 		return m, nil
 	case "enter":
-		// Enter always opens the selected document (fzf-style): the draft
-		// already filtered the list live, so typing + enter is the fastest
-		// path to a result. Pinning the draft as a tag lives on tab.
+		// Enter with a draft pins it as a filter tag and returns to the tree
+		// without opening a document. Empty draft opens the selection (fzf).
+		handled, err := m.commitFilterToken()
+		if handled {
+			m.filterErr = err
+			if err != nil {
+				return m, nil
+			}
+			m.hideInput()
+			return m, m.filterChanged(nil)
+		}
+		if m.commitTextFilter() {
+			m.hideInput()
+			return m, m.filterChanged(nil)
+		}
 		m.rememberFilterHistory(m.input.Value())
 		m.hideInput()
 		if document, ok := m.selectedDocument(); ok {

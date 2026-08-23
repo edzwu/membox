@@ -39,7 +39,8 @@ func helpSections() []helpSection {
 			{"tab", "PDF: convert · Markdown: tree ⇄ preview"},
 			{"◆", "PDF has linked converted Markdown"},
 			{"↑ ↓ / pgup pgdn", "scroll focused preview"},
-			{"space", "details · ×2 opens filter input"},
+			{"/", "filter documents (vim-style)"},
+			{"space", "toggle details"},
 			{"e / o / d", "edit / open app / move to trash"},
 			{"ctrl+n", "quick note → $EDITOR → name from # H1 or mmd"},
 			{"r / p / s / ctrl+h", "rename file/PDF title / pin / summarize / toggle *-note.md"},
@@ -47,7 +48,7 @@ func helpSections() []helpSection {
 		}},
 		{title: "Filter & commands", entries: []helpEntry{
 			{":", "palette: doc new, pdf convert/server, rename, link …"},
-			{"enter / tab", "in input: open document / pin filter tag"},
+			{"enter", "in filter: pin tag → tree · empty opens document"},
 			{"↑ ↓", "in filter: prior queries · esc returns to tree"},
 			{"ctrl+f", "in input: name ⇄ content search"},
 			{"ctrl+o", "in input: options (match · case · name/content)"},

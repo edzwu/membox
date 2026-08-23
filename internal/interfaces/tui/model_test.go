@@ -59,6 +59,16 @@ func TestDocumentItemsMarksPDFWhenStableConvertedIndexExists(t *testing.T) {
 		t.Fatalf("Markdown documents received PDF conversion markers: %+v", items)
 	}
 
+	// After the logical-id boundary, DocumentView.ID is a short suffix — still must match.
+	shortDocs := []membox.DocumentView{
+		{ID: "223ccf", Title: "AI Agents", Path: "/pdfs/book.pdf", RelativePath: "book.pdf", MediaType: "application/pdf"},
+		{ID: "index", Path: "/notes/book-pdf-019ffe54a5137da8bfac0ae403223ccf.md", RelativePath: "book-pdf-019ffe54a5137da8bfac0ae403223ccf.md", MediaType: "text/markdown"},
+	}
+	shortItems := documentItems(shortDocs)
+	if !shortItems[0].pdfConverted {
+		t.Fatal("PDF with logical short id was not marked converted")
+	}
+
 	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
 	model.width, model.height = 100, 24
 	model.items, model.filtered = items, items
@@ -234,23 +244,13 @@ func TestModel_SingleSpaceTogglesDetailsPane(t *testing.T) {
 	space := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}}
 	updated, _ := model.Update(space)
 	model = updated.(Model)
-	if model.detailsVisible {
-		t.Fatal("single space should not toggle immediately")
-	}
-	// simulate timeout expiry (single space confirmed)
-	updated, _ = model.Update(spaceTimeoutMsg{sequence: model.spaceSequence})
-	model = updated.(Model)
 	if !model.detailsVisible {
-		t.Fatal("single space timeout did not show details pane")
+		t.Fatal("space did not show details pane")
 	}
-	// press space again and let timeout fire -> hide
-	model.lastKeyAt = time.Now().Add(-time.Second)
 	updated, _ = model.Update(space)
 	model = updated.(Model)
-	updated, _ = model.Update(spaceTimeoutMsg{sequence: model.spaceSequence})
-	model = updated.(Model)
 	if model.detailsVisible {
-		t.Fatal("second single space did not hide details pane")
+		t.Fatal("second space did not hide details pane")
 	}
 }
 
@@ -279,31 +279,34 @@ func TestModel_DetailsToggleKeepsSelectedItemVisible(t *testing.T) {
 	}
 }
 
-func TestModel_DoubleSpaceDoesNotToggleDetails(t *testing.T) {
+func TestModel_SlashOpensFilterInput(t *testing.T) {
 	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
-	space := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}}
-	updated, _ := model.Update(space)
+	slash := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}}
+	updated, _ := model.Update(slash)
 	model = updated.(Model)
-	updated, _ = model.Update(space) // double space -> toggle input
-	model = updated.(Model)
-	if model.detailsVisible {
-		t.Fatal("double space should not toggle details")
+	if !model.inputVisible || model.inputMode != inputModeSearch {
+		t.Fatalf("/ did not open filter input: visible=%v mode=%s", model.inputVisible, model.inputMode)
 	}
-	if !model.inputVisible {
-		t.Fatal("double space did not open input")
+	if model.detailsVisible {
+		t.Fatal("/ should not toggle details")
 	}
 }
 
-func TestModel_DoubleSpaceOpensInputAndSpacesRemainAvailableForText(t *testing.T) {
+func TestModel_SpaceTogglesDetailsAndSlashOpensFilter(t *testing.T) {
 	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
 	space := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}}
 	updated, _ := model.Update(space)
 	model = updated.(Model)
-	updated, _ = model.Update(space)
-	model = updated.(Model)
-	if !model.inputVisible || !model.inputActive {
-		t.Fatalf("double space did not show input")
+	if !model.detailsVisible || model.inputVisible {
+		t.Fatalf("space should toggle details only: details=%v input=%v", model.detailsVisible, model.inputVisible)
 	}
+	slash := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}}
+	updated, _ = model.Update(slash)
+	model = updated.(Model)
+	if !model.inputVisible || !model.inputActive || model.inputMode != inputModeSearch {
+		t.Fatalf("/ did not show filter input")
+	}
+	// Spaces remain available for multi-word filter text once the input is open.
 	updated, _ = model.Update(space)
 	model = updated.(Model)
 	updated, _ = model.Update(space)
@@ -400,8 +403,6 @@ func TestModel_PinnedRowStaysVisibleWhenDetailsReduceTreeHeight(t *testing.T) {
 
 	space := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}}
 	updated, _ := model.Update(space)
-	model = updated.(Model)
-	updated, _ = model.Update(spaceTimeoutMsg{sequence: model.spaceSequence})
 	model = updated.(Model)
 	if !model.detailsVisible {
 		t.Fatal("space did not open details")
@@ -734,13 +735,11 @@ func TestModel_DoubleSpaceAlwaysOpensFilterInput(t *testing.T) {
 	if model.inputVisible || model.inputMode != inputModeAgent {
 		t.Fatalf("esc did not preserve hidden agent mode: visible=%v mode=%s", model.inputVisible, model.inputMode)
 	}
-	// Double space always reopens the FILTER input, never the last-closed mode.
-	updated, _ = model.Update(space)
-	model = updated.(Model)
-	updated, _ = model.Update(space)
+	// "/" always reopens the FILTER input, never the last-closed mode.
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
 	model = updated.(Model)
 	if !model.inputVisible || model.inputMode != inputModeSearch {
-		t.Fatalf("double space should open the filter input: visible=%v mode=%s", model.inputVisible, model.inputMode)
+		t.Fatalf("/ should open the filter input: visible=%v mode=%s", model.inputVisible, model.inputMode)
 	}
 }
 
@@ -750,9 +749,7 @@ func TestModel_CommandPaletteProgressiveDisclosure(t *testing.T) {
 	model.items = documentItems([]membox.DocumentView{{ID: "doc-alpha", Title: "Alpha", Path: "/tmp/alpha.md", RelativePath: "alpha.md"}})
 	model.refreshFilter()
 
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
-	model = updated.(Model)
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
 	model = updated.(Model)
 	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	model = updated.(Model)
@@ -796,7 +793,7 @@ func TestModel_SlashClearStillClearsFiltersInSearchMode(t *testing.T) {
 	model.inputVisible, model.inputActive = true, true
 	model.input.Focus()
 	model.input.SetValue("/clear")
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(Model)
 	if len(model.dateFilters) != 0 || len(model.textFilters) != 0 {
 		t.Fatalf("/clear did not clear filters: dates=%+v text=%+v", model.dateFilters, model.textFilters)
@@ -846,16 +843,19 @@ func TestModel_FilterInputHistoryLocksTreeNavigation(t *testing.T) {
 	model.input.Focus()
 	model.historyIndex = len(model.filterHistory)
 
-	// Pin a filter tag so it lands in history.
+	// Pin a filter tag so it lands in history, then reopen filter for history nav.
 	model.input.SetValue("alpha")
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(Model)
 	if len(model.filterHistory) != 1 || model.filterHistory[0] != "alpha" {
-		t.Fatalf("tab did not record filter history: %+v", model.filterHistory)
+		t.Fatalf("enter did not record filter history: %+v", model.filterHistory)
 	}
 	if model.selected != 0 {
-		t.Fatalf("tab moved tree selection: %d", model.selected)
+		t.Fatalf("enter moved tree selection: %d", model.selected)
 	}
+	model.inputVisible, model.inputActive = true, true
+	model.input.Focus()
+	model.historyIndex = len(model.filterHistory)
 
 	// ↑ recalls history; selection must stay put while the filter is focused.
 	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyUp})
@@ -1166,25 +1166,34 @@ func TestModel_TextPatternsCommitAsTagsWithANDSemantics(t *testing.T) {
 	model.inputVisible, model.inputActive = true, true
 	model.input.Focus()
 	model.input.SetValue("report")
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(Model)
+	if model.inputVisible {
+		t.Fatal("Enter should close filter after pinning")
+	}
+	// Reopen to assert tag chip + add second tag.
+	model.inputVisible, model.inputActive = true, true
+	model.input.Focus()
 	deliverNameFilter(t, &model, "alpha-report", "beta-report")
-	if len(model.textFilters) != 1 || model.textFilters[0].Mode != searchModeName || model.input.Value() != "" || len(model.filtered) != 2 {
-		t.Fatalf("name pattern was not committed: tags=%+v input=%q filtered=%+v", model.textFilters, model.input.Value(), model.filtered)
+	if len(model.textFilters) != 1 || model.textFilters[0].Mode != searchModeName || len(model.filtered) != 2 {
+		t.Fatalf("name pattern was not committed: tags=%+v filtered=%+v", model.textFilters, model.filtered)
 	}
 	if view := model.inputView(); !strings.Contains(view, "N: report") {
 		t.Fatalf("name tag is not rendered above input: %q", view)
 	}
 
 	model.input.SetValue("alpha")
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(Model)
+	model.inputVisible, model.inputActive = true, true
+	model.input.Focus()
 	deliverNameFilter(t, &model, "alpha-report")
 	if len(model.textFilters) != 2 || len(model.filtered) != 1 || model.filtered[0].document.ID != "alpha-report" {
 		t.Fatalf("name tags do not use AND semantics: tags=%+v filtered=%+v", model.textFilters, model.filtered)
 	}
 
-	// Enter opens the selected document.
+	// Empty Enter opens the selected document.
+	model.input.SetValue("")
 	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(Model)
 	if model.inputVisible || !model.loading || command == nil {
@@ -1192,7 +1201,7 @@ func TestModel_TextPatternsCommitAsTagsWithANDSemantics(t *testing.T) {
 	}
 }
 
-func TestModel_EnterWithDraftOpensDocumentWithoutPinning(t *testing.T) {
+func TestModel_EnterWithDraftPinsFilterTagAndReturnsToTree(t *testing.T) {
 	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
 	model.width, model.height = 120, 24
 	model.items = documentItems([]membox.DocumentView{
@@ -1201,18 +1210,33 @@ func TestModel_EnterWithDraftOpensDocumentWithoutPinning(t *testing.T) {
 	})
 	model.inputVisible, model.inputActive = true, true
 	model.input.Focus()
-	// The draft narrows the list live; Enter opens the selection directly and
-	// leaves no pinned tag behind (pinning lives on tab).
+	// Enter pins the draft as a filter tag and closes the input (no document open).
+	// loading/command may still be set by the async name-search for the tag.
 	model.input.SetValue("alpha")
 	model.refreshFilter()
 	_ = model.filterChanged(nil)
+	model.loading = false
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if model.inputVisible || model.inputActive {
+		t.Fatalf("Enter with draft should close filter input: visible=%v active=%v", model.inputVisible, model.inputActive)
+	}
+	if len(model.textFilters) != 1 || model.textFilters[0].Value != "alpha" {
+		t.Fatalf("Enter with draft did not pin filter tag: tags=%+v", model.textFilters)
+	}
+	// rawDocumentID/loading from name-search is fine; opening a document sets
+	// a viewer path — ensure we did not leave the tree for a preview open via enter.
+	// (open path also sets loading, so assert tags pinned + input closed is enough.)
+
+	// Reopen filter with empty draft; Enter opens the selected document.
+	model.inputVisible, model.inputActive = true, true
+	model.input.Focus()
+	model.input.SetValue("")
+	model.loading = false
 	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(Model)
 	if model.inputVisible || !model.loading || command == nil {
-		t.Fatalf("Enter with draft did not open selected document: visible=%v loading=%v command=%v", model.inputVisible, model.loading, command)
-	}
-	if len(model.textFilters) != 0 {
-		t.Fatalf("Enter must not pin the draft as a filter tag: %+v", model.textFilters)
+		t.Fatalf("empty Enter did not open selected document: visible=%v loading=%v command=%v", model.inputVisible, model.loading, command)
 	}
 }
 
@@ -1226,13 +1250,17 @@ func TestModel_NameAndFullTextTagsKeepTheirModesAndIntersect(t *testing.T) {
 	model.inputVisible, model.inputActive = true, true
 	model.input.Focus()
 	model.input.SetValue("alpha")
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(Model)
+	model.inputVisible, model.inputActive = true, true
+	model.input.Focus()
 	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlF})
 	model = updated.(Model)
 	model.input.SetValue("flash attention")
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(Model)
+	model.inputVisible, model.inputActive = true, true
+	model.input.Focus()
 	if len(model.textFilters) != 2 || model.textFilters[0].Mode != searchModeName || model.textFilters[1].Mode != searchModeFull {
 		t.Fatalf("text tag modes were not retained: %+v", model.textFilters)
 	}
@@ -1267,9 +1295,12 @@ func TestModel_DateTagsRenderAndFilterWithANDSemantics(t *testing.T) {
 	}
 
 	model.input.SetValue("+c:2025")
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(Model)
-	if !model.inputVisible || len(model.dateFilters) != 2 || len(model.filtered) != 1 || model.filtered[0].document.ID != "july-2025" {
+	if model.inputVisible {
+		t.Fatal("enter should close filter after pinning date tag")
+	}
+	if len(model.dateFilters) != 2 || len(model.filtered) != 1 || model.filtered[0].document.ID != "july-2025" {
 		t.Fatalf("date tags do not use AND semantics: tags=%+v filtered=%+v", model.dateFilters, model.filtered)
 	}
 }
@@ -1301,17 +1332,22 @@ func TestModel_ClearAndBackspaceRemoveAllFilterTags(t *testing.T) {
 	model.inputVisible, model.inputActive = true, true
 	model.input.Focus()
 	model.input.SetValue("+2026")
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(Model)
 	if len(model.dateFilters) != 1 {
 		t.Fatal("date tag was not added")
 	}
+	model.inputVisible, model.inputActive = true, true
+	model.input.Focus()
 	model.input.SetValue("one")
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(Model)
 	if len(model.textFilters) != 1 {
 		t.Fatal("text tag was not added")
 	}
+	model.inputVisible, model.inputActive = true, true
+	model.input.Focus()
+	model.input.SetValue("")
 	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyBackspace})
 	model = updated.(Model)
 	if len(model.textFilters) != 0 || len(model.dateFilters) != 1 {
@@ -1324,13 +1360,17 @@ func TestModel_ClearAndBackspaceRemoveAllFilterTags(t *testing.T) {
 	}
 
 	model.input.SetValue("+2026")
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(Model)
+	model.inputVisible, model.inputActive = true, true
+	model.input.Focus()
 	model.input.SetValue("one")
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(Model)
+	model.inputVisible, model.inputActive = true, true
+	model.input.Focus()
 	model.input.SetValue("/clear")
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(Model)
 	if len(model.dateFilters) != 0 || len(model.textFilters) != 0 || model.input.Value() != "" {
 		t.Fatalf("/clear did not clear all tags: dates=%+v text=%+v input=%q", model.dateFilters, model.textFilters, model.input.Value())
@@ -1343,14 +1383,14 @@ func TestModel_InvalidDateTagShowsErrorAndEscPreservesValidTags(t *testing.T) {
 	model.inputVisible, model.inputActive = true, true
 	model.input.Focus()
 	model.input.SetValue("+2026-02-30")
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(Model)
 	if model.filterErr == nil || len(model.dateFilters) != 0 || !model.inputVisible {
 		t.Fatalf("invalid tag was accepted: err=%v tags=%+v", model.filterErr, model.dateFilters)
 	}
 
 	model.input.SetValue("+2026-07")
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(Model)
 	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	model = updated.(Model)

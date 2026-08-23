@@ -727,7 +727,7 @@ mm
 
 #### Search
 
-参考 pi 的底部输入区设计：内容滚动区位于上方，search/filter input 固定在底部；未聚焦时使用 muted border，聚焦时使用 accent border。双击 `space` 进入 rg/fzf 式 Document filter：加载 active Document 列表，按空格分词做包含过滤，Enter 选择并恢复搜索输入，Esc 取消。
+参考 pi 的底部输入区设计：内容滚动区位于上方，search/filter input 固定在底部；未聚焦时使用 muted border，聚焦时使用 accent border。按 `/`（vim 风格）进入 rg/fzf 式 Document filter：加载 active Document 列表，按空格分词做包含过滤，Enter 选择并恢复搜索输入，Esc 取消。
 
 ```text
 Results                 │ Preview
@@ -735,7 +735,7 @@ Results                 │ Preview
                         │ Online softmax maintains...
 ╭──────────────────────────────────────────────────────────────────────────╮
 ❯ flash attention                                               search
-0 shown / 0 loaded      space×2 filter • enter search • ↑↓ select • q quit
+0 shown / 0 loaded      / filter • enter search • ↑↓ select • q quit
 ```
 
 #### Paths
