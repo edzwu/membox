@@ -21,6 +21,10 @@ export function resetToc() {
   }
   elements.tocNav.innerHTML = '';
   if (elements.tocRail) elements.tocRail.innerHTML = '';
+  if (elements.toc) {
+    elements.toc.style.removeProperty('--toc-box-height');
+    elements.toc.style.removeProperty('height');
+  }
   activeHeadingId = null;
 }
 
@@ -141,6 +145,7 @@ export function buildToc(headings) {
   elements.tocNav.appendChild(title);
   elements.tocNav.appendChild(list);
   buildTocRail();
+  syncTocBoxHeight();
 }
 
 // Collapsed rail ticks follow the TOC outline, with one practical peel:
@@ -169,42 +174,53 @@ function buildTocRail() {
   const roots = collectRailLinks();
   if (!roots.length) return;
 
-  const articleBottom = elements.article
-    ? elements.article.getBoundingClientRect().bottom + window.scrollY
-    : 0;
-
-  const spans = roots.map((link, index) => {
-    const heading = document.getElementById(link.dataset.target);
-    const start = heading
-      ? heading.getBoundingClientRect().top + window.scrollY
-      : 0;
-    const nextHeading = index + 1 < roots.length
-      ? document.getElementById(roots[index + 1].dataset.target)
-      : null;
-    const end = nextHeading
-      ? nextHeading.getBoundingClientRect().top + window.scrollY
-      : articleBottom || start + 1;
-    return Math.max(48, end - start);
-  });
-
-  // Cap dominance so one huge chapter cannot paint the whole rail as one block.
-  const minSpan = Math.min(...spans);
-  const maxSpan = Math.max(minSpan * 3, minSpan);
-  const grows = spans.map((span) => {
-    const capped = Math.min(span, maxSpan);
-    return Math.max(1, Math.round(capped / minSpan));
-  });
-
-  roots.forEach((link, index) => {
+  // Collapsed mode only: compact hairline index (drawn in CSS). Expanded pane
+  // stays a normal progressive TOC — modes share active chapter, not geometry.
+  roots.forEach((link) => {
     const tick = document.createElement('button');
     tick.type = 'button';
     tick.className = 'toc-rail-tick';
     tick.dataset.target = link.dataset.target;
-    tick.style.flexGrow = String(grows[index]);
     const label = link.getAttribute('aria-label') || link.textContent.trim();
     tick.setAttribute('aria-label', label);
     tick.title = label;
     elements.tocRail.appendChild(tick);
+  });
+}
+
+// Size the shared TOC box to the full outline (all groups open), capped by
+// --toc-panel-max. Short docs stay compact; long docs scroll inside the pane.
+function syncTocBoxHeight() {
+  if (!elements.toc || !elements.tocPane || !elements.tocNav) return;
+
+  const toc = elements.toc;
+  const pane = elements.tocPane;
+  const nav = elements.tocNav;
+  const groups = Array.from(nav.querySelectorAll('.toc-group'));
+  const expanded = groups.map((group) => group.classList.contains('is-expanded'));
+
+  // Expand every group so height reflects the full outline, not the folded view.
+  groups.forEach((group) => group.classList.add('is-expanded'));
+  pane.classList.add('is-measuring');
+
+  const maxCss = getComputedStyle(toc).maxHeight;
+  const maxPx = maxCss && maxCss !== 'none' ? parseFloat(maxCss) : window.innerHeight * 0.64;
+  const contentH = Math.ceil(nav.scrollHeight);
+  const tickCount = elements.tocRail
+    ? elements.tocRail.querySelectorAll('.toc-rail-tick').length
+    : 0;
+  // padding 10*2 + ticks 11px + gaps 5px
+  const railMin = tickCount > 0
+    ? 20 + tickCount * 11 + Math.max(0, tickCount - 1) * 5
+    : 64;
+  const boxH = Math.max(72, Math.min(Math.max(contentH, railMin), Math.max(120, maxPx || 480)));
+
+  toc.style.setProperty('--toc-box-height', `${boxH}px`);
+  toc.style.height = `${boxH}px`;
+
+  pane.classList.remove('is-measuring');
+  groups.forEach((group, index) => {
+    group.classList.toggle('is-expanded', expanded[index]);
   });
 }
 
