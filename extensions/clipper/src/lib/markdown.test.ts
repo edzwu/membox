@@ -43,6 +43,34 @@ describe('htmlToMarkdown', () => {
     expect(markdown).toMatch(/^````$/m);
   });
 
+  // Regression: Substack (and similar sites) wrap images as
+  // <a><div><img></div></a>. turndown emits the link brackets separated from
+  // the image by blank lines, which Markdown parsers read as three fragments
+  // (stray "[" / image / stray "]") instead of a clickable link-image.
+  it('rejoins split link-image brackets from <a><div><img></div></a>', () => {
+    const markdown = htmlToMarkdown(`
+      <a class="image-link" target="_blank" href="https://substackcdn.com/original.png">
+        <div class="image2-ext">
+          <img src="https://substackcdn.com/thumb.png" alt="" />
+        </div>
+      </a>
+    `);
+    expect(markdown).toBe(
+      '[![](https://substackcdn.com/thumb.png)](https://substackcdn.com/original.png)',
+    );
+  });
+
+  // The repair must not disturb already-canonical link-images or stray text.
+  it('leaves canonical link-images and ordinary text untouched', () => {
+    const markdown = htmlToMarkdown(`
+      <p>before</p>
+      <a href="https://ex.com/orig"><img src="https://ex.com/thumb" alt="d" /></a>
+      <p>after [</p>
+    `);
+    expect(markdown).toContain('[![d](https://ex.com/thumb)](https://ex.com/orig)');
+    expect(markdown).toContain('after \\[');
+  });
+
   // Regression: snaptoken/kilo (and similar highlighters) put each source line
   // in a block child (div.line / ins.line) and rely on CSS for breaks. Without
   // restoring \n, the fence collapses to one long line.

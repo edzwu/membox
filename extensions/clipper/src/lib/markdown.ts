@@ -16,7 +16,20 @@ const DROP_ELEMENTS = [
 export function htmlToMarkdown(html: string): string {
   if (!html.trim()) return '';
   const cleanHtml = cleanConversionHtml(html);
-  return makeTurndown().turndown(cleanHtml).trim();
+  return repairSplitLinkImages(makeTurndown().turndown(cleanHtml)).trim();
+}
+
+// turndown emits a block child inside an <a> (e.g. Substack's
+// <a><div><img></div></a>) as `[` + blank line + image + blank line + `](url)`,
+// because the inner block's leading/trailing newlines separate the link
+// brackets from their content. Markdown parsers then read three fragments
+// (a stray "[", the image, a stray "]") instead of a clickable link-image.
+// Rejoin the fragments back into the canonical [![alt](src)](href) form.
+const splitLinkImagePattern =
+  /^\[\s*\n\s*(!\[[^\]]*\]\([^)]+\))\s*\n\s*\]\(([^)]+)\)/gm;
+
+export function repairSplitLinkImages(markdown: string): string {
+  return markdown.replace(splitLinkImagePattern, '[$1]($2)');
 }
 
 function makeTurndown(): TurndownService {
