@@ -5,7 +5,27 @@ import (
 	"encoding/hex"
 	"strings"
 	"testing"
+
+	"membox/internal/application/port"
+	"membox/internal/domain/catalog"
 )
+
+func TestAnnotationRecordMatchesPayload(t *testing.T) {
+	record := port.AnnotationNoteRecord{
+		NoteDocumentID: "note-id", TargetDocumentID: catalog.DocumentID("target-id"),
+		Start: 42, Prefix: "before", Suffix: "after", Highlight: true, Kind: "qa",
+	}
+	anchor := annotationAnchorPayload{
+		Start: 42, Prefix: "before", Suffix: "after", Highlight: true, Kind: "qa",
+	}
+	if !annotationRecordMatchesPayload(record, "target-id", anchor, "qa") {
+		t.Fatal("unchanged annotation should use the fast path")
+	}
+	anchor.Start++
+	if annotationRecordMatchesPayload(record, "target-id", anchor, "qa") {
+		t.Fatal("changed anchor must be persisted")
+	}
+}
 
 func TestMarkdownToCanonicalTextStripsSyntax(t *testing.T) {
 	body := "---\ntitle: \"X\"\n---\n\n# Title\n\nSome **bold** and a [link](https://a.b) here.\n\n> quoted line\n\n- item one\n- item two\n\n```go\ncode line\n```\n"

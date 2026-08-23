@@ -334,14 +334,15 @@ export function applyAnnotationRange(range, flags) {
     kind: flags.kind || detectNoteKind(flags.note) || null,
     ref: flags.ref || null,
   });
-  refreshNoteNumbers();
   if (flags.notify === false) {
-    // Restores update the in-memory/visual model but are not user mutations.
-    // The caller performs one presentation refresh after the batch.
+    // Restores are a batch. Renumbering and laying out after every entry turns
+    // document open into O(annotation²); restoreAnnotationSidecar refreshes the
+    // presentation once after all ranges have been applied.
   } else {
+    refreshNoteNumbers();
     notifyAnnotationsChanged();
+    scheduleNoteLayout();
   }
-  scheduleNoteLayout();
   // Pulse only a note the user just created. The selection is already visible,
   // so automatically scrolling to its rail/stack card can drag a long page all
   // the way to the bottom. Restored notes use notify:false and do not pulse.

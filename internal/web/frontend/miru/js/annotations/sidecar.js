@@ -7,6 +7,7 @@ import { elements } from '../dom.js';
 import { state } from '../state.js';
 import { ANNOTATION_FORMAT, ANNOTATION_VERSION, ANNOTATION_LEGACY_VERSIONS, ANNOTATION_CONTEXT_LENGTH, ANNOTATION_TEXT_EXCLUDE } from '../constants.js';
 import { applyAnnotationRange } from './model.js';
+import { refreshNoteNumbers, scheduleNoteLayout } from './layout.js';
 import { updateMarkdownDownloadControl } from '../ui/chrome.js';
 
 export async function fingerprintMarkdown(text, expectedFormat = '') {
@@ -36,25 +37,48 @@ export function annotationTextFromRange(range) {
   return holder.textContent || '';
 }
 
-function canonicalArticleText() {
-  const range = document.createRange();
-  range.selectNodeContents(elements.article);
-  return annotationTextFromRange(range);
+// Build canonical text and every live anchor in one TreeWalker pass. The old
+// save path cloned the article prefix once per annotation, including large
+// inline note DOM that was removed only after cloning. That made sidecar
+// capture O(document × annotations) and blocked the main thread before sync.
+function captureArticleSnapshot() {
+  const walker = document.createTreeWalker(elements.article, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      const parent = node.parentElement;
+      return parent && parent.closest(ANNOTATION_TEXT_EXCLUDE)
+        ? NodeFilter.FILTER_REJECT
+        : NodeFilter.FILTER_ACCEPT;
+    },
+  });
+  const anchors = new Map();
+  let text = '';
+  let node;
+  while ((node = walker.nextNode())) {
+    const value = node.nodeValue || '';
+    if (!value) continue;
+    const span = node.parentElement?.closest('span.annot[data-annot-id]');
+    if (span && elements.article.contains(span)) {
+      const id = String(span.dataset.annotId || '');
+      let captured = anchors.get(id);
+      if (!captured) {
+        captured = { start: text.length, exact: '' };
+        anchors.set(id, captured);
+      }
+      captured.exact += value;
+    }
+    text += value;
+  }
+  return { text, anchors };
 }
 
-function captureAnnotationAnchor(entry, canonicalText) {
-  const span = elements.article.querySelector(`span.annot[data-annot-id="${entry.id}"]`);
-  if (!span) return null;
+function canonicalArticleText() {
+  return captureArticleSnapshot().text;
+}
 
-  const before = document.createRange();
-  before.selectNodeContents(elements.article);
-  before.setEndBefore(span);
-  const selected = document.createRange();
-  selected.selectNodeContents(span);
-
-  const start = annotationTextFromRange(before).length;
-  const exact = annotationTextFromRange(selected);
-  if (!exact) return null;
+function captureAnnotationAnchor(entry, canonicalText, captured) {
+  if (!captured || !captured.exact) return null;
+  const start = captured.start;
+  const exact = captured.exact;
   const end = start + exact.length;
   const anchor = {
     start,
@@ -79,10 +103,11 @@ function captureAnnotationAnchor(entry, canonicalText) {
 }
 
 export async function buildAnnotationSidecar(markdownFile, markdown, progress = null) {
-  const canonicalText = canonicalArticleText();
+  const snapshot = captureArticleSnapshot();
+  const canonicalText = snapshot.text;
   const title = state.docTitle || 'Untitled';
   const savedAnnotations = state.annotations
-    .map((entry) => captureAnnotationAnchor(entry, canonicalText))
+    .map((entry) => captureAnnotationAnchor(entry, canonicalText, snapshot.anchors.get(String(entry.id))))
     .filter(Boolean)
     .sort((a, b) => a.start - b.start);
   if (savedAnnotations.length !== state.annotations.length) {
@@ -369,6 +394,10 @@ export function restoreAnnotationSidecar(data) {
         unrestored.push(anchor);
       }
     });
+  // One presentation pass for the whole restore batch. applyAnnotationRange
+  // deliberately skips per-entry renumber/layout when notify:false.
+  refreshNoteNumbers();
+  scheduleNoteLayout();
   updateMarkdownDownloadControl();
   data.unrestored = unrestored;
   return restored;

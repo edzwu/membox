@@ -26,10 +26,11 @@ type Store struct {
 	// logicalMu guards the derived logical-id cache. Physical documents.id
 	// values never change; logical short ids are recomputed when the set of
 	// physical ids changes so collisions lengthen without rewriting the DB.
-	logicalMu      sync.RWMutex
-	logicalByPhys  map[string]string
-	logicalLoaded  bool
-	logicalDirty   bool
+	logicalMu         sync.RWMutex
+	logicalByPhys     map[string]string
+	physicalByLogical map[string]string
+	logicalLoaded     bool
+	logicalDirty      bool
 }
 
 func Open(path string) (*Store, error) {

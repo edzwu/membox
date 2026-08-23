@@ -95,7 +95,7 @@ func TestServerServesReaderAndMarkdown(t *testing.T) {
 	featureModules := map[string][]string{
 		"connection.js":  {"membox-connection"},
 		"document.js":    {"membox-document-switcher", "Switch document · Ctrl+O", "membox-document-navigation"},
-		"notes.js":       {"membox-browse-notes", "Notes in this document", "Open full note"},
+		"notes.js":       {"membox-browse-notes", "Notes in this document", "noteDocumentURL"},
 		"pdf-import.js":  {"Drop one PDF at a time", "importPDF(file)"},
 		"translation.js": {"membox-translation-toggle", "streamTranslation", "qwen3:14b"},
 		"jp-study.js":    {"membox-jp-study-toggle", "mode: 'jp-study'", "日语精读"},

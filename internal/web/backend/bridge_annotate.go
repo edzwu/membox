@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"regexp"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"membox/internal/application"
@@ -154,6 +155,34 @@ type annotationWritePayload struct {
 	Revision int64 `json:"revision"`
 }
 
+// readAnnotationNoteBodies reads independent Markdown note files concurrently.
+// The semaphore matches SQLite's configured connection budget and prevents a
+// document with hundreds of notes from spawning unbounded active queries.
+func (s *Server) readAnnotationNoteBodies(ctx context.Context, records []port.AnnotationNoteRecord) map[string][]byte {
+	bodies := make(map[string][]byte, len(records))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 8)
+	for _, record := range records {
+		physical := string(record.NoteDocumentID)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			body, err := s.service.ReadDocument(ctx, physical)
+			<-sem
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			bodies[physical] = body
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+	return bodies
+}
+
 // liveAnnotationSidecar is an on-read view. It combines Markdown note content
 // with normalized UUID/anchor rows and never stores the resulting JSON.
 func (s *Server) liveAnnotationSidecar(ctx context.Context, pageID string) (map[string]any, bool, error) {
@@ -170,6 +199,7 @@ func (s *Server) liveAnnotationSidecar(ctx context.Context, pageID string) (map[
 	annotations := make([]map[string]any, 0, len(records))
 	refs := map[string]bool{}
 	revision := int64(0)
+	bodyByPhysical := s.readAnnotationNoteBodies(ctx, records)
 	type anchorKey struct {
 		exact string
 		start int
@@ -179,8 +209,8 @@ func (s *Server) liveAnnotationSidecar(ctx context.Context, pageID string) (map[
 		if ms := record.UpdatedAt.UnixMilli(); ms > revision {
 			revision = ms
 		}
-		noteBody, readErr := s.service.ReadDocument(ctx, string(record.NoteDocumentID))
-		if readErr != nil {
+		noteBody, ok := bodyByPhysical[string(record.NoteDocumentID)]
+		if !ok {
 			continue
 		}
 		exact, note, _ := parseClipBody(string(noteBody))
@@ -269,10 +299,11 @@ func (s *Server) annotationMap(ctx context.Context, record port.AnnotationNoteRe
 func (s *Server) reconcileAnnotationNotes(ctx context.Context, pageID string, payload annotationWritePayload) ([]map[string]any, int64, bool, error) {
 	s.annotationMu.Lock()
 	defer s.annotationMu.Unlock()
-	_, existing, err := s.service.ListAnnotationNotes(ctx, pageID)
+	target, existing, err := s.service.ListAnnotationNotes(ctx, pageID)
 	if err != nil {
 		return nil, 0, false, err
 	}
+	targetID := string(target.ID)
 	existingRevision := int64(0)
 	for _, record := range existing {
 		if ms := record.UpdatedAt.UnixMilli(); ms > existingRevision {
@@ -281,11 +312,15 @@ func (s *Server) reconcileAnnotationNotes(ctx context.Context, pageID string, pa
 	}
 	newRevision := existingRevision
 	byRef := make(map[string]port.AnnotationNoteRecord, len(existing)*2)
+	logicalByPhysical := make(map[string]string, len(existing))
 	for _, record := range existing {
 		physical := string(record.NoteDocumentID)
+		logical := s.logicalID(ctx, physical)
+		logicalByPhysical[physical] = logical
 		byRef[physical] = record
-		byRef[s.logicalID(ctx, physical)] = record
+		byRef[logical] = record
 	}
+	bodyByPhysical := s.readAnnotationNoteBodies(ctx, existing)
 	seen := map[string]bool{}
 	out := make([]map[string]any, 0, len(payload.Annotations))
 
@@ -304,15 +339,19 @@ func (s *Server) reconcileAnnotationNotes(ctx context.Context, pageID string, pa
 		// it to the same anchor on subsequent saves rather than creating copies.
 		if ref == "" {
 			bestDistance := int(^uint(0) >> 1)
-			for candidateRef, candidate := range byRef {
-				if seen[candidateRef] {
+			// Iterate each stored relation once. `byRef` contains both physical
+			// and logical keys, so ranging over it doubles file reads.
+			for _, candidate := range existing {
+				physical := string(candidate.NoteDocumentID)
+				logical := logicalByPhysical[physical]
+				if seen[physical] || seen[logical] {
 					continue
 				}
-				body, readErr := s.service.ReadDocument(ctx, candidateRef)
-				if readErr != nil {
+				candidateBody, ok := bodyByPhysical[physical]
+				if !ok {
 					continue
 				}
-				candidateExact, _, _ := parseClipBody(string(body))
+				candidateExact, _, _ := parseClipBody(string(candidateBody))
 				if denseExcerpt(candidateExact) != denseExcerpt(exact) {
 					continue
 				}
@@ -321,7 +360,7 @@ func (s *Server) reconcileAnnotationNotes(ctx context.Context, pageID string, pa
 					distance = -distance
 				}
 				if distance < bestDistance {
-					bestDistance, ref = distance, candidateRef
+					bestDistance, ref = distance, physical
 				}
 			}
 		}
@@ -331,13 +370,41 @@ func (s *Server) reconcileAnnotationNotes(ctx context.Context, pageID string, pa
 			kind = application.DetectAnnotationNoteKind(note)
 		}
 		body := selectionNoteMarkdown("", exact, note, kind)
+		var matched port.AnnotationNoteRecord
+		matchedExisting := false
 		if ref != "" {
-			if current, readErr := s.service.ReadDocument(ctx, ref); readErr == nil {
+			// Convert the browser-visible short ref to its physical UUID before
+			// every hot-path read/resolve. Resolving 14 short refs scanned the full
+			// logical-id corpus 14 times and made an unchanged save take ~4s.
+			if record, ok := byRef[ref]; ok {
+				matched = record
+				matchedExisting = true
+				ref = string(record.NoteDocumentID)
+			}
+			current, haveCurrent := bodyByPhysical[ref]
+			if !haveCurrent {
+				var readErr error
+				current, readErr = s.service.ReadDocument(ctx, ref)
+				haveCurrent = readErr == nil
+			}
+			if haveCurrent {
 				oldExact, oldNote, _ := parseClipBody(string(current))
 				if denseExcerpt(oldExact) == denseExcerpt(exact) && strings.TrimSpace(oldNote) == note {
 					body = "" // no content churn; update anchor metadata only
 					if kind == "" {
 						kind = application.DetectAnnotationNoteKind(string(current))
+					}
+					if matchedExisting && annotationRecordMatchesPayload(matched, targetID, anchor, kind) {
+						physical := string(matched.NoteDocumentID)
+						logical := logicalByPhysical[physical]
+						seen[physical] = true
+						seen[logical] = true
+						saved := s.annotationMap(ctx, matched, exact, note)
+						if clientID := strings.TrimSpace(anchor.ClientID); clientID != "" {
+							saved["clientId"] = clientID
+						}
+						out = append(out, saved)
+						continue
 					}
 				} else {
 					body = selectionNoteMarkdown(string(current), exact, note, kind)
@@ -348,7 +415,7 @@ func (s *Server) reconcileAnnotationNotes(ctx context.Context, pageID string, pa
 		}
 
 		result, saveErr := s.service.SaveAnnotationNote(ctx, application.SaveAnnotationNoteOptions{
-			TargetSelector: pageID, NoteSelector: ref, Title: annotationNoteTitle(exact), Body: body,
+			TargetSelector: targetID, NoteSelector: ref, Title: annotationNoteTitle(exact), Body: body,
 			Start: anchor.Start, Prefix: anchor.Prefix, Suffix: anchor.Suffix,
 			Highlight: anchor.Highlight, Underline: anchor.Underline, Strikethrough: anchor.Strikethrough,
 			Kind: kind,
@@ -407,6 +474,17 @@ func (s *Server) reconcileAnnotationNotes(ctx context.Context, pageID string, pa
 		return nil, 0, false, err
 	}
 	return out, newRevision, replacementApplied, nil
+}
+
+func annotationRecordMatchesPayload(record port.AnnotationNoteRecord, targetID string, anchor annotationAnchorPayload, kind string) bool {
+	return string(record.TargetDocumentID) == targetID &&
+		record.Start == anchor.Start &&
+		record.Prefix == anchor.Prefix &&
+		record.Suffix == anchor.Suffix &&
+		record.Highlight == anchor.Highlight &&
+		record.Underline == anchor.Underline &&
+		record.Strikethrough == anchor.Strikethrough &&
+		application.NormalizeAnnotationNoteKind(record.Kind) == application.NormalizeAnnotationNoteKind(kind)
 }
 
 // denseExcerpt normalizes an excerpt for identity comparison: inline markup

@@ -54,8 +54,13 @@ func (s *Store) refreshLogicalIDs(ctx context.Context) error {
 		return err
 	}
 	logical := catalog.LogicalIDs(ids)
+	physicalByLogical := make(map[string]string, len(logical))
+	for physical, short := range logical {
+		physicalByLogical[short] = physical
+	}
 	s.logicalMu.Lock()
 	s.logicalByPhys = logical
+	s.physicalByLogical = physicalByLogical
 	s.logicalLoaded = true
 	s.logicalDirty = false
 	s.logicalMu.Unlock()

@@ -233,7 +233,11 @@ func (s *Store) ResolveDocument(ctx context.Context, selector string) (*catalog.
 		return nil, "", err
 	}
 	s.logicalMu.RLock()
-	physical, err := catalog.MatchLogicalSelector(selector, s.logicalByPhys)
+	physical, exactLogical := s.physicalByLogical[selector]
+	var err error
+	if !exactLogical {
+		physical, err = catalog.MatchLogicalSelector(selector, s.logicalByPhys)
+	}
 	s.logicalMu.RUnlock()
 	if err != nil {
 		return nil, "", err
