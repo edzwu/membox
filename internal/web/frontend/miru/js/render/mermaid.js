@@ -55,6 +55,63 @@ export function collectMermaidBlocks() {
   return Array.from(elements.article.querySelectorAll('pre code')).filter(isMermaidBlock);
 }
 
+// LLMs often emit flowchart labels like `A[accept()]` or `A -->|accept()| B`
+// without quoting. Mermaid's parser treats bare `()` inside [] / || as shape
+// tokens and fails. Quote those labels conservatively before render.
+//
+// Only touches unquoted rectangle node text and edge labels. Leaves already
+// quoted text, and non-rectangle shapes like A((c)), A[(db)], A([s]), alone.
+export function sanitizeMermaidSource(source) {
+  if (!source) return source;
+
+  // Rectangle nodes: Foo[text with (parens)] → Foo["text with (parens)"]
+  // Negative look after '[' skips shapes that start with ", ', (, [, /, \
+  let out = source.replace(
+    /\b([A-Za-z_][\w-]*)\[(?![["'(\s\/\\])([^\]\n]*)\]/g,
+    (match, id, text) => {
+      if (!mermaidLabelNeedsQuotes(text)) return match;
+      return `${id}["${escapeMermaidQuotedLabel(text)}"]`;
+    },
+  );
+
+  // Edge labels: -->|text with ()| → -->|"text with ()"|
+  out = out.replace(
+    /(\|)(?!")([^|\n]*[()][^|\n]*)(\|)/g,
+    (match, open, text, close) => {
+      if (isAlreadyQuoted(text)) return match;
+      return `${open}"${escapeMermaidQuotedLabel(text)}"${close}`;
+    },
+  );
+
+  // subgraph id [Title with ()] → subgraph id ["Title with ()"]
+  out = out.replace(
+    /\bsubgraph(\s+\S+)(\s+)\[(?!")([^\]\n]*)\]/g,
+    (match, idPart, spaces, title) => {
+      if (!mermaidLabelNeedsQuotes(title)) return match;
+      return `subgraph${idPart}${spaces}["${escapeMermaidQuotedLabel(title)}"]`;
+    },
+  );
+
+  return out;
+}
+
+function isAlreadyQuoted(text) {
+  const t = text.trim();
+  return t.length >= 2 && t.startsWith('"') && t.endsWith('"');
+}
+
+function mermaidLabelNeedsQuotes(text) {
+  if (!text || isAlreadyQuoted(text)) return false;
+  // Parentheses are the common LLM footgun. Also quote other tokens the
+  // flowchart parser is known to misread inside bare labels.
+  return /[(){}|;]/.test(text);
+}
+
+function escapeMermaidQuotedLabel(text) {
+  // Mermaid uses #quot; inside quoted labels for literal double quotes.
+  return text.replace(/"/g, '#quot;');
+}
+
 /** Replace mermaid code fences with rendered diagrams. Safe to call repeatedly. */
 export async function renderMermaid() {
   const blocks = collectMermaidBlocks();
@@ -86,7 +143,7 @@ export async function renderMermaid() {
     const pre = code.closest('pre');
     if (!pre || pre.dataset.mermaidRendered === '1') continue;
 
-    const source = (code.textContent || '').trim();
+    const source = sanitizeMermaidSource((code.textContent || '').trim());
     if (!source) continue;
 
     const host = document.createElement('div');
