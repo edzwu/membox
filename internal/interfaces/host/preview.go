@@ -1,6 +1,14 @@
 package host
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
+
+// summaryBodyMarkerRE matches the local-model selection-summary label. Content
+// after this marker is the actual summary; everything before is the restore
+// excerpt (quoted or, in older notes, plain-text duplicates).
+var summaryBodyMarkerRE = regexp.MustCompile(`(?m)^\*\*总结：?\*\*\s*$`)
 
 // DocumentPreview extracts a short human-readable preview from a Markdown
 // document: front matter, images, headings and quote markers are dropped, and
@@ -15,6 +23,10 @@ func DocumentPreview(body []byte, maxRunes int) string {
 			rest = rest[end+4:]
 		}
 		text = rest
+	}
+	// Selection summaries: prefer the generated summary, never the excerpt.
+	if loc := summaryBodyMarkerRE.FindStringIndex(text); loc != nil {
+		text = text[loc[1]:]
 	}
 	var lines []string
 	started := false // crossed the excerpt/quote region of selection notes

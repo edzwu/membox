@@ -388,8 +388,22 @@ func (s *Service) reviewCardView(ctx context.Context, card port.ReviewCard) (Rev
 
 // stripBlockquoteExcerpt removes the leading blockquote excerpt from a note
 // body (the anchor copy kept in *-note.md files). Everything after the quote
-// — the actual note/summary prose — is preserved.
+// — the actual note/summary prose — is preserved. When a **总结：** marker is
+// present, only the content after it is kept (older notes duplicated the
+// excerpt as plain text before the marker).
 func stripBlockquoteExcerpt(body string) string {
+	if idx := strings.Index(body, "**总结"); idx >= 0 {
+		rest := body[idx:]
+		// Drop the marker line itself so the card shows only the summary prose.
+		if nl := strings.Index(rest, "\n"); nl >= 0 {
+			rest = rest[nl+1:]
+		} else {
+			rest = ""
+		}
+		if trimmed := strings.TrimSpace(rest); trimmed != "" {
+			return trimmed
+		}
+	}
 	lines := strings.Split(body, "\n")
 	var out []string
 	inQuote := false

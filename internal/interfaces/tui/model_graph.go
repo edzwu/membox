@@ -313,10 +313,15 @@ func graphFocusCmd(ctx context.Context, app App, selectorValue string, layout st
 		}
 		appendUnique(graph.Incoming...)
 		// Load body previews so cards show content, not just filenames.
+		// Prefer the stored Summary field (board/index) when present.
 		previews := make(map[string]string, len(cards))
 		for _, card := range cards {
 			if card.MediaType == "application/pdf" {
 				previews[card.ID] = "PDF · Enter opens viewer · Tab opens TOC"
+				continue
+			}
+			if summary := strings.TrimSpace(card.Summary); summary != "" {
+				previews[card.ID] = summary
 				continue
 			}
 			if body, readErr := app.ReadDocument(ctx, membox.ReadDocumentQuery{Selector: card.ID}); readErr == nil {

@@ -161,8 +161,37 @@ function buildNoteLabel(id) {
 const NOTE_URL_RE = /(?:https?:\/\/|www\.)[A-Za-z0-9._~:\/?#@!$&()*+,;=%-]+/gi;
 let noteMarkdown = null;
 
-function renderNoteText(el, note) {
+// summaryCardMarkdown keeps only the generated summary for kind=summary cards.
+// Selection-summary notes store the excerpt as a restore blockquote (and older
+// notes may still carry a duplicated plain-text excerpt before **总结：**).
+function summaryCardMarkdown(note) {
+  const text = String(note || '');
+  const marker = text.match(/\*\*总结：?\*\*\s*\n+([\s\S]*)/);
+  if (marker && marker[1].trim()) {
+    return marker[1].trim();
+  }
+  // No marker: drop leading blockquotes and keep remaining prose.
+  const lines = text.split('\n');
+  const out = [];
+  let inQuote = false;
+  for (const line of lines) {
+    const trim = line.trim();
+    if (trim.startsWith('>')) {
+      inQuote = true;
+      continue;
+    }
+    if (inQuote) {
+      if (trim === '') continue;
+      inQuote = false;
+    }
+    out.push(line);
+  }
+  return out.join('\n').trim() || text.trim();
+}
+
+function renderNoteText(el, note, opts = {}) {
   el.textContent = '';
+  const source = opts.kind === 'summary' ? summaryCardMarkdown(note) : note;
 
   if (typeof window.markdownit === 'function' && typeof window.DOMPurify === 'function') {
     if (!noteMarkdown) {
@@ -170,7 +199,7 @@ function renderNoteText(el, note) {
         window.markdownit({ html: false, linkify: true, typographer: true, breaks: true }),
       );
     }
-    const clean = window.DOMPurify.sanitize(noteMarkdown.render(note), {
+    const clean = window.DOMPurify.sanitize(noteMarkdown.render(source), {
       ADD_ATTR: ['target', 'rel'],
     });
     const fragment = document.createElement('div');
@@ -181,7 +210,7 @@ function renderNoteText(el, note) {
     return;
   }
 
-  renderPlainNoteText(el, note);
+  renderPlainNoteText(el, source);
 }
 
 function prepareNoteLinks(root) {
@@ -269,7 +298,7 @@ function insertNoteCard(id, noteText, kind) {
   body.className = 'annot-note-body';
   const text = document.createElement('div');
   text.className = 'annot-note-text';
-  renderNoteText(text, noteText);
+  renderNoteText(text, noteText, { kind });
   body.append(buildNoteLabel(id), text);
   card.appendChild(body);
   card.appendChild(buildNoteBtn('edit'));
@@ -360,7 +389,7 @@ export function setNoteOnPassage(entry, annotEl, text, opts = {}) {
       else delete card.dataset.noteKind;
     }
     const textEl = card && card.querySelector('.annot-note-text');
-    if (textEl) renderNoteText(textEl, text);
+    if (textEl) renderNoteText(textEl, text, { kind });
   } else {
     entry.note = text;
     entry.kind = kind || null;
@@ -410,7 +439,7 @@ export function startEditNoteCard(card, entry) {
   const restore = () => {
     const t = document.createElement('div');
     t.className = 'annot-note-text';
-    renderNoteText(t, entry.note);
+    renderNoteText(t, entry.note, { kind: entry.kind || detectNoteKind(entry.note) });
     input.replaceWith(t);
     scheduleNoteLayout();
   };

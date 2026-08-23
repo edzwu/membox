@@ -40,15 +40,15 @@ async function summarizeSelection(selection) {
   return response.json();
 }
 
-function summarizeNoteBody(selection, summary) {
-  const q = String(selection || '').trim();
+function summarizeNoteBody(_selection, summary) {
   const a = String(summary || '').trim();
   if (!a) return '';
-  // The quote stays in the note file as the restore anchor; the card hides it
-  // via .is-summary CSS, so only the summary + label are visible inline.
-  return `> ${q}
-
-**总结：**
+  // Do NOT re-embed the selection here. bridge_annotate already prefixes the
+  // note file with a proper line-by-line blockquote of the exact restore
+  // anchor. Re-including the selection (especially multi-paragraph text via a
+  // single leading `>`) duplicated the original as plain body and made cards
+  // show the excerpt instead of the summary.
+  return `**总结：**
 
 ${a}
 `;
