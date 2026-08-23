@@ -6,7 +6,7 @@
 
 import { elements } from '../dom.js';
 import { ANNOTATION_TEXT_EXCLUDE } from '../constants.js';
-import { showToast } from '../ui/feedback.js';
+import { showToast, writeClipboard } from '../ui/feedback.js';
 import { scheduleNoteLayout } from './layout.js';
 import { initNoteFocus, focusNote, toggleNoteInline } from './focus.js';
 import { annotationTextFromRange } from './sidecar.js';
@@ -660,6 +660,28 @@ export function initAnnotations() {
       hideAnnotToolbar();
     }
   });
+
+  // The compose dialog moves focus to its textarea and parks the page
+  // selection in a mask span, so a plain Cmd+C has no DOM selection to copy.
+  // When the dialog is open and the focused field has no selection of its own,
+  // Cmd/Ctrl+C copies the selected passage instead (capture phase so it wins
+  // over the field's default copy).
+  document.addEventListener('keydown', (e) => {
+    if (!annotToolbar || annotToolbar.hidden) return;
+    if (!annotToolbar.classList.contains('is-compose')) return;
+    if (e.isComposing || e.keyCode === 229) return;
+    if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== 'c') return;
+    if (!currentSelectionText) return;
+    const field = e.target instanceof HTMLElement && e.target.matches('textarea, input')
+      ? e.target
+      : null;
+    if (field && field.selectionStart != null && field.selectionStart !== field.selectionEnd) {
+      return; // the field owns a selection — copy what the user selected there
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    writeClipboard(currentSelectionText, () => showToast('Copied selection'));
+  }, true);
 
   // Passage anchors and note cards live in separate sibling layers but share
   // one interaction handler through their data-annot-id relationship.
