@@ -188,6 +188,7 @@ func (w *Workflow) publishProcessed(ctx context.Context, workspace Workspace, so
 		if index == 0 {
 			chapterAssets = assets
 		}
+		// First publish keeps relative backlinks; rewritten after the index UUID exists.
 		published, err := workspace.PublishBundle(ctx, source.DocumentID, chapter.Filename, chapter.Markdown, chapterAssets)
 		if err != nil {
 			return Result{}, fmt.Errorf("publishing converted PDF chapter %q: %w", chapter.Title, err)
@@ -206,8 +207,26 @@ func (w *Workflow) publishProcessed(ctx context.Context, workspace Workspace, so
 	if err != nil {
 		return Result{}, fmt.Errorf("publishing converted PDF index: %w", err)
 	}
-	// Chapter → index backlinks still use the stable index filename; Miru
-	// rewrites them via /series (filename→id). TOC is identity-linked above.
+	filenameToID[strings.ToLower(filepath.Base(filename))] = indexDocument.DocumentID
+	// Rewrite chapter → index backlinks now that the index UUID is known, then
+	// re-publish in place (same stable filenames / document UUIDs).
+	for index, chapter := range processed.Chapters {
+		rewritten := rewriteRelativeMarkdownLinks(chapter.Markdown, filenameToID)
+		if rewritten == chapter.Markdown {
+			continue
+		}
+		chapterAssets := []Asset(nil)
+		if index == 0 {
+			chapterAssets = assets
+		}
+		published, pubErr := workspace.PublishBundle(ctx, source.DocumentID, chapter.Filename, rewritten, chapterAssets)
+		if pubErr != nil {
+			return Result{}, fmt.Errorf("rewriting converted PDF chapter backlink %q: %w", chapter.Title, pubErr)
+		}
+		publishedChapters[index].Path = published.Path
+		publishedChapters[index].DocumentID = published.DocumentID
+		publishedChapters[index].Created = published.Created
+	}
 	if err := workspace.LinkDocuments(ctx, source.DocumentID, indexDocument.DocumentID); err != nil {
 		return Result{}, fmt.Errorf("linking PDF to converted Markdown index: %w", err)
 	}

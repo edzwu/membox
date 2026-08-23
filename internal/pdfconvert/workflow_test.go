@@ -141,16 +141,35 @@ func TestWorkflowPublishesStructuredBookAsLinkedChapterDocuments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Chapters) != 3 || len(workspace.publications) != 4 {
-		t.Fatalf("unexpected split publication: result=%+v publications=%+v", result, workspace.publications)
+	// 3 chapters + index + 3 chapter backlink rewrites
+	if len(result.Chapters) != 3 || len(workspace.publications) != 7 {
+		t.Fatalf("unexpected split publication: result=%+v publications=%d", result, len(workspace.publications))
 	}
-	index := workspace.publications[3]
-	if index.filename != "book-pdf-019ffe58b0af7b65baf12b7d9c066b19.md" || strings.Contains(index.body, "intro\n") {
+	var index fakePublication
+	for _, publication := range workspace.publications {
+		if publication.filename == "book-pdf-019ffe58b0af7b65baf12b7d9c066b19.md" {
+			index = publication
+			break
+		}
+	}
+	if index.filename == "" || strings.Contains(index.body, "intro\n") {
 		t.Fatalf("unexpected index publication: %+v", index)
 	}
 	// TOC must use catalog identity links, not bare chapter filenames.
 	if strings.Contains(index.body, "chapter-001.md") || !strings.Contains(index.body, "/?id=") {
 		t.Fatalf("index TOC must use /?id= document links: %+v", index)
+	}
+	// Chapter/part backlinks must also be identity links after the rewrite pass.
+	backlinked := 0
+	for _, publication := range workspace.publications {
+		base := publication.filename
+		isPiece := strings.Contains(base, "-chapter-") || strings.Contains(base, "-part-")
+		if isPiece && strings.Contains(publication.body, "](/?id="+index.result.DocumentID+")") {
+			backlinked++
+		}
+	}
+	if backlinked < 3 {
+		t.Fatalf("chapter backlinks not rewritten to index id: backlinked=%d pubs=%+v", backlinked, workspace.publications)
 	}
 	if len(workspace.publications[0].assets) != 1 {
 		t.Fatalf("assets were not published with chapters: %+v", workspace.publications)
@@ -287,8 +306,9 @@ func TestWorkflowRunsPlannerForLargeUnstructuredMarkdown(t *testing.T) {
 	if !spy.called {
 		t.Fatal("planner must run for large unstructured documents")
 	}
-	if len(workspace.publications) != 4 { // whole bundle (phase 1) + 2 chapters + index
-		t.Fatalf("expected whole bundle, two chapters, and index: got %d publications", len(workspace.publications))
+	// whole bundle (phase 1) + 2 chapters + index + 2 chapter backlink rewrites
+	if len(workspace.publications) != 6 {
+		t.Fatalf("expected whole bundle, chapters, index, and backlink rewrites: got %d publications %+v", len(workspace.publications), workspace.publications)
 	}
 }
 
