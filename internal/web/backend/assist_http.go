@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"membox/internal/assist"
+	"membox/internal/translation"
 )
 
 // assistRunner is the Pi one-shot runner for Miru selection assist.
@@ -43,8 +44,8 @@ func getAssistRunner() *assist.Runner {
 }
 
 // handleSelectionSummarize summarizes a user-selected excerpt with the local
-// mmd model and returns the ≤140-char summary. The frontend saves it as an
-// annotation note (kind=summary) via the normal note flow.
+// mmd model and streams the ≤140-char summary as NDJSON deltas. The frontend
+// saves it as an annotation note (kind=summary) via the normal note flow.
 func (s *Server) handleSelectionSummarize(writer http.ResponseWriter, request *http.Request, selector string) {
 	if request.Method != http.MethodPost {
 		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
@@ -84,21 +85,54 @@ func (s *Server) handleSelectionSummarize(writer http.ResponseWriter, request *h
 		return
 	}
 	prompt := "你是笔记整理助手。把下面选中的内容压缩成一段 140 字以内的中文总结，保留核心观点，直接输出总结本身，不要前缀不要解释。\n\n选中内容：\n" + selection + "\n\n140字以内的总结："
-	summary, err := s.summarizer.Complete(request.Context(), prompt)
-	if err != nil {
-		http.Error(writer, err.Error(), http.StatusConflict)
-		return
-	}
-	summary = strings.TrimSpace(summary)
-	if summary == "" {
-		http.Error(writer, "local model returned an empty summary", http.StatusConflict)
-		return
-	}
-	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+
+	writer.Header().Set("Content-Type", "application/x-ndjson; charset=utf-8")
 	writer.Header().Set("Cache-Control", "no-store")
+	flusher, _ := writer.(http.Flusher)
+	started := false
+	var summary strings.Builder
+	emit := func(delta string) error {
+		started = true
+		summary.WriteString(delta)
+		if err := json.NewEncoder(writer).Encode(map[string]any{"type": "delta", "text": delta}); err != nil {
+			return err
+		}
+		if flusher != nil {
+			flusher.Flush()
+		}
+		return nil
+	}
+	fail := func(text string) {
+		if started {
+			_ = json.NewEncoder(writer).Encode(map[string]any{"type": "error", "text": text})
+			return
+		}
+		http.Error(writer, text, http.StatusConflict)
+	}
+
+	if streamer, ok := s.summarizer.(translation.PromptStreamer); ok {
+		if err := streamer.StreamPrompt(request.Context(), prompt, emit); err != nil {
+			fail(err.Error())
+			return
+		}
+	} else {
+		// Fallback for one-shot completers: emit the whole reply as one delta.
+		text, completeErr := s.summarizer.Complete(request.Context(), prompt)
+		if completeErr != nil {
+			fail(completeErr.Error())
+			return
+		}
+		if err := emit(text); err != nil {
+			return
+		}
+	}
+	if strings.TrimSpace(summary.String()) == "" {
+		fail("local model returned an empty summary")
+		return
+	}
 	_ = json.NewEncoder(writer).Encode(map[string]any{
-		"summary": summary,
-		"model":   "local qwen3:14b",
+		"type":  "done",
+		"model": "local qwen3:14b",
 	})
 }
 

@@ -100,6 +100,59 @@ func (c MMDClient) Stream(ctx context.Context, input Request, emit EmitFunc) err
 	}
 }
 
+// StreamPrompt POSTs one prompt to mmd's streaming LLM endpoint and forwards
+// NDJSON text deltas as they are generated.
+func (c MMDClient) StreamPrompt(ctx context.Context, prompt string, emit func(string) error) error {
+	body, err := json.Marshal(map[string]string{"prompt": prompt})
+	if err != nil {
+		return err
+	}
+	response, err := c.post(ctx, "/v1/llm/stream", body)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		message, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
+		return fmt.Errorf("mmd llm stream HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(message)))
+	}
+	reader := bufio.NewReader(response.Body)
+	done := false
+	for {
+		line, readErr := reader.ReadBytes('\n')
+		if len(bytes.TrimSpace(line)) != 0 {
+			var event struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			}
+			if err := json.Unmarshal(line, &event); err != nil {
+				return fmt.Errorf("decode mmd llm stream event: %w", err)
+			}
+			switch event.Type {
+			case "error":
+				return errors.New(event.Text)
+			case "done":
+				done = true
+			case "delta":
+				if emit != nil {
+					if err := emit(event.Text); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				if !done {
+					return errors.New("mmd llm stream ended before done")
+				}
+				return nil
+			}
+			return readErr
+		}
+	}
+}
+
 // Complete calls mmd's one-shot LLM endpoint (no streaming).
 func (c MMDClient) Complete(ctx context.Context, prompt string) (string, error) {
 	body, err := json.Marshal(map[string]string{"prompt": prompt})

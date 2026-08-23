@@ -190,6 +190,56 @@ func TestLLMCompleteEndpointAndSlot(t *testing.T) {
 	}
 }
 
+type fakePromptStreamer struct{ deltas []string }
+
+func (f fakePromptStreamer) StreamPrompt(_ context.Context, _ string, emit func(string) error) error {
+	for _, delta := range f.deltas {
+		if err := emit(delta); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func TestLLMStreamEndpointAndSlot(t *testing.T) {
+	d := &Daemon{
+		promptStreamer:  fakePromptStreamer{deltas: []string{"摘", "要"}},
+		translationSlot: make(chan struct{}, 1),
+	}
+	body, _ := json.Marshal(map[string]string{"prompt": "summarize"})
+	request := httptest.NewRequest(http.MethodPost, "/v1/llm/stream", bytes.NewReader(body))
+	response := httptest.NewRecorder()
+	d.handleLLMStream(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("llm stream status=%d body=%q", response.Code, response.Body.String())
+	}
+	var events []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	decoder := json.NewDecoder(response.Body)
+	for {
+		var event struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		if err := decoder.Decode(&event); err != nil {
+			break
+		}
+		events = append(events, event)
+	}
+	if len(events) != 3 || events[0].Type != "delta" || events[0].Text != "摘" || events[2].Type != "done" {
+		t.Fatalf("events=%+v", events)
+	}
+
+	d.translationSlot <- struct{}{}
+	busy := httptest.NewRecorder()
+	d.handleLLMStream(busy, httptest.NewRequest(http.MethodPost, "/v1/llm/stream", bytes.NewReader(body)))
+	if busy.Code != http.StatusTooManyRequests {
+		t.Fatalf("busy slot status=%d", busy.Code)
+	}
+}
+
 func TestDaemonSelfStopsWhenIdle(t *testing.T) {
 	config, err := DefaultConfig(shortTempDir(t))
 	if err != nil {

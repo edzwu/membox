@@ -51,3 +51,9 @@ type Streamer interface {
 type Completer interface {
 	Complete(ctx context.Context, prompt string) (string, error)
 }
+
+// PromptStreamer runs one local-LLM prompt and forwards each generated token.
+// It is the streaming counterpart of Completer (selection summarize uses it).
+type PromptStreamer interface {
+	StreamPrompt(ctx context.Context, prompt string, emit func(delta string) error) error
+}

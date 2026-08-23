@@ -377,6 +377,47 @@ dt > .membox-assist-inline {
   display: inline;
 }
 
+/* Selection summarize streams here under the passage, then becomes a note. */
+.membox-summary-stream {
+  margin: 0.38em 0 1em;
+  padding-left: 0.85em;
+  border-left: 2px solid color-mix(in srgb, #3d9a5f 55%, var(--line));
+  color: color-mix(in srgb, var(--ink-soft) 84%, #3d9a5f);
+  font-family: var(--font-serif);
+  font-size: 0.96em;
+  font-weight: 400;
+  line-height: 1.75;
+  letter-spacing: 0.012em;
+  white-space: pre-wrap;
+}
+
+li > .membox-summary-stream,
+td > .membox-summary-stream,
+th > .membox-summary-stream,
+dd > .membox-summary-stream,
+dt > .membox-summary-stream {
+  margin-bottom: 0.45em;
+}
+
+.membox-summary-stream-text {
+  display: inline;
+}
+
+.membox-summary-stream-spinner {
+  display: inline-block;
+  width: 0.72em;
+  height: 0.72em;
+  margin-left: 0.42em;
+  border: 1.5px solid color-mix(in srgb, var(--muted) 45%, transparent);
+  border-top-color: #3d9a5f;
+  border-radius: 50%;
+  animation: membox-translation-spin 0.8s linear infinite;
+}
+
+.membox-summary-stream-spinner[hidden] {
+  display: none;
+}
+
 .membox-assist-inline-spinner {
   display: inline-block;
   width: 0.72em;

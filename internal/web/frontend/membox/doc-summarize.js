@@ -18,7 +18,7 @@ async function startSelectionSummarize(captured, force = false) {
   showToast('总结中…');
   try {
     // Fast path: existing summary for the same passage (unless Alt-click force).
-    const result = await runSelectionSummarize(captured, { force });
+    const result = await runSelectionSummarize(captured, { force, signal: controller.signal });
     if (controller?.signal.aborted) {
       showToast('Summarize stopped');
       return;

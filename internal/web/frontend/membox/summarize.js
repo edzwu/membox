@@ -1,24 +1,24 @@
 /* Selection summarize: compress a selected excerpt to ≤140 chars with the
-   local mmd model, then save it as an annotation note (kind=summary).
-   Triggered from the bottom-left 「摘」 button when a page selection exists
-   (same pattern as 「译」). Idempotent: re-summarizing the same passage reuses
-   the existing summary note unless force=true (Alt-click). */
+   local mmd model (streamed), then save it as an annotation note
+   (kind=summary). Triggered from the compose dialog 「摘」 button when a page
+   selection exists (same pattern as 「译」). Idempotent: re-summarizing the
+   same passage reuses the existing summary note unless force=true (Alt-click). */
 
+import { scheduleNoteLayout } from '../js/annotations/layout.js';
 import { applyNote, findAnnot, setNoteOnPassage } from '../js/annotations/model.js';
 import { focusNote } from '../js/annotations/focus.js';
 import { detachComposeSelection, getComposeSelection } from '../js/annotations/toolbar.js';
 import { elements } from '../js/dom.js';
 import { state } from '../js/state.js';
+import { streamSelectionSummarize } from './api.js';
 import { session } from './session.js';
 
-export async function summarizeSelection(selection) {
-  const response = await fetch(`/api/doc/${encodeURIComponent(session.documentID)}/summarize`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ selection }),
-  });
-  if (!response.ok) throw new Error((await response.text()).trim() || `HTTP ${response.status}`);
-  return response.json();
+export async function summarizeSelection(selection, { signal } = {}) {
+  let summary = '';
+  await streamSelectionSummarize(session.documentID, selection, (event) => {
+    if (event.type === 'delta') summary += event.text || '';
+  }, { signal });
+  return { summary: summary.trim() };
 }
 
 export function summarizeNoteBody(_selection, summary) {
@@ -136,10 +136,46 @@ export function hasArticleSelectionText() {
   return normalizeSelectionText(selection.toString()).length >= 20;
 }
 
+const SUMMARY_STREAM_CLASS = 'membox-summary-stream';
+
+/** Block under which the streaming summary preview is anchored. */
+function summaryStreamHost(range) {
+  let node = range?.commonAncestorContainer;
+  if (!node || node.nodeType === Node.TEXT_NODE) node = node?.parentElement;
+  if (!node || !elements.article?.contains(node)) return null;
+  return node.closest?.('h1, h2, h3, h4, h5, h6, p, li, dd, dt, td, th, figcaption')
+    || node.closest?.('.fold-body, .article, article')
+    || null;
+}
+
+/** Transient streaming preview under the passage, replaced by the durable
+ *  summary note once the stream finishes (mirrors translation/QA). */
+function createSummaryStream(host) {
+  const wrapper = document.createElement('div');
+  wrapper.className = SUMMARY_STREAM_CLASS;
+  wrapper.setAttribute('translate', 'no');
+  wrapper.lang = 'zh-CN';
+  const text = document.createElement('div');
+  text.className = 'membox-summary-stream-text';
+  const spinner = document.createElement('span');
+  spinner.className = 'membox-summary-stream-spinner';
+  spinner.setAttribute('aria-hidden', 'true');
+  wrapper.append(text, spinner);
+  if (host.matches('li, td, th, dd, dt')) host.appendChild(wrapper);
+  else host.insertAdjacentElement('afterend', wrapper);
+  scheduleNoteLayout();
+  return { wrapper, text, spinner };
+}
+
+function removeSummaryStream(wrapper) {
+  wrapper?.remove();
+  scheduleNoteLayout();
+}
+
 /**
  * Summarize a captured article selection into an inline summary note.
  * @param {{ text: string, range: Range }} captured
- * @param {{ force?: boolean }} [opts]
+ * @param {{ force?: boolean, signal?: AbortSignal }} [opts]
  * @returns {Promise<{ existing: boolean }>}
  */
 export async function runSelectionSummarize(captured, opts = {}) {
@@ -163,8 +199,22 @@ export async function runSelectionSummarize(captured, opts = {}) {
     }
   }
 
-  const result = await summarizeSelection(selection);
-  const summary = (result.summary || '').trim();
+  // Stream the summary under the passage; commit as a durable note on done.
+  const host = summaryStreamHost(range);
+  const stream = host ? createSummaryStream(host) : null;
+  let summary = '';
+  try {
+    await streamSelectionSummarize(session.documentID, selection, (event) => {
+      if (event.type !== 'delta') return;
+      summary += event.text || '';
+      if (stream?.text) stream.text.textContent = summary;
+    }, { signal: opts.signal });
+  } catch (error) {
+    removeSummaryStream(stream?.wrapper);
+    throw error;
+  }
+  removeSummaryStream(stream?.wrapper);
+  summary = summary.trim();
   if (!summary) throw new Error('模型返回空总结');
   const noteText = summarizeNoteBody(selection, summary);
 

@@ -88,3 +88,52 @@ func (d *Daemon) handleLLMComplete(writer http.ResponseWriter, request *http.Req
 	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
 	_ = json.NewEncoder(writer).Encode(map[string]string{"text": text})
 }
+
+// handleLLMStream streams one local-LLM prompt's tokens as NDJSON deltas. It
+// shares the single-flight slot with translation and one-shot completion so
+// only one qwen3:14b generation runs against the local GPU at a time.
+func (d *Daemon) handleLLMStream(writer http.ResponseWriter, request *http.Request) {
+	request.Body = http.MaxBytesReader(writer, request.Body, maxCompletionPromptBytes)
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	var input struct {
+		Prompt string `json:"prompt"`
+	}
+	if err := decoder.Decode(&input); err != nil || strings.TrimSpace(input.Prompt) == "" {
+		http.Error(writer, "invalid completion request", http.StatusBadRequest)
+		return
+	}
+	if d.promptStreamer == nil {
+		http.Error(writer, "completion service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	select {
+	case d.translationSlot <- struct{}{}:
+		defer func() { <-d.translationSlot }()
+	default:
+		http.Error(writer, "another local model request is in progress", http.StatusTooManyRequests)
+		return
+	}
+	writer.Header().Set("Content-Type", "application/x-ndjson; charset=utf-8")
+	writer.Header().Set("Cache-Control", "no-store")
+	started := false
+	emit := func(delta string) error {
+		started = true
+		if err := json.NewEncoder(writer).Encode(map[string]string{"type": "delta", "text": delta}); err != nil {
+			return err
+		}
+		if flusher, ok := writer.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		return nil
+	}
+	if err := d.promptStreamer.StreamPrompt(request.Context(), input.Prompt, emit); err != nil {
+		if !started {
+			http.Error(writer, err.Error(), http.StatusBadGateway)
+			return
+		}
+		_ = json.NewEncoder(writer).Encode(map[string]string{"type": "error", "text": err.Error()})
+		return
+	}
+	_ = json.NewEncoder(writer).Encode(map[string]string{"type": "done"})
+}

@@ -131,6 +131,19 @@ func (r PiRunner) Complete(ctx context.Context, prompt string) (string, error) {
 	return text, nil
 }
 
+// StreamPrompt runs one tool-free prompt and forwards each streamed delta as
+// it arrives, without buffering the full reply first.
+func (r PiRunner) StreamPrompt(ctx context.Context, prompt string, emit func(string) error) error {
+	if strings.TrimSpace(prompt) == "" {
+		return errors.New("prompt is empty")
+	}
+	if emit == nil {
+		return errors.New("prompt event emitter is required")
+	}
+	_, err := r.runPrompt(ctx, prompt, nil, emit)
+	return err
+}
+
 // runPrompt owns the Pi RPC subprocess lifecycle for one prompt. onAccepted
 // fires after Pi accepts the prompt; onDelta fires per streamed text chunk
 // (or once with the full text when the provider does not stream).

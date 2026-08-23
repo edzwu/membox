@@ -139,6 +139,7 @@ type Daemon struct {
 	echoSummary      echoSummaryRunner
 	translator       translation.Streamer
 	completer        translation.Completer
+	promptStreamer   translation.PromptStreamer
 	translationCache *translation.Cache
 	translationSlot  chan struct{}
 	listener         net.Listener
@@ -216,6 +217,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 		}
 		if d.completer == nil {
 			d.completer = runner
+		}
+		if d.promptStreamer == nil {
+			d.promptStreamer = runner
 		}
 	}
 
@@ -357,6 +361,7 @@ func (d *Daemon) handler() http.Handler {
 	})
 	mux.HandleFunc("POST /v1/translation/stream", d.handleTranslationStream)
 	mux.HandleFunc("POST /v1/llm/complete", d.handleLLMComplete)
+	mux.HandleFunc("POST /v1/llm/stream", d.handleLLMStream)
 	mux.HandleFunc("POST /v1/video/summary", func(writer http.ResponseWriter, request *http.Request) {
 		// Metadata-only when transcript_path points at a membox Markdown file.
 		request.Body = http.MaxBytesReader(writer, request.Body, 1<<20)
