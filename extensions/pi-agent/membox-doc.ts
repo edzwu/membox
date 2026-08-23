@@ -69,6 +69,14 @@ async function runMmJson<T>(args: string[], timeout = 10_000, signal?: AbortSign
   return JSON.parse(out) as T;
 }
 
+/** Display a document id: logical short ids are shown as-is; if a physical
+ * UUID leaks through (older mm builds, storage-layer views), trim to its
+ * tail so the visible id stays the same shape as membox's short ids. */
+function displayDocId(id: string): string {
+  if (!id) return id;
+  return id.length > 12 ? id.slice(-4) : id;
+}
+
 type BridgeFile = { base_url: string; token: string };
 
 function bridgePath(): string {
@@ -494,7 +502,7 @@ export default function (pi: ExtensionAPI) {
     for (const token of candidates) {
       const doc = await resolveDoc(token);
       if (doc) {
-        resolved.push(`"${token}" → ${doc.title || doc.relative_path} (${doc.id.slice(0, 8)}…, ${doc.status}, ${doc.path})`);
+        resolved.push(`"${token}" → ${doc.title || doc.relative_path} (${displayDocId(doc.id)}, ${doc.status}, ${doc.path})`);
       }
     }
     if (resolved.length === 0) return { action: "continue" };
@@ -524,14 +532,14 @@ export default function (pi: ExtensionAPI) {
           {
             type: "text",
             text: [
-              `id: ${doc.id}`,
+              `id: ${displayDocId(doc.id)}`,
               `title: ${doc.title}`,
               `path: ${doc.path}`,
               `status: ${doc.status}`,
             ].join("\n"),
           },
         ],
-        details: { document_id: doc.id, path: doc.path },
+        details: { document_id: displayDocId(doc.id), path: doc.path },
       };
     },
   });
@@ -549,7 +557,7 @@ export default function (pi: ExtensionAPI) {
         "doc", "search", params.query, "--json",
       ]);
       const rows = (hits || []).slice(0, params.limit ?? 10).map((h) => {
-        const id = h.document_id.slice(0, 8);
+        const id = displayDocId(h.document_id);
         return `- ${id} ${h.title} @ ${h.path}\n  ${(h.snippet || "").replace(/\s+/g, " ").slice(0, 160)}`;
       });
       return {
@@ -587,7 +595,7 @@ export default function (pi: ExtensionAPI) {
       const docs = await runMmJson<DocRecord[]>(["doc", "list", "--json"]);
       const filtered = (params.filter ? docs.filter((d) => (d.title + " " + d.path).toLowerCase().includes(params.filter!.toLowerCase())) : docs)
         .slice(0, params.limit ?? 50);
-      const rows = filtered.map((d) => `- ${d.id.slice(0, 8)} ${d.title || d.relative_path} (${d.status})`);
+      const rows = filtered.map((d) => `- ${displayDocId(d.id)} ${d.title || d.relative_path} (${d.status})`);
       return {
         content: [{ type: "text", text: rows.length ? rows.join("\n") : "No documents." }],
         details: { count: rows.length },
@@ -619,7 +627,7 @@ export default function (pi: ExtensionAPI) {
       await runMm(["path", "scan"]).catch(() => {});
       const doc = await resolveDoc(params.filename);
       return {
-        content: [{ type: "text", text: doc ? `Created ${file} → ${doc.id}` : `Created ${file} (indexed by next scan)` }],
+        content: [{ type: "text", text: doc ? `Created ${file} → ${displayDocId(doc.id)}` : `Created ${file} (indexed by next scan)` }],
         details: { path: file, document_id: doc?.id },
       };
     },
@@ -654,7 +662,7 @@ export default function (pi: ExtensionAPI) {
       const ok = await ctx.ui.confirm("Delete membox doc", `Move to trash?\n${doc.title || doc.relative_path}\n${doc.path}`);
       if (!ok) return { content: [{ type: "text", text: "Deletion cancelled." }], details: {} };
       await runMm(["doc", "delete", params.selector]);
-      return { content: [{ type: "text", text: `Trashed ${doc.title || doc.path}` }], details: { document_id: doc.id } };
+      return { content: [{ type: "text", text: `Trashed ${doc.title || doc.path}` }], details: { document_id: displayDocId(doc.id) } };
     },
   });
 
@@ -712,7 +720,7 @@ export default function (pi: ExtensionAPI) {
       const documents = await runMmJson<DocRecord[]>(args, 30_000, signal);
       const rows = documents.map((doc) => {
         const metadata = [doc.authors, doc.year, doc.page_count ? `${doc.page_count} pages` : ""].filter(Boolean).join(" · ");
-        return `- ${doc.id.slice(-4)} ${doc.title || doc.relative_path}${metadata ? ` — ${metadata}` : ""}\n  ${doc.path}`;
+        return `- ${displayDocId(doc.id)} ${doc.title || doc.relative_path}${metadata ? ` — ${metadata}` : ""}\n  ${doc.path}`;
       });
       return {
         content: [{ type: "text", text: rows.length ? rows.join("\n") : "No PDFs." }],
@@ -734,7 +742,7 @@ export default function (pi: ExtensionAPI) {
         "pdf", "search", params.query, "--json", "--limit", String(params.limit ?? 20),
       ], 30_000, signal);
       const rows = hits.map((hit) =>
-        `- ${hit.document_id.slice(-4)} ${hit.title}\n  ${hit.path}${hit.snippet ? `\n  ${hit.snippet.replace(/\s+/g, " ").slice(0, 300)}` : ""}`,
+        `- ${displayDocId(hit.document_id)} ${hit.title}\n  ${hit.path}${hit.snippet ? `\n  ${hit.snippet.replace(/\s+/g, " ").slice(0, 300)}` : ""}`,
       );
       return {
         content: [{ type: "text", text: rows.length ? rows.join("\n") : "No PDF hits." }],
