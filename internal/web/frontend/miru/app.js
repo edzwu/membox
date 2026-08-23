@@ -6,7 +6,7 @@
    (or the project README's "Project structure" section) for the map. */
 
 import { elements } from './js/dom.js';
-import { initTheme, toggleTheme, toggleToc, toggleTocPin, closeToc, initTocCollapse, updateEmptyKbd } from './js/ui/chrome.js';
+import { initTheme, toggleTheme, toggleToc, toggleTocPin, closeToc, initTocCollapse, initTopbarAutohide, updateEmptyKbd } from './js/ui/chrome.js';
 import { initMarkdown, setEmptyState, clearDocument } from './js/document.js';
 import { toggleFoldAll } from './js/render/folding.js';
 import { onTocClick } from './js/render/toc.js';
@@ -53,6 +53,7 @@ function onKeydown(event) {
 function init() {
   initTheme();
   initTocCollapse();
+  initTopbarAutohide();
   updateEmptyKbd();
   setEmptyState();
   bindEvents();

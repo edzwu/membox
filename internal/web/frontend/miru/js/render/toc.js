@@ -143,14 +143,30 @@ export function buildToc(headings) {
   buildTocRail();
 }
 
-// Collapsed rail: one tick per top-level TOC root (same roots as `.toc-list > li`).
-// Segment flex-grow tracks the on-page span of that section so the rail reads
-// as a coarse reading progress map, not an equal hash mark strip.
+// Collapsed rail ticks follow the TOC outline, with one practical peel:
+// a lone top-level title (common H1 wrapper) yields its direct children so
+// long articles don't collapse into a single solid bar.
+function collectRailLinks() {
+  const topItems = Array.from(elements.tocNav.querySelectorAll('.toc-list > li'));
+  if (!topItems.length) return [];
+
+  if (topItems.length === 1) {
+    const childLinks = Array.from(
+      topItems[0].querySelectorAll(':scope > .toc-sub-wrap > .toc-sub > li > a[data-target]'),
+    );
+    if (childLinks.length >= 2) return childLinks;
+  }
+
+  return topItems
+    .map((item) => item.querySelector(':scope > a[data-target]'))
+    .filter(Boolean);
+}
+
 function buildTocRail() {
   if (!elements.tocRail) return;
   elements.tocRail.innerHTML = '';
 
-  const roots = Array.from(elements.tocNav.querySelectorAll('.toc-list > li > a[data-target]'));
+  const roots = collectRailLinks();
   if (!roots.length) return;
 
   const articleBottom = elements.article
@@ -170,10 +186,14 @@ function buildTocRail() {
       : articleBottom || start + 1;
     return Math.max(48, end - start);
   });
-  // Normalize to small integers — huge flex-grow values made Edge paint a
-  // continuous bar instead of discrete ticks.
+
+  // Cap dominance so one huge chapter cannot paint the whole rail as one block.
   const minSpan = Math.min(...spans);
-  const grows = spans.map((span) => Math.max(1, Math.round(span / minSpan)));
+  const maxSpan = Math.max(minSpan * 3, minSpan);
+  const grows = spans.map((span) => {
+    const capped = Math.min(span, maxSpan);
+    return Math.max(1, Math.round(capped / minSpan));
+  });
 
   roots.forEach((link, index) => {
     const tick = document.createElement('button');
@@ -203,16 +223,39 @@ function setActiveToc(id) {
     grp.classList.toggle('is-expanded', Boolean(activeLink && grp.contains(activeLink)));
   });
 
-  // Rail highlights the top-level root that owns the active heading.
+  // Rail highlights the deepest tick target that contains the active heading.
   if (elements.tocRail) {
-    let rootTarget = '';
-    if (activeLink) {
-      const rootItem = activeLink.closest('.toc-list > li');
-      const rootLink = rootItem && rootItem.querySelector(':scope > a[data-target]');
-      rootTarget = rootLink ? rootLink.dataset.target : activeLink.dataset.target;
+    const ticks = Array.from(elements.tocRail.querySelectorAll('.toc-rail-tick[data-target]'));
+    let activeTarget = '';
+    if (activeLink && ticks.length) {
+      const tickTargets = new Set(ticks.map((tick) => tick.dataset.target));
+      let item = activeLink.closest('li');
+      while (item) {
+        const link = item.querySelector(':scope > a[data-target]');
+        if (link && tickTargets.has(link.dataset.target)) {
+          activeTarget = link.dataset.target;
+          break;
+        }
+        const parentList = item.parentElement;
+        item = parentList ? parentList.closest('li') : null;
+      }
+      if (!activeTarget) {
+        const activeHeading = document.getElementById(activeLink.dataset.target);
+        if (activeHeading) {
+          const activeTop = activeHeading.getBoundingClientRect().top + window.scrollY;
+          for (let i = ticks.length - 1; i >= 0; i -= 1) {
+            const heading = document.getElementById(ticks[i].dataset.target);
+            if (!heading) continue;
+            if (heading.getBoundingClientRect().top + window.scrollY <= activeTop + 1) {
+              activeTarget = ticks[i].dataset.target;
+              break;
+            }
+          }
+        }
+      }
     }
-    elements.tocRail.querySelectorAll('.toc-rail-tick').forEach((tick) => {
-      tick.classList.toggle('active', Boolean(rootTarget) && tick.dataset.target === rootTarget);
+    ticks.forEach((tick) => {
+      tick.classList.toggle('active', Boolean(activeTarget) && tick.dataset.target === activeTarget);
     });
   }
 }

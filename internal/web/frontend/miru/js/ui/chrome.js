@@ -157,3 +157,87 @@ export function updateEmptyKbd() {
   const isMac = /mac|iphone|ipad|ipod/i.test(navigator.platform || '');
   elements.emptyKbd.textContent = isMac ? '⌘V' : 'Ctrl+V';
 }
+
+// Reading mode: hide the topbar after idle, reveal again on vertical movement.
+const TOPBAR_HIDE_MS = 3000;
+
+export function initTopbarAutohide() {
+  const topbar = elements.topbar;
+  if (!topbar) return;
+
+  let hideTimer = null;
+  let pointerOnTopbar = false;
+  let lastTouchY = null;
+
+  const isReading = () => elements.body.classList.contains('is-reading');
+
+  const clearHideTimer = () => {
+    if (hideTimer !== null) {
+      clearTimeout(hideTimer);
+      hideTimer = null;
+    }
+  };
+
+  const showTopbar = () => {
+    topbar.classList.remove('is-auto-hidden');
+    clearHideTimer();
+    if (!isReading() || pointerOnTopbar) return;
+    if (topbar.contains(document.activeElement)) return;
+    hideTimer = setTimeout(() => {
+      if (!isReading() || pointerOnTopbar) return;
+      if (topbar.contains(document.activeElement)) return;
+      topbar.classList.add('is-auto-hidden');
+      hideTimer = null;
+    }, TOPBAR_HIDE_MS);
+  };
+
+  const onVerticalActivity = () => {
+    if (!isReading()) return;
+    showTopbar();
+  };
+
+  window.addEventListener('scroll', onVerticalActivity, { passive: true, capture: true });
+  window.addEventListener('wheel', onVerticalActivity, { passive: true });
+
+  window.addEventListener('touchstart', (event) => {
+    lastTouchY = event.touches[0] ? event.touches[0].clientY : null;
+  }, { passive: true });
+  window.addEventListener('touchmove', (event) => {
+    const y = event.touches[0] ? event.touches[0].clientY : null;
+    if (lastTouchY != null && y != null && Math.abs(y - lastTouchY) > 2) {
+      onVerticalActivity();
+    }
+    lastTouchY = y;
+  }, { passive: true });
+
+  // Keep visible while interacting with the bar itself.
+  topbar.addEventListener('pointerenter', () => {
+    pointerOnTopbar = true;
+    topbar.classList.remove('is-auto-hidden');
+    clearHideTimer();
+  });
+  topbar.addEventListener('pointerleave', () => {
+    pointerOnTopbar = false;
+    showTopbar();
+  });
+  topbar.addEventListener('focusin', () => {
+    topbar.classList.remove('is-auto-hidden');
+    clearHideTimer();
+  });
+  topbar.addEventListener('focusout', (event) => {
+    if (!topbar.contains(event.relatedTarget)) showTopbar();
+  });
+
+  // Empty state: always show. Entering reading mode starts the idle timer.
+  const modeObserver = new MutationObserver(() => {
+    if (!isReading()) {
+      clearHideTimer();
+      topbar.classList.remove('is-auto-hidden');
+      return;
+    }
+    showTopbar();
+  });
+  modeObserver.observe(elements.body, { attributes: true, attributeFilter: ['class'] });
+
+  if (isReading()) showTopbar();
+}

@@ -4,6 +4,7 @@
 
 export const elements = {
   brand: document.querySelector('.brand'),
+  topbar: document.querySelector('.topbar'),
   html: document.documentElement,
   body: document.body,
   readingSurface: document.getElementById('reading-surface'),
