@@ -18,6 +18,7 @@
      sync.js           explicit sync + silent auto-create of pasted content
      related.js        related-documents panel + link/create/open picker
      notes.js          browse-notes button + picker, long-note rail previews
+     note-images.js    clipboard images → private asset store + Markdown refs
      dictionary.js     single-word Free Dictionary lookup → related note
      presence.js       tab heartbeat for the companion/TUI census */
 
@@ -33,6 +34,7 @@ import { initNotes } from './notes.js';
 import { initRelated, handleOpenShortcut } from './related.js';
 import { initPresence } from './presence.js';
 import { initPDFImport } from './pdf-import.js';
+import { initNoteImages } from './note-images.js';
 import { initTranslation } from './translation.js';
 import { initJpStudy } from './jp-study.js';
 import { initDocSummarize } from './doc-summarize.js';
@@ -63,6 +65,7 @@ initRelated();
 initReadingState();
 initPresence();
 initPDFImport();
+initNoteImages();
 initTranslation();
 initJpStudy();
 initDocSummarize();

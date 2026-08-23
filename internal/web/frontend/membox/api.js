@@ -54,6 +54,34 @@ export async function streamTranslation(input, onEvent, { signal } = {}) {
   consume(buffer);
 }
 
+async function postNoteImage(body, contentType, signal) {
+  const response = await fetch('/api/note-assets', {
+    method: 'POST',
+    headers: {
+      'Content-Type': contentType,
+      'X-Membox-Miru': '1',
+    },
+    body,
+    cache: 'no-store',
+    signal,
+  });
+  if (!response.ok) throw new Error((await response.text()).trim() || `HTTP ${response.status}`);
+  return response.json();
+}
+
+export async function uploadNoteImage(file, { signal } = {}) {
+  if (!(file instanceof Blob) || !String(file.type || '').startsWith('image/')) {
+    throw new Error('Clipboard item is not an image');
+  }
+  return postNoteImage(file, file.type || 'application/octet-stream', signal);
+}
+
+export async function importNoteImagePath(sourcePath, { signal } = {}) {
+  const value = String(sourcePath || '').trim();
+  if (!value) throw new Error('Clipboard image path is empty');
+  return postNoteImage(JSON.stringify({ source_path: value }), 'application/json', signal);
+}
+
 export async function importPDF(file) {
   const form = new FormData();
   form.append('file', file, file.name || 'document.pdf');

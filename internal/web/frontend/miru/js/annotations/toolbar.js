@@ -33,6 +33,15 @@ const ANNOT_ICONS = {
 // Miru's annotation model to product-specific features like dictionary lookup.
 // Each action: { id, icon, title, when({mode,text,entry}), run(ctx) }.
 const extraAnnotActions = [];
+let annotImagePasteHandler = null;
+let composeImageTokenSequence = 0;
+const pendingImageUploads = new WeakMap();
+
+// Host adapters may persist a pasted image and return the Markdown image
+// reference to insert into the note composer. Miru itself owns no asset store.
+export function registerAnnotImagePasteHandler(handler) {
+  annotImagePasteHandler = typeof handler === 'function' ? handler : null;
+}
 
 export function registerAnnotAction(action) {
   if (!action || !action.id || typeof action.run !== 'function') {
@@ -213,6 +222,188 @@ function buildAnnotToolbar(mode, entry, text = '') {
   openComposeDialog(preset, { mode: 'edit', entry });
 }
 
+function composeUploadCount(input) {
+  return input ? (pendingImageUploads.get(input) || 0) : 0;
+}
+
+function setComposeUploadCount(input, count) {
+  if (!input) return;
+  count = Math.max(0, count);
+  pendingImageUploads.set(input, count);
+  // An upload may finish after the user closed this composer and opened a new
+  // selection. Never let the stale job enable/disable the new dialog.
+  if (annotToolbar.querySelector('.annot-compose-input') !== input) return;
+  const busy = count > 0;
+  const send = annotToolbar.querySelector('.annot-compose-send');
+  const mode = annotToolbar.querySelector('.annot-compose-mode');
+  if (send) {
+    send.disabled = busy;
+    send.classList.toggle('is-busy', busy);
+    send.title = busy ? 'Uploading image…' : 'Send (⌘Enter)';
+  }
+  if (mode) mode.disabled = busy;
+}
+
+function replaceComposeToken(input, token, replacement) {
+  if (!input?.isConnected) return;
+  const index = input.value.indexOf(token);
+  if (index < 0) return;
+  input.value = input.value.slice(0, index) + replacement + input.value.slice(index + token.length);
+  const caret = index + replacement.length;
+  try { input.setSelectionRange(caret, caret); } catch { /* ignore */ }
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function insertComposeTokens(input, tokens) {
+  const start = input.selectionStart ?? input.value.length;
+  const end = input.selectionEnd ?? start;
+  const before = input.value.slice(0, start);
+  const after = input.value.slice(end);
+  const leading = before && !before.endsWith('\n') ? '\n\n' : '';
+  const trailing = after && !after.startsWith('\n') ? '\n\n' : '';
+  const insertion = leading + tokens.join('\n\n') + trailing;
+  input.setRangeText(insertion, start, end, 'end');
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function nextInvisibleImageToken() {
+  composeImageTokenSequence++;
+  // Keep the upload's insertion point in textarea.value without showing raw
+  // Markdown or an implementation token beside the visual thumbnail.
+  return '\u2063' + '\u200b'.repeat(composeImageTokenSequence) + '\u2064';
+}
+
+function clipboardImagePath(data) {
+  let value = String(data?.getData?.('text/plain') || '').trim();
+  if (!value || /[\r\n]/.test(value)) return '';
+  value = value.replace(/^['"]|['"]$/g, '');
+  if (value.startsWith('file://')) {
+    try { value = decodeURIComponent(new URL(value).pathname); } catch { return ''; }
+  }
+  if (!/\.(?:png|jpe?g|gif|webp|bmp)$/i.test(value)) return '';
+  // Accept an explicit absolute/~/ path, or a lone Finder filename (the
+  // backend resolves that narrow form against ~/Downloads).
+  if (/^(?:\/|~\/)/.test(value) || !/[\\/]/.test(value)) return value;
+  return '';
+}
+
+function clipboardImageSources(data) {
+  // Chromium exposes the same pasted file through both DataTransfer.files and
+  // DataTransfer.items. Do not concatenate them: the two File wrappers can
+  // have different lastModified/name metadata and were previously mistaken
+  // for two images, producing duplicate previews and Markdown references.
+  const directFiles = [...(data?.files || [])]
+    .filter((file) => String(file.type || '').startsWith('image/'));
+  const itemFiles = directFiles.length ? [] : [...(data?.items || [])]
+    .filter((item) => item.kind === 'file')
+    .map((item) => item.getAsFile())
+    .filter((file) => file && String(file.type || '').startsWith('image/'));
+  const unique = new Map();
+  for (const file of (directFiles.length ? directFiles : itemFiles)) {
+    // lastModified is intentionally excluded because pasteboard wrappers for
+    // one file do not consistently preserve it.
+    unique.set(`${file.name || 'clipboard'}:${file.size}:${file.type}`, file);
+  }
+  if (unique.size) return [...unique.values()];
+  const sourcePath = clipboardImagePath(data);
+  return sourcePath ? [sourcePath] : [];
+}
+
+function createAttachmentPreview(input, job) {
+  const tray = annotToolbar.querySelector('.annot-compose-attachments');
+  if (!tray) return null;
+  tray.hidden = false;
+  const item = document.createElement('span');
+  item.className = 'annot-compose-attachment is-uploading';
+  item.title = typeof job.source === 'string' ? job.source : (job.source.name || 'clipboard image');
+  const image = document.createElement('img');
+  image.alt = '';
+  const fallback = document.createElement('span');
+  fallback.className = 'annot-compose-attachment-fallback';
+  fallback.textContent = '▧';
+  const spinner = document.createElement('span');
+  spinner.className = 'annot-compose-attachment-spinner';
+  spinner.setAttribute('aria-label', 'Uploading image');
+  item.append(image, fallback, spinner);
+  tray.appendChild(item);
+
+  let objectURL = '';
+  if (typeof job.source !== 'string') {
+    objectURL = URL.createObjectURL(job.source);
+    image.src = objectURL;
+    image.hidden = false;
+  } else {
+    image.hidden = true;
+  }
+  positionAnnotToolbar(currentAnnotEl || currentRange);
+  return { tray, item, image, fallback, spinner, objectURL, startedAt: Date.now() };
+}
+
+function finishAttachmentPreview(input, preview, { url = '', error = false } = {}) {
+  if (!preview) return;
+  const { tray, item, image, objectURL, startedAt } = preview;
+  // Fast local-path imports can finish in a few milliseconds. Keep the small
+  // spinner visible long enough to make paste/upload feedback perceptible.
+  const remaining = Math.max(0, 420 - (Date.now() - startedAt));
+  window.setTimeout(() => {
+    if (url) {
+      image.src = url;
+      image.hidden = false;
+    }
+    if (objectURL) URL.revokeObjectURL(objectURL);
+    item.classList.remove('is-uploading');
+    item.classList.toggle('is-error', error);
+    item.classList.toggle('is-complete', !error);
+    const delay = error ? 2200 : 1200;
+    window.setTimeout(() => {
+      item.remove();
+      if (!tray.children.length) tray.hidden = true;
+      if (input.isConnected) positionAnnotToolbar(currentAnnotEl || currentRange);
+    }, delay);
+  }, remaining);
+}
+
+function onComposePaste(event, input) {
+  const sources = clipboardImageSources(event.clipboardData);
+  if (!sources.length) return;
+  event.preventDefault();
+  if (composeMode !== 'note') {
+    showToast('切换到 Note 后再粘贴图片');
+    return;
+  }
+  if (!annotImagePasteHandler) {
+    showToast('当前环境不能保存笔记图片');
+    return;
+  }
+
+  const jobs = sources.map((source) => ({
+    source,
+    token: nextInvisibleImageToken(),
+  }));
+  insertComposeTokens(input, jobs.map((job) => job.token));
+  setComposeUploadCount(input, composeUploadCount(input) + jobs.length);
+
+  for (const job of jobs) {
+    const preview = createAttachmentPreview(input, job);
+    void Promise.resolve(annotImagePasteHandler(job.source))
+      .then((result) => {
+        const markdown = typeof result === 'string' ? result : result?.markdown;
+        const url = typeof result === 'object' ? result?.url : '';
+        if (!String(markdown || '').trim()) throw new Error('Image upload returned no Markdown');
+        replaceComposeToken(input, job.token, String(markdown).trim());
+        finishAttachmentPreview(input, preview, { url });
+      })
+      .catch((error) => {
+        replaceComposeToken(input, job.token, '');
+        finishAttachmentPreview(input, preview, { error: true });
+        showToast(error?.message || '图片上传失败');
+      })
+      .finally(() => {
+        setComposeUploadCount(input, composeUploadCount(input) - 1);
+      });
+  }
+}
+
 function openComposeDialog(presetText = '', opts = {}) {
   const editing = opts.mode === 'edit' && Boolean(opts.entry);
   const entry = opts.entry || null;
@@ -247,6 +438,7 @@ function openComposeDialog(presetText = '', opts = {}) {
       `<textarea class="annot-compose-input" rows="2" placeholder="${escapeAttr(placeholder)}" ` +
         'title="Enter for a new line · ⌘Enter to send" ' +
         `aria-label="${escapeAttr(placeholder)}" spellcheck="true"></textarea>` +
+      '<div class="annot-compose-attachments" aria-label="Pasted images" hidden></div>' +
       '<div class="annot-compose-foot">' +
         '<div class="annot-compose-foot-left">' +
           `<button type="button" class="annot-compose-mode" data-action="toggle-mode" title="${escapeAttr(modeTitle)}" aria-label="${escapeAttr(modeTitle)}">` +
@@ -269,6 +461,7 @@ function openComposeDialog(presetText = '', opts = {}) {
     autosizeNoteInput(input);
     positionAnnotToolbar(currentAnnotEl || currentRange);
   });
+  input.addEventListener('paste', (event) => onComposePaste(event, input));
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.isComposing && e.keyCode !== 229) {
       e.preventDefault();
@@ -289,6 +482,11 @@ function openComposeDialog(presetText = '', opts = {}) {
 }
 
 function toggleComposeMode() {
+  const currentInput = annotToolbar.querySelector('.annot-compose-input');
+  if (composeUploadCount(currentInput) > 0) {
+    showToast('请等待图片上传完成');
+    return;
+  }
   // Note and Ask share the exact same composer. Update only their semantic
   // chrome instead of rebuilding/repositioning the whole dialog: the textarea,
   // caret, scroll position, height, and toolbar coordinates stay untouched.
@@ -351,6 +549,10 @@ export function detachComposeSelection() {
 
 async function commitComposeSend() {
   const input = annotToolbar.querySelector('.annot-compose-input');
+  if (composeUploadCount(input) > 0) {
+    showToast('请等待图片上传完成');
+    return;
+  }
   const text = (input?.value || '').trim();
   const sendBtn = annotToolbar.querySelector('.annot-compose-send');
   const editing = Boolean(currentAnnotEl);

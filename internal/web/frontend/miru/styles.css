@@ -1129,6 +1129,11 @@ body.is-snippet .toc {
   background: var(--accent-soft);
 }
 
+.annot-compose-mode:disabled {
+  opacity: 0.45;
+  cursor: wait;
+}
+
 .annot-compose-input {
   display: block;
   width: 100%;
@@ -1158,6 +1163,85 @@ body.is-snippet .toc {
   outline: none;
   border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-soft) 72%, transparent);
+}
+
+.annot-compose-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 48px;
+}
+
+.annot-compose-attachments[hidden] {
+  display: none;
+}
+
+.annot-compose-attachment {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 58px;
+  height: 44px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--paper) 88%, var(--accent) 12%);
+}
+
+.annot-compose-attachment img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.annot-compose-attachment img:not([hidden]) + .annot-compose-attachment-fallback {
+  display: none;
+}
+
+.annot-compose-attachment-fallback {
+  color: var(--muted);
+  font-size: 20px;
+}
+
+.annot-compose-attachment-spinner {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border: 2px solid color-mix(in srgb, var(--paper) 65%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--paper) 55%, transparent);
+  animation: annot-attachment-spin 0.75s linear infinite;
+}
+
+.annot-compose-attachment.is-complete .annot-compose-attachment-spinner {
+  display: none;
+}
+
+.annot-compose-attachment.is-complete {
+  border-color: color-mix(in srgb, #3d9a5f 55%, var(--line));
+}
+
+.annot-compose-attachment.is-error {
+  border-color: #b3402f;
+  opacity: 0.65;
+}
+
+.annot-compose-attachment.is-error .annot-compose-attachment-spinner {
+  animation: none;
+  border: 0;
+}
+
+.annot-compose-attachment.is-error .annot-compose-attachment-spinner::before {
+  content: '×';
+  color: #b3402f;
+  font-size: 18px;
+  line-height: 14px;
+}
+
+@keyframes annot-attachment-spin {
+  to { transform: rotate(360deg); }
 }
 
 .annot-compose-foot {
@@ -1993,6 +2077,17 @@ dt > .annot-note.membox-inline-note {
 
 .annot-note-text > p:last-child {
   margin-bottom: 0;
+}
+
+.annot-note-text img {
+  display: block;
+  width: auto;
+  max-width: min(100%, 760px);
+  max-height: min(70vh, 720px);
+  margin: 0.5em 0;
+  border-radius: 6px;
+  object-fit: contain;
+  box-shadow: 0 1px 4px color-mix(in srgb, var(--ink) 12%, transparent);
 }
 
 .annot-note-text pre {

@@ -8,6 +8,15 @@ import (
 // Multi-line excerpts (code blocks) round-trip through note Markdown without
 // losing newlines or indentation, and the ref-less matcher binds them to
 // existing notes instead of creating duplicates.
+func TestAnnotationNoteImageMarkdownRoundTrips(t *testing.T) {
+	note := "Screenshot:\n\n![clipboard image](/api/note-assets/" + strings.Repeat("a", 64) + ".png)"
+	body := selectionNoteMarkdown("", "Selected source.", note, "")
+	_, got, _ := parseClipBody(body)
+	if got != note {
+		t.Fatalf("note image Markdown changed:\n got %q\nwant %q", got, note)
+	}
+}
+
 func TestTranslationArtifactRoundTripKeepsKindAndBody(t *testing.T) {
 	body := selectionNoteMarkdown("", "Translate this passage.", "**翻译：**\n\n翻译这段文字。", "translation")
 	if !strings.Contains(body, `kind: "translation"`) {
