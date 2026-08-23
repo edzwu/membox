@@ -9,6 +9,7 @@
 import { elements } from '../js/dom.js';
 import { showToast, writeClipboard } from '../js/ui/feedback.js';
 import { updateMarkdownDownloadControl } from '../js/ui/chrome.js';
+import { downloadAllMarkdown } from '../js/export/markdown-export.js';
 import { session } from './session.js';
 import { syncToMembox } from './sync.js';
 import { getDocumentNavigation } from './document.js';
@@ -124,6 +125,11 @@ function createStatusBadge() {
   badge.innerHTML = '<span class="membox-status-dot" aria-hidden="true"></span><span class="membox-status-label" aria-hidden="true"></span>';
   statusCluster.appendChild(badge);
   badge.addEventListener('click', () => {
+    // Offline / no backend: left badge is download Markdown (or .miru.zip).
+    if (!session.connected) {
+      void downloadAllMarkdown();
+      return;
+    }
     if (session.syncing || session.saveInFlight) return;
     const saved = Boolean(session.documentID) && !session.annotationsDirty;
     if (!saved) {
@@ -150,40 +156,66 @@ function createAddRelatedButton() {
 }
 
 export function setDownloadMeaning() {
+  // Connected sync wording used to live on the right-rail download button.
+  // Primary action is now the left status badge (save when connected).
   if (!session.connected) {
     updateMarkdownDownloadControl();
     return;
   }
-  const label = session.syncing
-    ? 'Syncing to membox…'
-    : session.annotationsDirty
-      ? 'Sync Markdown and unsaved notes to membox'
-      : 'Sync Markdown and notes to membox';
-  elements.downloadAll.setAttribute('aria-label', label);
-  elements.downloadAll.title = label;
-  elements.downloadAll.classList.toggle('is-syncing', session.syncing);
+  if (elements.downloadAll) {
+    elements.downloadAll.classList.remove('is-syncing');
+  }
+}
+
+function isReading() {
+  return document.body.classList.contains('is-reading');
+}
+
+function renderOfflineDownloadBadge() {
+  getDocumentNavigation().hidden = true;
+  addRelatedButton.hidden = true;
+  setBrowseNotesVisible(false);
+  hideRelatedPanel();
+
+  const reading = isReading();
+  if (statusDock) {
+    statusDock.hidden = !reading;
+    if (!reading) {
+      statusDock.classList.add('is-auto-hidden');
+      clearStatusDockHideTimer();
+    } else if (!shouldKeepStatusDockVisible()) {
+      statusDock.classList.add('is-auto-hidden');
+    }
+  }
+  if (!statusBadge) return;
+  statusBadge.hidden = !reading;
+  statusBadge.dataset.mode = 'download';
+  statusBadge.dataset.saved = 'false';
+  statusBadge.dataset.saving = 'false';
+  statusBadge.dataset.hasDocument = 'false';
+  statusBadge.disabled = false;
+  const label = statusBadge.querySelector('.membox-status-label');
+  if (label) label.textContent = '';
+  updateMarkdownDownloadControl();
 }
 
 export function renderDocStatus() {
+  // Membox owns the bottom-left corner whenever the adapter is loaded.
+  if (elements.localSaveDock) elements.localSaveDock.hidden = true;
+  if (elements.downloadAll) elements.downloadAll.hidden = true;
+
   if (!session.connected) {
-    getDocumentNavigation().hidden = true;
-    if (statusDock) {
-      statusDock.hidden = true;
-      statusDock.classList.add('is-auto-hidden');
-      clearStatusDockHideTimer();
-    }
-    statusBadge.hidden = true;
-    addRelatedButton.hidden = true;
-    setBrowseNotesVisible(false);
-    hideRelatedPanel();
+    renderOfflineDownloadBadge();
     return;
   }
+
   if (statusDock) {
     statusDock.hidden = false;
     // Stay quiet until the pointer enters the bottom-left proximity pad.
     if (!shouldKeepStatusDockVisible()) statusDock.classList.add('is-auto-hidden');
   }
   statusBadge.hidden = false;
+  statusBadge.dataset.mode = 'save';
   const saved = Boolean(session.documentID) && !session.annotationsDirty;
   const saving = session.syncing || session.saveInFlight;
   const label = statusBadge.querySelector('.membox-status-label');
@@ -238,11 +270,8 @@ export function initStatus() {
   statusCluster.appendChild(statusExtras);
   bindStatusDockAutohide();
 
-  // Miru updates this title when annotations change; connected mode owns its
-  // sync wording, so immediately re-apply it after those generic updates.
+  // Offline download badge should appear as soon as a document is open.
   new MutationObserver(() => {
-    if (session.connected && !elements.downloadAll.title.startsWith('Sync Markdown') && !session.syncing) {
-      setDownloadMeaning();
-    }
-  }).observe(elements.downloadAll, { attributes: true, attributeFilter: ['title'] });
+    if (!session.connected) renderDocStatus();
+  }).observe(document.body, { attributes: true, attributeFilter: ['class'] });
 }

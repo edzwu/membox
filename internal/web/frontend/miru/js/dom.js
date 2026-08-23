@@ -25,6 +25,7 @@ export const elements = {
   emptyKbd: document.getElementById('empty-kbd'),
   toast: document.getElementById('toast'),
   exportDock: document.getElementById('export-dock'),
+  localSaveDock: document.getElementById('local-save-dock'),
   copyAll: document.getElementById('copy-all'),
   downloadAll: document.getElementById('download-all'),
   pngAll: document.getElementById('png-all'),
@@ -33,6 +34,7 @@ export const elements = {
 };
 
 // Topbar and floating controls that only make sense while reading.
+// Download lives on the left (local-save-dock / membox status), not the right export tray.
 export const READING_CONTROLS = [
   elements.tocToggle,
   elements.foldToggle,
@@ -42,4 +44,5 @@ export const READING_CONTROLS = [
   elements.htmlAll,
   elements.copyPng,
   elements.exportDock,
+  elements.localSaveDock,
 ];

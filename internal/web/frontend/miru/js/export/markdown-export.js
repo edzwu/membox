@@ -14,12 +14,21 @@ export function copyAllMarkdown() {
   writeClipboard(state.currentMarkdown, () => flashCopied(elements.copyAll, { preserveContent: true }));
 }
 
+function flashDownloadTarget() {
+  const badge = document.getElementById('membox-doc-status');
+  if (badge && !badge.hidden && badge.dataset.mode === 'download') {
+    flashButton(badge);
+    return;
+  }
+  if (elements.downloadAll) flashButton(elements.downloadAll);
+}
+
 export async function downloadAllMarkdown() {
   if (!state.currentMarkdown) return;
   const base = sanitizeFilename(state.docTitle);
   if (!state.annotations.length) {
     downloadBlob(new Blob([state.currentMarkdown], { type: 'text/markdown' }), base + '.md');
-    flashButton(elements.downloadAll);
+    flashDownloadTarget();
     showToast('Markdown downloaded');
     return;
   }
@@ -39,7 +48,7 @@ export async function downloadAllMarkdown() {
     ]);
     downloadBlob(new Blob([zipBytes], { type: 'application/zip' }), base + '.miru.zip');
     markAnnotationsSaved(savedSessionId, savedVersion);
-    flashButton(elements.downloadAll);
+    flashDownloadTarget();
     showToast('Miru bundle saved');
   } catch (err) {
     console.error('Miru bundle export failed:', err);

@@ -15,6 +15,13 @@ describe('outlineDepth', () => {
     assert.equal(outlineDepth('2026年的计划'), null);
     assert.equal(outlineDepth('第 10 章'), null);
   });
+
+  it('treats Part/Chapter N as outline majors at depth 0 (H2 peer slot)', () => {
+    assert.equal(outlineDepth('Part 0 — Orientation'), 0);
+    assert.equal(outlineDepth('Part 1 — Storage'), 0);
+    assert.equal(outlineDepth('Chapter 2: Trees'), 0);
+    assert.equal(outlineDepth('Appendix A — Glossary'), null);
+  });
 });
 
 describe('tocNestLevel composite', () => {
@@ -72,5 +79,29 @@ describe('tocNestLevel composite', () => {
     // Old outline-only: [ -1, -1, -1, -1 ] (all top-level)
     // Composite: numbered h3 nest under first h2
     assert.deepEqual(parents, [-1, 0, 0, -1]);
+  });
+
+  it('nests Part / 0.1 / Part 1 as peers under H1, not under a subtitle', () => {
+    const items = [
+      { tagName: 'H1', label: 'harness.md' },
+      { tagName: 'H2', label: 'AgentHarness — implementation specification' },
+      { tagName: 'H2', label: 'Part 0 — Orientation' },
+      { tagName: 'H2', label: '0.1 What this is' },
+      { tagName: 'H2', label: '0.2 System model' },
+      { tagName: 'H3', label: 'Session' },
+      { tagName: 'H2', label: '0.7 Notation' },
+      { tagName: 'H2', label: 'Part 1 — Storage' },
+      { tagName: 'H2', label: '1.1 The model' },
+      { tagName: 'H2', label: '1.2 Identity' },
+      { tagName: 'H3', label: 'Appendix A — Glossary' },
+    ];
+    const parents = nestParents(items);
+    // H1
+    //   AgentHarness (subtitle, peer of Parts)
+    //   Part 0
+    //     0.1, 0.2 → Session, 0.7
+    //   Part 1
+    //     1.1, 1.2 → Appendix A
+    assert.deepEqual(parents, [-1, 0, 0, 2, 2, 4, 2, 0, 7, 7, 9]);
   });
 });

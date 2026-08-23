@@ -127,7 +127,8 @@ export async function syncToMembox() {
     if (!session.annotationsDirty) session.annotationsMutated = false;
     emitRender();
     if (session.annotationsDirty) scheduleReadingStateSave();
-    flashButton(elements.downloadAll);
+    const statusBadge = document.getElementById('membox-doc-status');
+    flashButton(statusBadge || elements.downloadAll);
     showToast(result.created ? 'Created in membox with notes' : 'Synced Markdown and notes to membox');
   } catch (err) {
     session.annotationsDirty = session.annotationsDirty || savedVersion > state.annotationSavedVersion;

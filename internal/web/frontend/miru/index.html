@@ -77,6 +77,18 @@
   </div>
 
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+  <!--
+    Left primary action when membox adapter is absent. Membox status dock
+    takes over this corner and hides this fallback; offline badge downloads.
+  -->
+  <div class="local-save-dock" id="local-save-dock" hidden>
+    <button type="button" class="download-all" id="download-all" aria-label="Download Markdown" title="Download Markdown" hidden>
+      <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+        <path d="M12 3v12m0 0-4-4m4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </button>
+  </div>
   <div class="export-dock" id="export-dock" hidden>
     <div class="export-cluster" role="group" aria-label="Export document">
       <div class="export-extras" id="export-extras">
@@ -99,12 +111,6 @@
       <rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/>
       <circle cx="8" cy="9" r="1.5" fill="currentColor"/>
       <path d="M3 16l5-5 4 4 6-6 3 3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-    </svg>
-  </button>
-  <button type="button" class="download-all" id="download-all" aria-label="Download Markdown" title="Download Markdown" hidden>
-    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
-      <path d="M12 3v12m0 0-4-4m4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-      <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
     </svg>
   </button>
       </div>

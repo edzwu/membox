@@ -91,15 +91,6 @@ window.addEventListener('miru-annotations-changed', () => {
   scheduleReadingStateSave();
 });
 
-// Capture before Miru's normal bubbling download listener. Disconnected mode
-// does nothing here, so the original local Markdown/bundle download remains.
-elements.downloadAll.addEventListener('click', (event) => {
-  if (!session.connected) return;
-  event.preventDefault();
-  event.stopImmediatePropagation();
-  void syncToMembox();
-}, true);
-
 // Keep the adapter identity honest when the user starts a fresh paste/session.
 elements.brand.addEventListener('click', unbindDocument);
 document.addEventListener('paste', (event) => {

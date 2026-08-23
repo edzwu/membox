@@ -11,10 +11,18 @@
 
 export const HTML_WEIGHT = 100;
 
-// "10.1 多 Agent…" → 2, "10.1.1 …" → 3, "第 10 章" → null.
+// "10.1 多 Agent…" → 2, "10.1.1 …" → 3, "Part 0 — …" → 1, "第 10 章" → null.
 // Reject years ("2001 年") and large bare integers.
 export function outlineDepth(label) {
   const text = String(label || '').trim();
+
+  // Spec-style major sections: "Part 0 — Orientation", "Chapter 2: Foo".
+  // Depth 0 ⇒ same HTML slot as a bare H2 (peers of a subtitle like
+  // "## AgentHarness — …"), while still outline:true so "## 0.7" does not
+  // swallow the next "## Part 1" via the unnumbered-under-outline rule.
+  // Depth 1 would bury every Part under that subtitle (not equivalent peers).
+  if (/^(?:Part|Chapter)\s+\d+\b/i.test(text)) return 0;
+
   const match = text.match(/^(\d+(?:\.\d+)*)\b/);
   if (!match) return null;
 

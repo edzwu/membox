@@ -14,8 +14,16 @@ export function updateMarkdownDownloadControl() {
   const label = hasAnnotations
     ? 'Download Markdown + annotations (.miru.zip)'
     : 'Download Markdown';
-  elements.downloadAll.setAttribute('aria-label', label);
-  elements.downloadAll.title = label;
+  if (elements.downloadAll) {
+    elements.downloadAll.setAttribute('aria-label', label);
+    elements.downloadAll.title = label;
+  }
+  // Offline left badge reuses the same wording when acting as download.
+  const badge = document.getElementById('membox-doc-status');
+  if (badge && badge.dataset.mode === 'download') {
+    badge.setAttribute('aria-label', label);
+    badge.title = label;
+  }
 }
 
 export function applyTheme(theme) {

@@ -2395,9 +2395,38 @@ body.is-dragover::after {
   pointer-events: none;
 }
 
-/* Bottom-right export dock: Copy stays pinned; the lower-frequency export
-   actions (download / PNG / site) collapse into an extras tray that expands
-   when the pointer nears, mirroring the bottom-left status dock. */
+/* Left fallback download when membox adapter is not loaded. */
+.local-save-dock {
+  position: fixed;
+  left: 24px;
+  bottom: 24px;
+  z-index: 70;
+  padding: 20px 22px;
+  margin: -20px -22px;
+}
+
+.local-save-dock[hidden] {
+  display: none;
+}
+
+.local-save-dock .download-all {
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--paper-raised);
+  box-shadow: 0 4px 16px var(--shadow);
+  color: var(--ink-soft);
+}
+
+.local-save-dock .download-all:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* Bottom-right export dock: Copy stays pinned; lower-frequency export
+   actions (PNG / site) collapse into an extras tray on proximity. */
 .export-dock {
   position: fixed;
   right: 24px;
@@ -2439,7 +2468,6 @@ body.is-dragover::after {
 }
 
 .copy-all,
-.download-all,
 .png-all,
 .html-all,
 .copy-png {
@@ -2458,9 +2486,17 @@ body.is-dragover::after {
   transition: color 0.15s ease, background 0.15s ease;
 }
 
+.local-save-dock .download-all {
+  appearance: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
 /* Segments inside the cluster are separated by hairline dividers; the first
    extras button leans on the cluster's own border. */
-.download-all,
 .png-all,
 .html-all,
 .copy-png,
@@ -2474,8 +2510,8 @@ body.is-dragover::after {
 
 .copy-all:hover,
 .copy-all.copied,
-.download-all:hover,
-.download-all.copied,
+.local-save-dock .download-all:hover,
+.local-save-dock .download-all.copied,
 .png-all:hover,
 .png-all.copied,
 .html-all:hover,
