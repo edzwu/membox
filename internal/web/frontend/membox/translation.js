@@ -27,6 +27,66 @@ let completed = 0;
 let failed = 0;
 let total = 0;
 
+// Paint through a small queue instead of dumping each network delta directly.
+// Live Ollama deltas still appear immediately, while a disk-cache hit (one
+// large delta) is replayed progressively so selection translation keeps the
+// same visible streaming phase before it becomes a durable note.
+function createStreamPainter(target, { progressive = false } = {}) {
+  const output = document.createTextNode('');
+  target.appendChild(output);
+  const queue = [];
+  const waiters = [];
+  let timer = null;
+  let cancelled = false;
+
+  const settle = () => {
+    if (queue.length || timer !== null) return;
+    while (waiters.length) waiters.shift()();
+  };
+  const paint = () => {
+    timer = null;
+    if (cancelled || !target.isConnected) {
+      queue.length = 0;
+      settle();
+      return;
+    }
+    // Drain proportionally: short live deltas feel immediate; large cached
+    // paragraphs take roughly 1–3 seconds instead of appearing in one paint.
+    const count = Math.max(1, Math.ceil(queue.length / 24));
+    output.appendData(queue.splice(0, count).join(''));
+    if (queue.length) timer = window.setTimeout(paint, 16);
+    settle();
+  };
+  const schedule = () => {
+    if (timer === null && queue.length && !cancelled) {
+      timer = window.setTimeout(paint, 0);
+    }
+  };
+
+  return {
+    append(value) {
+      if (cancelled || !value) return;
+      if (!progressive) {
+        output.appendData(String(value));
+        return;
+      }
+      queue.push(...Array.from(String(value)));
+      schedule();
+    },
+    flush() {
+      if (!queue.length && timer === null) return Promise.resolve();
+      return new Promise((resolve) => waiters.push(resolve));
+    },
+    cancel() {
+      cancelled = true;
+      queue.length = 0;
+      if (timer !== null) window.clearTimeout(timer);
+      timer = null;
+      settle();
+    },
+  };
+}
+
 function sourceText(element) {
   const clone = element.cloneNode(true);
   clone.querySelectorAll([
@@ -200,6 +260,8 @@ function translationNode(row) {
 
 async function translateParagraph(row, currentGeneration) {
   const node = translationNode(row);
+  const painter = createStreamPainter(node.text, { progressive: Boolean(row.progressiveReveal) });
+  const signal = controller?.signal;
   let done = false;
   try {
     await streamTranslation({
@@ -209,10 +271,22 @@ async function translateParagraph(row, currentGeneration) {
       text: row.text,
     }, (event) => {
       if (!active || generation !== currentGeneration || event.id !== row.id) return;
-      if (event.type === 'delta') node.text.append(document.createTextNode(event.text || ''));
+      if (event.type === 'delta') painter.append(event.text || '');
       if (event.type === 'done') done = true;
-    }, { signal: controller.signal });
+    }, { signal });
     if (!done) throw new Error('Translation stream ended before completion');
+    // Cache replay can finish its HTTP response before the browser gets a
+    // paint. Wait for the visible queue so conversion to a note happens only
+    // after the user has seen the translation stream complete.
+    await painter.flush();
+    if (!active || generation !== currentGeneration || signal?.aborted) {
+      const aborted = new Error('Translation aborted');
+      aborted.name = 'AbortError';
+      throw aborted;
+    }
+    // Yield one task so the fully revealed transient line is paintable before
+    // the durable note card replaces it.
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
     const translated = node.text.textContent.trim();
     node.spinner.remove();
     if (!translated || translated === row.text) {
@@ -224,6 +298,7 @@ async function translateParagraph(row, currentGeneration) {
     scheduleNoteLayout();
     return translated;
   } catch (error) {
+    painter.cancel();
     node.wrapper.remove();
     throw error;
   }
@@ -313,15 +388,6 @@ async function runDurableSelectionTranslation({ text, range = null, annotEl = nu
   if (!source || !shouldTranslate(source) || !host) {
     throw new Error('选区没有可翻译的内容');
   }
-  if (!annotEl && range) {
-    const overlaps = [...elements.article.querySelectorAll('span.annot')].some((el) => {
-      try { return range.intersectsNode(el); } catch { return false; }
-    });
-    if (overlaps) {
-      throw new Error('选区与已有笔记重叠；请调整选区后再翻译');
-    }
-  }
-
   window.dispatchEvent(new CustomEvent('membox-stop-immersive', { detail: { source: 'translate' } }));
   generation++;
   controller?.abort();
@@ -332,7 +398,7 @@ async function runDurableSelectionTranslation({ text, range = null, annotEl = nu
   failed = 0;
   total = 1;
   const currentGeneration = ++generation;
-  const row = { id: 'selection-1', element: host, text: source };
+  const row = { id: 'selection-1', element: host, text: source, progressiveReveal: true };
   showToast(entry ? '重新翻译中…' : '翻译中…');
 
   try {

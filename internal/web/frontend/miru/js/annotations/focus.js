@@ -65,7 +65,7 @@ export function toggleNoteInline(id) {
   card.hidden = collapsed;
   if (anchor) {
     anchor.classList.toggle('note-collapsed', collapsed);
-    const badge = anchor.querySelector('.annot-note-num');
+    const badge = anchor.querySelector(':scope > .annot-note-num');
     if (badge) {
       badge.classList.toggle('is-collapsed', collapsed);
       badge.title = collapsed ? '显示笔记' : '隐藏笔记';
@@ -97,7 +97,7 @@ export function setAllNotesCollapsed(collapsed) {
     const anchor = elements.article.querySelector(`span.annot[data-annot-id="${card.dataset.annotId}"]`);
     if (anchor) {
       anchor.classList.toggle('note-collapsed', collapsed);
-      const badge = anchor.querySelector('.annot-note-num');
+      const badge = anchor.querySelector(':scope > .annot-note-num');
       if (badge) {
         badge.classList.toggle('is-collapsed', collapsed);
         badge.title = collapsed ? '显示笔记' : '隐藏笔记';
@@ -133,7 +133,7 @@ export function focusNote(id, options = {}) {
     if (card.classList.contains('is-collapsed')) {
       card.classList.remove('is-collapsed');
       card.hidden = false;
-      const badge = anchor?.querySelector('.annot-note-num');
+      const badge = anchor?.querySelector(':scope > .annot-note-num');
       if (badge) {
         badge.classList.remove('is-collapsed');
         badge.title = '隐藏笔记';

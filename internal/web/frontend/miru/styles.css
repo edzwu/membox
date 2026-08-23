@@ -1780,6 +1780,16 @@ textarea.annot-note-input {
   border-bottom-color: color-mix(in srgb, var(--accent) 45%, var(--line));
 }
 
+/* Generated reading aids should not permanently underline a whole paragraph.
+   Their small reference badge remains available; hover/click/focus still uses
+   span.annot.anchor-active below to highlight the corresponding source. */
+.annot-note-ref.annot-kind-translation,
+.annot-note-ref.annot-kind-qa,
+.annot-note-ref.annot-kind-translation.note-collapsed,
+.annot-note-ref.annot-kind-qa.note-collapsed {
+  border-bottom: 0;
+}
+
 .annot-note.is-collapsed {
   display: none !important;
 }

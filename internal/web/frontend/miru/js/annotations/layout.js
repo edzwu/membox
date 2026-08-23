@@ -12,7 +12,7 @@ export function refreshNoteNumbers() {
   const refs = Array.from(elements.article.querySelectorAll('span.annot-note-ref'));
   refs.forEach((ref, index) => {
     const label = String(index + 1);
-    const badge = ref.querySelector('.annot-note-num');
+    const badge = ref.querySelector(':scope > .annot-note-num');
     if (badge) badge.textContent = label;
     const card = findNoteCard(ref.dataset.annotId);
     const cardLabel = card && card.querySelector('.annot-note-label');
@@ -90,7 +90,7 @@ function placeNoteInline(anchor, card) {
   card.style.removeProperty('z-index');
   if (anchor) {
     anchor.classList.toggle('note-collapsed', collapsed);
-    const badge = anchor.querySelector('.annot-note-num');
+    const badge = anchor.querySelector(':scope > .annot-note-num');
     if (badge) {
       badge.classList.toggle('is-collapsed', collapsed);
       badge.title = collapsed ? '显示笔记' : '隐藏笔记';

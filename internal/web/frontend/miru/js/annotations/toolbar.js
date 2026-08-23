@@ -169,6 +169,14 @@ export function hideAnnotToolbar() {
 }
 
 function positionAnnotToolbar(target) {
+  // Once compose owns focus, the original Range may point at text nodes that
+  // were moved into .annot-compose-mask. Anchor to that live mask instead of
+  // a stale pre-mask Range, which otherwise makes the dialog jump on input.
+  if (!currentAnnotEl) {
+    const mask = elements.article?.querySelector('.annot-compose-mask');
+    if (mask) target = mask;
+  }
+  if (!target || typeof target.getBoundingClientRect !== 'function') return;
   annotToolbar.hidden = false;
   const rect = target.getBoundingClientRect();
   const top = rect.top + window.scrollY - annotToolbar.offsetHeight - 8;
@@ -281,12 +289,31 @@ function openComposeDialog(presetText = '', opts = {}) {
 }
 
 function toggleComposeMode() {
-  const input = annotToolbar.querySelector('.annot-compose-input');
-  const keep = input ? input.value : '';
+  // Note and Ask share the exact same composer. Update only their semantic
+  // chrome instead of rebuilding/repositioning the whole dialog: the textarea,
+  // caret, scroll position, height, and toolbar coordinates stay untouched.
   composeMode = composeMode === 'note' ? 'ask' : 'note';
-  const editing = Boolean(currentAnnotEl);
-  const entry = editing ? findAnnot(currentAnnotEl.dataset.annotId) : null;
-  openComposeDialog(keep, { mode: editing ? 'edit' : 'create', entry });
+  const isAsk = composeMode === 'ask';
+  annotToolbar.classList.toggle('is-mode-ask', isAsk);
+  annotToolbar.classList.toggle('is-mode-note', !isAsk);
+
+  const modeButton = annotToolbar.querySelector('.annot-compose-mode');
+  const modeIcon = modeButton?.querySelector('.annot-compose-mode-icon');
+  const input = annotToolbar.querySelector('.annot-compose-input');
+  const modeTitle = isAsk
+    ? 'Ask mode · click to switch to Note'
+    : 'Note mode · click to switch to Ask';
+  const placeholder = isAsk ? 'Ask about the selection…' : 'Add a note…';
+  if (modeButton) {
+    modeButton.title = modeTitle;
+    modeButton.setAttribute('aria-label', modeTitle);
+  }
+  if (modeIcon) modeIcon.innerHTML = isAsk ? ANNOT_ICONS.ask : ANNOT_ICONS.note;
+  if (input) {
+    input.placeholder = placeholder;
+    input.setAttribute('aria-label', placeholder);
+    input.focus({ preventScroll: true });
+  }
 }
 
 function clearComposeMaskBeforeAction() {
@@ -440,7 +467,14 @@ function commitNoteInput(text) {
     if (entry && text) setNoteOnPassage(entry, currentAnnotEl, text);
     hideAnnotToolbar();
   } else if (currentRange) {
-    if (text) applyNote(currentRange, text);
+    if (text) {
+      try {
+        applyNote(currentRange, text);
+      } catch (err) {
+        showToast(err?.message || 'Could not add note');
+        return;
+      }
+    }
     finishAnnotation();
   }
 }
@@ -526,8 +560,12 @@ function onAnnotToolbarClick(e) {
   if (currentRange) {
     if (action === 'highlight') {
       clearComposeMaskBeforeAction();
-      applyMark('highlight', currentRange);
-      // Keep compose open so the user can still note/ask on the same selection.
+      try {
+        applyMark('highlight', currentRange);
+      } catch (err) {
+        showToast(err?.message || 'Could not highlight selection');
+        return;
+      }
       // Re-clone range after DOM wrap may invalidate it — finish for safety.
       finishAnnotation();
       return;
@@ -541,8 +579,11 @@ function onAnnotToolbarClick(e) {
 
 function onAnnotMouseUp(e) {
   if (annotToolbar.contains(e.target)) return;
-  // Clicks on an annotated passage are handled by onAnnotPassageClick.
-  if (e.target.closest && e.target.closest('span.annot')) return;
+  // A plain click on an annotation edits it, but a real selection inside it
+  // starts a new nested artifact (note/highlight/QA/translation/summary).
+  const liveSelection = window.getSelection();
+  if (e.target.closest && e.target.closest('span.annot') &&
+      (!liveSelection || liveSelection.isCollapsed || !liveSelection.toString().trim())) return;
   setTimeout(() => {
     // Assist/dict panels own the toolbar until Escape or explicit close.
     // Focusing the prompt input collapses the page selection; that must NOT
@@ -584,13 +625,8 @@ function onAnnotMouseUp(e) {
       showToast('Select text within one table cell');
       return;
     }
-    // Don't start a new annotation inside an existing one; use passage click.
-    const container = range.commonAncestorContainer;
-    const containerEl = container.nodeType === 1 ? container : container.parentElement;
-    if (containerEl && containerEl.closest('span.annot')) {
-      hideAnnotToolbar();
-      return;
-    }
+    // Nested annotations are supported. The model rejects only crossing
+    // partial overlaps, which would split an existing anchor.
     currentRange = range.cloneRange();
     currentAnnotEl = null;
     currentSelectionText = annotationTextFromRange(range) || '';
@@ -603,6 +639,11 @@ function onAnnotMouseUp(e) {
 }
 
 function onAnnotPassageClick(e) {
+  // Drag-selection ends with a click in some browsers. Let the mouseup path
+  // open create mode instead of replacing it with the enclosing note's editor.
+  const selection = window.getSelection();
+  if (selection && !selection.isCollapsed && selection.toString().trim()) return;
+
   // Note card edit/delete buttons take priority.
   const noteBtn = e.target.closest('[data-note-action]');
   if (noteBtn) {

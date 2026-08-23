@@ -51,13 +51,19 @@ function captureArticleSnapshot() {
     },
   });
   const anchors = new Map();
+  const sourceNodes = [];
   let text = '';
   let node;
   while ((node = walker.nextNode())) {
     const value = node.nodeValue || '';
     if (!value) continue;
-    const span = node.parentElement?.closest('span.annot[data-annot-id]');
-    if (span && elements.article.contains(span)) {
+    sourceNodes.push({ node, start: text.length, value });
+    // A text node may belong to several nested anchors (for example a
+    // sentence note inside a paragraph translation). Capture it for every
+    // annotation ancestor, not only closest(), so outer anchors retain their
+    // complete exact text and all artifacts survive a save/reopen cycle.
+    let span = node.parentElement?.closest('span.annot[data-annot-id]');
+    while (span && elements.article.contains(span)) {
       const id = String(span.dataset.annotId || '');
       let captured = anchors.get(id);
       if (!captured) {
@@ -65,10 +71,54 @@ function captureArticleSnapshot() {
         anchors.set(id, captured);
       }
       captured.exact += value;
+      span = span.parentElement?.closest('span.annot[data-annot-id]') || null;
     }
     text += value;
   }
-  return { text, anchors };
+  return { text, anchors, sourceNodes };
+}
+
+// Defensive recovery for DOM shapes produced while a selection mask crosses
+// nested inline elements. The fast ancestor walk above should capture normal
+// anchors; this path finds every source text node physically contained by any
+// span carrying the missing id, including split duplicate-id fragments.
+function recoverCapturedAnchor(id, snapshot) {
+  const spans = [...elements.article.querySelectorAll('span.annot[data-annot-id]')]
+    .filter((span) => String(span.dataset.annotId || '') === String(id));
+  if (!spans.length) return null;
+  let start = -1;
+  let exact = '';
+  for (const item of snapshot.sourceNodes) {
+    if (!spans.some((span) => span.contains(item.node))) continue;
+    if (start < 0) start = item.start;
+    exact += item.value;
+  }
+  return start >= 0 && exact ? { start, exact } : null;
+}
+
+// Older async translation/QA code could leave an empty, never-saved span when
+// its live Range collapsed before applyNote(). Such an artifact has no ref and
+// no source text, so it cannot be restored; discard only these transient
+// orphans rather than letting one block every valid annotation from syncing.
+// Durable entries (ref present) still fail closed below.
+function discardTransientOrphans(entries) {
+  if (!entries.length) return;
+  const ids = new Set(entries.map((entry) => String(entry.id)));
+  state.annotations = state.annotations.filter((entry) => !ids.has(String(entry.id)));
+
+  elements.article.querySelectorAll('span.annot[data-annot-id]').forEach((span) => {
+    if (!ids.has(String(span.dataset.annotId || ''))) return;
+    const parent = span.parentNode;
+    if (!parent) return;
+    span.querySelector(':scope > .annot-note-num')?.remove();
+    while (span.firstChild) parent.insertBefore(span.firstChild, span);
+    span.remove();
+    parent.normalize();
+  });
+  document.querySelectorAll('.annot-note[data-annot-id]').forEach((card) => {
+    if (ids.has(String(card.dataset.annotId || ''))) card.remove();
+  });
+  console.warn('Discarded unanchored transient annotations:', [...ids].join(', '));
 }
 
 function canonicalArticleText() {
@@ -106,12 +156,26 @@ export async function buildAnnotationSidecar(markdownFile, markdown, progress = 
   const snapshot = captureArticleSnapshot();
   const canonicalText = snapshot.text;
   const title = state.docTitle || 'Untitled';
+  const missing = [];
   const savedAnnotations = state.annotations
-    .map((entry) => captureAnnotationAnchor(entry, canonicalText, snapshot.anchors.get(String(entry.id))))
+    .map((entry) => {
+      const id = String(entry.id);
+      const captured = snapshot.anchors.get(id) || recoverCapturedAnchor(id, snapshot);
+      const anchor = captureAnnotationAnchor(entry, canonicalText, captured);
+      if (!anchor) missing.push(entry);
+      return anchor;
+    })
     .filter(Boolean)
-    .sort((a, b) => a.start - b.start);
-  if (savedAnnotations.length !== state.annotations.length) {
-    throw new Error('Could not anchor every annotation');
+    // Outer anchors first when starts match; restore then safely nests shorter
+    // artifacts inside the already-restored passage.
+    .sort((a, b) => a.start - b.start || b.end - a.end);
+  if (missing.length) {
+    const transient = missing.filter((entry) => !entry.ref);
+    const durable = missing.filter((entry) => entry.ref);
+    discardTransientOrphans(transient);
+    if (durable.length) {
+      throw new Error(`Could not anchor durable annotations: ${durable.map((entry) => entry.id).join(', ')}`);
+    }
   }
   const sourceHash = await fingerprintMarkdown(markdown);
   return {
@@ -367,7 +431,10 @@ export function restoreAnnotationSidecar(data) {
   const unrestored = [];
   data.annotations
     .slice()
-    .sort((a, b) => a.start - b.start)
+    // Restore containers before their nested children. Stable start-only
+    // sorting restored same-start children first and then partially crossed
+    // them when the outer translation was applied.
+    .sort((a, b) => a.start - b.start || b.end - a.end)
     .forEach((anchor) => {
       const range = resolveAnnotationRange(anchor, canonicalText);
       if (!range) {
