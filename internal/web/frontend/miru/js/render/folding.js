@@ -4,6 +4,7 @@
 import { elements } from '../dom.js';
 import { prefersReducedMotion } from '../utils.js';
 import { scheduleNoteLayout } from '../annotations/layout.js';
+import { setAllNotesCollapsed } from '../annotations/focus.js';
 
 export function foldSections() {
   const headings = Array.from(elements.article.querySelectorAll('h1, h2, h3'));
@@ -103,6 +104,9 @@ export function updateFoldToggleIcon(open) {
 export function foldAll(open) {
   const sections = elements.article.querySelectorAll('.fold-section');
   sections.forEach((section) => toggleSection(section, open));
+  // Collapsing everything also tucks away every inline note body (summary / QA /
+  // plain notes); reference numbers stay as the per-note reopen affordance.
+  if (!open) setAllNotesCollapsed(true);
   updateFoldToggleIcon(open);
 }
 

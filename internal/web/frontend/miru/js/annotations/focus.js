@@ -87,6 +87,27 @@ export function isNoteInlineCollapsed(id) {
   return Boolean(card?.classList.contains('is-collapsed') || card?.hidden);
 }
 
+/** Collapse or expand every inline note body (used by fold-all). */
+export function setAllNotesCollapsed(collapsed) {
+  document.querySelectorAll('.annot-note[data-annot-id]').forEach((card) => {
+    // jp-study keeps chips only; never toggle a body card.
+    if (card.classList.contains('is-jp-study') || card.classList.contains('membox-jp-card-hidden')) return;
+    card.classList.toggle('is-collapsed', collapsed);
+    card.hidden = collapsed;
+    const anchor = elements.article.querySelector(`span.annot[data-annot-id="${card.dataset.annotId}"]`);
+    if (anchor) {
+      anchor.classList.toggle('note-collapsed', collapsed);
+      const badge = anchor.querySelector('.annot-note-num');
+      if (badge) {
+        badge.classList.toggle('is-collapsed', collapsed);
+        badge.title = collapsed ? '显示笔记' : '隐藏笔记';
+        badge.setAttribute('aria-expanded', String(!collapsed));
+      }
+    }
+  });
+  scheduleNoteLayout();
+}
+
 // Highlight the note/passage pair. Optionally scroll the opposite side into
 // view (`scrollTo`: 'anchor' | 'card' | null).
 export function focusNote(id, options = {}) {

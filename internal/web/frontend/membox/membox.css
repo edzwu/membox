@@ -1054,9 +1054,18 @@ dt > .membox-jp-study {
   white-space: nowrap;
 }
 
-.toc.is-collapsed .membox-related {
+/* Related sits in the pane: visible whenever the pane is open (pinned or
+   hover), hidden only when collapsed to the bare rail. */
+.toc.is-collapsed:not(.is-pinned):not(.is-hover-expanded) .membox-related {
   opacity: 0;
   pointer-events: none;
+}
+
+.toc-pane .membox-related {
+  flex: 0 0 auto;
+  padding: 12px 14px 10px;
+  margin-top: 0;
+  border-top: 1px solid var(--line);
 }
 
 /* Related-document picker / creator modal. */

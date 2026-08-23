@@ -30,7 +30,10 @@ function createRelatedPanel() {
   panel.className = 'membox-related';
   panel.hidden = true;
   panel.innerHTML = '<div class="membox-related-title">Related</div><div class="membox-related-grid"></div>';
-  elements.toc.appendChild(panel);
+  // Live inside the TOC pane so pinned mode shows it beneath the outline
+  // instead of a lone floating list.
+  const pane = elements.tocPane || elements.toc.querySelector('.toc-pane') || elements.toc;
+  pane.appendChild(panel);
   return panel;
 }
 

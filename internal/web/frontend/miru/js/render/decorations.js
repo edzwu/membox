@@ -89,6 +89,10 @@ function normalizeSourceHeading(text) {
   return text
     .replace(/!?\[([^\[\]]*)\]\([^)]*\)/g, (_, label) =>
       HEADERLINK_GLYPHS.has(label.trim()) ? ' ' : ` ${label} `)
+    // PDF conversion escapes Markdown punctuation in source headings, while
+    // rendered heading labels contain the literal character. Remove the escape
+    // first or source attribution fails and only the PNG action gets created.
+    .replace(/\\([*_`])/g, '$1')
     .replace(/[*_`]/g, '')
     // markdown-it's typographer changes straight punctuation in the rendered
     // heading. Normalize both DOM labels and raw Markdown before matching so
@@ -193,7 +197,7 @@ export function addSectionActionButtons() {
       copyBtn.className = 'section-copy';
       copyBtn.setAttribute('aria-label', 'Copy section');
       copyBtn.title = 'Copy section';
-      copyBtn.textContent = '⧉';
+      copyBtn.innerHTML = '<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>';
       copyBtn.addEventListener('click', (event) => {
         event.stopPropagation();
         const source = section.dataset.source || '';

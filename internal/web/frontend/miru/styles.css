@@ -326,6 +326,8 @@ body.is-reading .topbar.is-auto-hidden {
   height: 100%;
   max-height: none;
   box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
@@ -378,9 +380,11 @@ body.is-reading .topbar.is-auto-hidden {
   pointer-events: none;
 }
 
-/* Nav scrolls only when outline exceeds the content-sized box. */
+/* Nav scrolls only when outline exceeds the content-sized box; related tiles
+   (membox) pin at the pane bottom when present. */
 .toc-pane .toc-nav {
-  height: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
   max-height: none;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -940,7 +944,7 @@ body.is-snippet .toc {
 .fold-heading {
   cursor: pointer;
   position: relative;
-  padding-right: 2.8em;
+  padding-right: 58px;
   transition: color 0.12s ease;
 }
 
@@ -981,14 +985,19 @@ body.is-snippet .toc {
   font-family: var(--font-sans);
   font-size: 12px;
   line-height: 1;
-  padding: 4px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
   opacity: 0;
   transition: opacity 0.15s ease, color 0.15s ease;
 }
 
 .section-copy { right: 0; }
-.section-download { right: 1.4em; }
+.section-download { right: 28px; }
 
 .fold-heading:hover .section-copy,
 .fold-heading:hover .section-download,
@@ -1167,7 +1176,8 @@ body.is-snippet .toc {
 
 .annot-compose-hl,
 .annot-compose-send,
-.annot-compose-ext {
+.annot-compose-ext,
+.annot-compose-del {
   appearance: none;
   border: 0;
   width: 30px;
@@ -1181,7 +1191,8 @@ body.is-snippet .toc {
 }
 
 .annot-compose-ext,
-.annot-compose-hl {
+.annot-compose-hl,
+.annot-compose-del {
   background: transparent;
   color: var(--ink-soft);
 }
@@ -1190,6 +1201,16 @@ body.is-snippet .toc {
 .annot-compose-hl:hover {
   background: var(--accent-soft);
   color: var(--accent);
+}
+
+.annot-compose-hl.active {
+  background: var(--accent);
+  color: var(--paper);
+}
+
+.annot-compose-del:hover {
+  background: color-mix(in srgb, #b3402f 14%, var(--paper-raised));
+  color: #b3402f;
 }
 
 .annot-compose-send {
@@ -1705,6 +1726,22 @@ textarea.annot-note-input {
   color: inherit;
   padding: 0 1px;
   border-radius: 2px;
+}
+
+/* Temporary selection mirror while the compose dialog owns focus. Mimics the
+   native text-selection blue instead of the annotation highlight color. */
+.article .annot-compose-mask {
+  background: Highlight;
+  color: HighlightText;
+  border-radius: 2px;
+  cursor: text;
+}
+
+.article .annot-compose-mask *,
+.article .annot-compose-mask::selection,
+.article .annot-compose-mask *::selection {
+  background: transparent;
+  color: inherit;
 }
 
 /* Note anchor: dotted underline + numbered superscript */

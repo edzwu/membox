@@ -55,11 +55,111 @@ let currentAnnotEl = null;
 let noteResizeObserver = null;
 let currentSelectionText = '';
 
+function clearComposeSelectionMask({ preserveRange = false } = {}) {
+  let preservedRange = null;
+  elements.article.querySelectorAll('.annot-compose-mask').forEach((mask) => {
+    const parent = mask.parentNode;
+    if (!parent) return;
+
+    // Keep exact DOM boundaries while unwrapping. Re-finding by text is only
+    // a fallback: repeated passages can otherwise select the wrong occurrence,
+    // and normalize() can leave the old cloned Range apparently non-empty while
+    // actually pointing at a collapsed insertion point.
+    let startMarker = null;
+    let endMarker = null;
+    if (preserveRange && !preservedRange) {
+      startMarker = document.createComment('miru-selection-start');
+      endMarker = document.createComment('miru-selection-end');
+      parent.insertBefore(startMarker, mask);
+      parent.insertBefore(endMarker, mask.nextSibling);
+    }
+
+    while (mask.firstChild) parent.insertBefore(mask.firstChild, mask);
+    parent.removeChild(mask);
+
+    if (startMarker && endMarker) {
+      const range = document.createRange();
+      range.setStartAfter(startMarker);
+      range.setEndBefore(endMarker);
+      startMarker.remove();
+      endMarker.remove();
+      if (range.toString().trim()) preservedRange = range;
+      // Do not normalize here: it would invalidate the fresh boundaries before
+      // applyNote/applyMark gets a chance to wrap them.
+      return;
+    }
+    parent.normalize();
+  });
+  return preservedRange;
+}
+
+/** Persist the page selection visually while the dialog owns focus. The
+ *  original text nodes move into the mask span (no duplication); the dialog
+ *  clears the mask before any real annotation mutation so ranges stay valid. */
+function applyComposeSelectionMask(range) {
+  clearComposeSelectionMask();
+  if (!range || !range.commonAncestorContainer?.isConnected) return;
+  try {
+    const mask = document.createElement('span');
+    mask.className = 'annot-compose-mask';
+    const frag = range.extractContents();
+    mask.appendChild(frag);
+    range.insertNode(mask);
+  } catch (err) {
+    console.warn('compose selection mask failed', err);
+  }
+}
+
+/** Rebuild a fresh range for the stored selection text after the mask was
+ *  cleared. Unwrapping the mask normalizes text nodes, which detaches any
+ *  range captured before the mask — reusing it wraps an empty span and the
+ *  annotation becomes un-anchorable (auto-save then fails → badge stuck
+ *  "unsaved"). Search the article for the exact selection instead. */
+function recomputeRangeForSelection(selectionText) {
+  const want = String(selectionText || '').replace(/\s+/g, ' ').trim();
+  if (!want) return null;
+  const walker = document.createTreeWalker(elements.article, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      const parent = node.parentElement;
+      return parent && parent.closest(ANNOTATION_TEXT_EXCLUDE)
+        ? NodeFilter.FILTER_REJECT
+        : NodeFilter.FILTER_ACCEPT;
+    },
+  });
+  const chars = [];
+  let normalized = '';
+  let node;
+  while ((node = walker.nextNode())) {
+    const raw = node.nodeValue || '';
+    let offset = 0;
+    while (offset < raw.length) {
+      const start = offset;
+      if (/\s/.test(raw[offset])) {
+        while (offset < raw.length && /\s/.test(raw[offset])) offset++;
+        normalized += ' ';
+      } else {
+        normalized += raw[offset];
+        offset++;
+      }
+      chars.push({ node, start, end: offset });
+    }
+  }
+  const idx = normalized.indexOf(want);
+  if (idx < 0 || idx + want.length > chars.length) return null;
+  const first = chars[idx];
+  const last = chars[idx + want.length - 1];
+  const range = document.createRange();
+  range.setStart(first.node, first.start);
+  range.setEnd(last.node, last.end);
+  return range;
+}
+
 export function hideAnnotToolbar() {
   if (annotToolbar) {
     annotToolbar.hidden = true;
     annotToolbar.classList.remove('is-dict', 'is-assist', 'is-compose', 'is-mode-note', 'is-mode-ask');
   }
+  clearComposeSelectionMask();
   currentRange = null;
   currentAnnotEl = null;
   currentSelectionText = '';
@@ -85,38 +185,32 @@ const ICON_SEND =
 /** @type {'note' | 'ask'} */
 let composeMode = 'note';
 
-// Build the toolbar for create mode (compose dialog) or edit mode (icon row).
+// Build the toolbar for create mode (compose dialog) or edit mode (same compose
+// dialog prefilled with the existing note, plus a delete button).
 function buildAnnotToolbar(mode, entry, text = '') {
-  const i = ANNOT_ICONS;
   annotToolbar.classList.remove('is-dict', 'is-assist', 'is-compose');
 
   if (mode === 'create') {
     composeMode = 'note';
-    openComposeDialog();
+    openComposeDialog('', { mode: 'create' });
     return;
   }
 
-  // Edit existing annotation: compact icon row.
-  let html =
-    `<button type="button" data-action="highlight" class="${entry && entry.hl ? 'active' : ''}" title="Highlight" aria-label="Highlight">${i.highlight}</button>` +
-    `<button type="button" data-action="note" title="${entry && entry.note ? 'Edit note' : 'Add note'}" aria-label="Note">${i.note}</button>`;
-  for (const action of extraAnnotActions) {
-    const visible = typeof action.when === 'function'
-      ? action.when({ mode, text, entry })
-      : false;
-    if (!visible) continue;
-    const title = action.title || action.id;
-    html += `<button type="button" data-action="ext:${action.id}" title="${escapeAttr(title)}" aria-label="${escapeAttr(title)}">${action.icon || title}</button>`;
-  }
-  html += `<button type="button" data-action="delete" class="annot-del" title="Delete annotation" aria-label="Delete annotation">${i.trash}</button>`;
-  annotToolbar.innerHTML = html;
+  // Edit: reuse the same dialog. Ask-mode notes (QA) open in ask mode with the
+  // question text; plain/summary notes open in note mode with the body.
+  const note = String(entry?.note || '');
+  const isQA = entry?.kind === 'qa' || /\*\*Q:\*\*/.test(note);
+  const preset = isQA ? note.replace(/^\*\*Q:\*\*\s*/, '').trim() : note;
+  composeMode = isQA ? 'ask' : 'note';
+  openComposeDialog(preset, { mode: 'edit', entry });
 }
 
-function openComposeDialog(presetText = '') {
+function openComposeDialog(presetText = '', opts = {}) {
+  const editing = opts.mode === 'edit' && Boolean(opts.entry);
+  const entry = opts.entry || null;
   annotToolbar.classList.add('is-compose');
   annotToolbar.classList.toggle('is-mode-ask', composeMode === 'ask');
   annotToolbar.classList.toggle('is-mode-note', composeMode === 'note');
-  const modeLabel = composeMode === 'ask' ? 'Ask' : 'Note';
   const modeIcon = composeMode === 'ask' ? ANNOT_ICONS.ask : ANNOT_ICONS.note;
   const modeTitle = composeMode === 'ask'
     ? 'Ask mode · click to switch to Note'
@@ -127,15 +221,19 @@ function openComposeDialog(presetText = '') {
   let extras = '';
   for (const action of extraAnnotActions) {
     const visible = typeof action.when === 'function'
-      ? action.when({ mode: 'create', text: currentSelectionText, entry: null })
+      ? action.when({ mode: editing ? 'edit' : 'create', text: currentSelectionText, entry })
       : false;
     if (!visible) continue;
     const title = action.title || action.id;
     extras += `<button type="button" class="annot-compose-ext" data-action="ext:${escapeAttr(action.id)}" title="${escapeAttr(title)}" aria-label="${escapeAttr(title)}">${action.icon || title}</button>`;
   }
 
-  // Deepseek-style panel: full-width input on top; mode toggle bottom-left,
-  // highlight + send bottom-right.
+  const deleteBtn = editing
+    ? `<button type="button" class="annot-compose-del" data-action="delete" title="Delete annotation" aria-label="Delete annotation">${ANNOT_ICONS.trash}</button>`
+    : '';
+
+  // Same dialog for create and edit: full-width input on top; mode toggle
+  // bottom-left, highlight + send (+ delete in edit) bottom-right.
   annotToolbar.innerHTML =
     '<div class="annot-compose" role="dialog" aria-label="Selection actions">' +
       `<textarea class="annot-compose-input" rows="2" placeholder="${escapeAttr(placeholder)}" ` +
@@ -149,7 +247,8 @@ function openComposeDialog(presetText = '') {
           extras +
         '</div>' +
         '<div class="annot-compose-actions">' +
-          `<button type="button" class="annot-compose-hl" data-action="highlight" title="Highlight selection" aria-label="Highlight">${ANNOT_ICONS.highlight}</button>` +
+          `<button type="button" class="annot-compose-hl${entry && entry.hl ? ' active' : ''}" data-action="highlight" title="${editing ? 'Toggle highlight' : 'Highlight selection'}" aria-label="Highlight">${ANNOT_ICONS.highlight}</button>` +
+          deleteBtn +
           `<button type="button" class="annot-compose-send" data-action="send" title="Send (⌘Enter)" aria-label="Send">${ICON_SEND}</button>` +
         '</div>' +
       '</div>' +
@@ -185,18 +284,38 @@ function toggleComposeMode() {
   const input = annotToolbar.querySelector('.annot-compose-input');
   const keep = input ? input.value : '';
   composeMode = composeMode === 'note' ? 'ask' : 'note';
-  openComposeDialog(keep);
+  const editing = Boolean(currentAnnotEl);
+  const entry = editing ? findAnnot(currentAnnotEl.dataset.annotId) : null;
+  openComposeDialog(keep, { mode: editing ? 'edit' : 'create', entry });
+}
+
+function clearComposeMaskBeforeAction() {
+  // Unwrap the mask first so applyNote/applyMark wrap the original text nodes.
+  // Always replace the pre-mask clone: browsers may report text for that stale
+  // Range even though wrapping it creates an empty span, which then makes the
+  // entire annotation sidecar impossible to sync.
+  const preserved = clearComposeSelectionMask({ preserveRange: true });
+  if (!currentRange) return;
+  currentRange = preserved || recomputeRangeForSelection(currentSelectionText);
 }
 
 async function commitComposeSend() {
   const input = annotToolbar.querySelector('.annot-compose-input');
   const text = (input?.value || '').trim();
   const sendBtn = annotToolbar.querySelector('.annot-compose-send');
+  const editing = Boolean(currentAnnotEl);
+  const entry = editing ? findAnnot(currentAnnotEl.dataset.annotId) : null;
+  clearComposeMaskBeforeAction();
 
   if (composeMode === 'note') {
     if (!text) {
       showToast('Write a note first');
       input?.focus();
+      return;
+    }
+    if (editing && entry && currentAnnotEl) {
+      setNoteOnPassage(entry, currentAnnotEl, text);
+      hideAnnotToolbar();
       return;
     }
     commitNoteInput(text);
@@ -356,12 +475,34 @@ function onAnnotToolbarClick(e) {
       hideAnnotToolbar();
       return;
     }
+    if (action === 'delete') {
+      deleteAnnotation(entry.id);
+      hideAnnotToolbar();
+      return;
+    }
+    if (action === 'highlight') {
+      entry.hl = !entry.hl;
+      entry.ul = false;
+      entry.sl = false;
+      currentAnnotEl.classList.toggle('annot-hl', entry.hl);
+      currentAnnotEl.classList.remove('annot-ul', 'annot-sl');
+      btn.classList.toggle('active', entry.hl);
+      if (!entry.hl && !entry.note) {
+        unwrapAnnotEl(currentAnnotEl);
+        removeAnnot(entry.id);
+        hideAnnotToolbar();
+      } else {
+        notifyAnnotationsChanged();
+      }
+      return;
+    }
     handleEditAction(action, currentAnnotEl, entry, btn);
     return;
   }
 
   if (currentRange) {
     if (action === 'highlight') {
+      clearComposeMaskBeforeAction();
       applyMark('highlight', currentRange);
       // Keep compose open so the user can still note/ask on the same selection.
       // Re-clone range after DOM wrap may invalidate it — finish for safety.
@@ -431,6 +572,9 @@ function onAnnotMouseUp(e) {
     currentAnnotEl = null;
     currentSelectionText = annotationTextFromRange(range) || '';
     buildAnnotToolbar('create', null, currentSelectionText);
+    // Keep the selection visible while the dialog is open — the textarea
+    // focus collapses the native highlight, so mirror it in a mask span.
+    applyComposeSelectionMask(range);
     positionAnnotToolbar(range);
   }, 0);
 }
