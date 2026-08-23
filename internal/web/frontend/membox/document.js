@@ -13,7 +13,7 @@ import { emitRender } from './events.js';
 import { fetchDocument, renameDocument } from './api.js';
 import { convertedDisplayLabel, documentDisplayLabel } from './labels.js';
 import { cancelPendingSaves, resetReadingSession, restoreReadingState } from './reading-state.js';
-import { scheduleNotePreviewPass } from './notes.js';
+import { renderNoteSourceBacklink, scheduleNotePreviewPass } from './notes.js';
 import { hideSeriesNav, loadSeriesNav } from './series-nav.js';
 
 let documentNavigation = null;
@@ -172,6 +172,9 @@ export async function loadFromMembox() {
     // await on the critical path and made even tiny notes feel stuck blank.
     loadDocument(markdown);
     applyConversionDisplayLabel(filename, catalogTitle);
+    // loadDocument wipes article HTML — re-attach 「← 原文」 immediately when
+    // the URL carried ?from=, then related load will refine the title.
+    renderNoteSourceBacklink();
     void loadSeriesNav();
     // Notes before progress: note cards change the layout, so the saved
     // scroll position only means something once they are in place.
@@ -182,6 +185,9 @@ export async function loadFromMembox() {
     // Sidecar restore can rewrite .doc-title with a stale conversion stem;
     // re-assert the short label after notes land.
     applyConversionDisplayLabel(filename, catalogTitle);
+    // related.js also calls this after /related; call again so annotation
+    // notes opened without ?from= still get a backlink once the graph lands.
+    renderNoteSourceBacklink();
     if (session.pendingSourceNoteRef) {
       session.pendingSourceNoteRef = '';
       showToast('The note is saved, but its passage could not be located in this document');

@@ -10,6 +10,7 @@ import { session } from './session.js';
 import { registerModal, closeOtherModals } from './modals.js';
 import { fetchRelated, postRelated, searchCandidates } from './api.js';
 import { documentDisplayLabel } from './labels.js';
+import { renderNoteSourceBacklink } from './notes.js';
 import { syncToMembox } from './sync.js';
 
 let relatedPanel = null;
@@ -45,7 +46,11 @@ export async function loadRelated() {
   }
   try {
     const data = await fetchRelated(session.documentID);
-    renderRelatedGrid(Array.isArray(data.related) ? data.related : []);
+    const items = Array.isArray(data.related) ? data.related : [];
+    renderRelatedGrid(items);
+    // Full note pages (opened from a long inline link) need an obvious return
+    // path to the source passage — related tiles under the TOC are too easy to miss.
+    renderNoteSourceBacklink(items);
   } catch (err) {
     console.warn('membox: could not load related documents', err);
     hideRelatedPanel();
@@ -90,18 +95,23 @@ function renderRelatedGrid(items) {
       catalogTitle: item.title || '',
     }) || String(item.id);
     const tile = document.createElement('a');
-    tile.className = 'membox-related-tile';
+    tile.className = 'membox-related-tile' + (item.annotation_ref ? ' is-source-backlink' : '');
     const targetURL = new URL('/', window.location.origin);
     targetURL.searchParams.set('id', item.id);
     if (item.annotation_ref) targetURL.searchParams.set('note', item.annotation_ref);
     tile.href = targetURL.href;
     tile.dataset.direction = item.direction === 'in' ? 'in' : 'out';
-    tile.setAttribute('aria-label', `${label} (${item.id})`);
+    if (item.annotation_ref) {
+      tile.setAttribute('aria-label', `原文 ${label} (${item.id})`);
+      tile.dataset.role = 'source-backlink';
+    } else {
+      tile.setAttribute('aria-label', `${label} (${item.id})`);
+    }
     const tooltip = document.createElement('span');
     tooltip.className = 'membox-related-tooltip';
     const tooltipTitle = document.createElement('span');
     tooltipTitle.className = 'membox-related-tooltip-title';
-    tooltipTitle.textContent = label;
+    tooltipTitle.textContent = item.annotation_ref ? `← 原文 · ${label}` : label;
     const tooltipID = document.createElement('code');
     tooltipID.className = 'membox-related-tooltip-id';
     tooltipID.textContent = `membox · ${String(item.id).slice(-5)}`;

@@ -19,6 +19,10 @@ export const session = {
   pendingSourceNoteRef: (initialURLParams.get('note') || '').slice(0, 64),
   sourceNoteFocused: false,
 
+  // When opening a full note from a long inline link, `from` is the source
+  // document so the note page can offer a clear 「← 原文」 backlink.
+  noteSourceFromRef: (initialURLParams.get('from') || '').slice(0, 64),
+
   // Markdown as last loaded from / synced to the backend. A paste that
   // diverges from this is treated as a new document, not an overwrite.
   loadedMarkdown: '',
