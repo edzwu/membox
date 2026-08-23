@@ -23,9 +23,15 @@ let addRelatedButton = null;
 /** @type {Set<string>} */
 const extrasPins = new Set();
 
+// Hover the bottom-left proximity pad to reveal; hide after idle leave.
+const STATUS_DOCK_HIDE_MS = 3000;
+let statusDockHideTimer = null;
+let statusDockPointerInside = false;
+let statusDockAutohideBound = false;
+
 function createStatusDock() {
   const dock = document.createElement('div');
-  dock.className = 'membox-status-dock';
+  dock.className = 'membox-status-dock is-auto-hidden';
   dock.hidden = true;
 
   const cluster = document.createElement('div');
@@ -45,10 +51,68 @@ function createStatusDock() {
   return dock;
 }
 
+function clearStatusDockHideTimer() {
+  if (statusDockHideTimer !== null) {
+    clearTimeout(statusDockHideTimer);
+    statusDockHideTimer = null;
+  }
+}
+
+function shouldKeepStatusDockVisible() {
+  if (!statusDock || statusDock.hidden) return false;
+  if (statusDockPointerInside) return true;
+  if (extrasPins.size > 0) return true;
+  if (statusDock.contains(document.activeElement)) return true;
+  return false;
+}
+
+function revealStatusDock() {
+  if (!statusDock || statusDock.hidden) return;
+  statusDock.classList.remove('is-auto-hidden');
+  clearStatusDockHideTimer();
+}
+
+function scheduleStatusDockHide() {
+  if (!statusDock || statusDock.hidden) return;
+  clearStatusDockHideTimer();
+  if (shouldKeepStatusDockVisible()) {
+    statusDock.classList.remove('is-auto-hidden');
+    return;
+  }
+  statusDockHideTimer = setTimeout(() => {
+    statusDockHideTimer = null;
+    if (shouldKeepStatusDockVisible()) return;
+    statusDock.classList.add('is-auto-hidden');
+  }, STATUS_DOCK_HIDE_MS);
+}
+
+function bindStatusDockAutohide() {
+  if (!statusDock || statusDockAutohideBound) return;
+  statusDockAutohideBound = true;
+
+  statusDock.addEventListener('pointerenter', () => {
+    statusDockPointerInside = true;
+    revealStatusDock();
+  });
+  statusDock.addEventListener('pointerleave', () => {
+    statusDockPointerInside = false;
+    scheduleStatusDockHide();
+  });
+  statusDock.addEventListener('focusin', () => {
+    revealStatusDock();
+  });
+  statusDock.addEventListener('focusout', (event) => {
+    if (!statusDock.contains(event.relatedTarget)) scheduleStatusDockHide();
+  });
+}
+
 function syncExtrasPinClass() {
   if (!statusDock) return;
   statusDock.classList.toggle('is-extras-open', extrasPins.size > 0);
   if (statusExtras) statusExtras.dataset.collapsed = extrasPins.size > 0 ? 'false' : 'true';
+  // A pinned tool keeps the dock revealed; releasing pins restarts hide timer.
+  if (extrasPins.size > 0) revealStatusDock();
+  else if (!statusDockPointerInside) scheduleStatusDockHide();
 }
 
 function createStatusBadge() {
@@ -103,14 +167,22 @@ export function setDownloadMeaning() {
 export function renderDocStatus() {
   if (!session.connected) {
     getDocumentNavigation().hidden = true;
-    if (statusDock) statusDock.hidden = true;
+    if (statusDock) {
+      statusDock.hidden = true;
+      statusDock.classList.add('is-auto-hidden');
+      clearStatusDockHideTimer();
+    }
     statusBadge.hidden = true;
     addRelatedButton.hidden = true;
     setBrowseNotesVisible(false);
     hideRelatedPanel();
     return;
   }
-  if (statusDock) statusDock.hidden = false;
+  if (statusDock) {
+    statusDock.hidden = false;
+    // Stay quiet until the pointer enters the bottom-left proximity pad.
+    if (!shouldKeepStatusDockVisible()) statusDock.classList.add('is-auto-hidden');
+  }
   statusBadge.hidden = false;
   const saved = Boolean(session.documentID) && !session.annotationsDirty;
   const saving = session.syncing || session.saveInFlight;
@@ -164,6 +236,7 @@ export function initStatus() {
   statusBadge = createStatusBadge();
   addRelatedButton = createAddRelatedButton();
   statusCluster.appendChild(statusExtras);
+  bindStatusDockAutohide();
 
   // Miru updates this title when annotations change; connected mode owns its
   // sync wording, so immediately re-apply it after those generic updates.

@@ -606,17 +606,23 @@ dt > .membox-jp-study {
   line-height: 1;
 }
 
-/* Bottom-left document status dock: larger invisible hit area so low-frequency
-   extras (译 / search) expand when the pointer nears. The visual pill lives in
-   .membox-status-cluster. Visible only while connected. */
+/* Bottom-left document status dock: a large corner proximity pad stays
+   interactive; the visual pill only appears while the pointer is nearby
+   (or extras are pinned / focused), then delays hide. */
 .membox-status-dock {
   position: fixed;
-  left: 24px;
-  bottom: 24px;
+  left: 0;
+  bottom: 0;
   z-index: 70;
-  /* Proximity pad — expands hover target without shifting the pill. */
-  padding: 20px 22px;
-  margin: -20px -22px;
+  /* Generous corner sensor — pad receives hover even while the pill is hidden. */
+  min-width: 140px;
+  min-height: 110px;
+  padding: 28px 32px 22px 22px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-start;
+  pointer-events: auto;
 }
 
 .membox-status-dock[hidden] {
@@ -632,6 +638,23 @@ dt > .membox-jp-study {
   background: var(--paper-raised);
   box-shadow: 0 4px 16px var(--shadow);
   overflow: hidden;
+  transform-origin: left bottom;
+  transition:
+    opacity 0.22s ease,
+    transform 0.22s ease;
+}
+
+/* Quiet by default: only the corner pad remains, pill fades away. */
+.membox-status-dock.is-auto-hidden .membox-status-cluster {
+  opacity: 0;
+  transform: translateY(10px) scale(0.96);
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .membox-status-cluster {
+    transition: none;
+  }
 }
 
 /* Low-frequency tray: collapsed by default, opens on dock hover / focus / pin. */
@@ -725,10 +748,9 @@ dt > .membox-jp-study {
 
 @media (max-width: 768px) {
   .membox-status-dock {
-    left: 12px;
-    bottom: 12px;
-    padding: 16px 18px;
-    margin: -16px -18px;
+    min-width: 120px;
+    min-height: 96px;
+    padding: 20px 22px 14px 14px;
   }
 }
 
