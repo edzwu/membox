@@ -1,0 +1,4 @@
+[submodule "internal/web/frontend/miru"]
+	path = internal/web/frontend/miru
+	url = https://github.com/edzwu/miru.git
+	branch = main

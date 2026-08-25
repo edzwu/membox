@@ -735,9 +735,9 @@ internal/interfaces/tui/
 聊天是 membox integration，不属于 host-neutral Miru。实现放在：
 
 ```text
-internal/web/frontend/membox/
+internal/web/frontend/adapters/companion/
 ├── integration.js            # 只负责挂载入口
-├── membox.css
+├── companion.css
 └── agent/
     ├── client.js             # fetch、SSE、重连
     ├── drawer.js             # DOM/state
@@ -948,9 +948,9 @@ internal/web/backend/agent_internal_http.go   # worker-only tools/context
 internal/web/backend/server.go                # route/lifecycle wiring
 internal/interfaces/cli/agent.go              # status/doctor
 internal/interfaces/tui/agent*.go             # Agent state/update/view/client
-internal/web/frontend/membox/agent/*           # Web drawer
-internal/web/frontend/membox/integration.js    # mount entry
-internal/web/frontend/membox/membox.css        # drawer responsive styles
+internal/web/frontend/adapters/companion/agent/*        # Web drawer
+internal/web/frontend/adapters/companion/integration.js # mount entry
+internal/web/frontend/adapters/companion/companion.css  # drawer responsive styles
 docs/pi-agent-integration.md                   # 本文
 ```
 

@@ -29,7 +29,7 @@ import (
 	"membox/internal/translation"
 )
 
-const integrationScript = `<script type="module" src="/membox/integration.js"></script>`
+const integrationScript = `<script type="module" src="/adapters/companion/integration.js"></script>`
 
 // logicalID returns the user/agent-visible short id for a physical document
 // UUID. Physical ids remain SQLite primary keys and are not emitted on the
@@ -49,13 +49,13 @@ func (s *Server) logicalID(ctx context.Context, physical string) string {
 
 // Server is a localhost-only HTTP server exposing the membox API and Miru.
 type Server struct {
-	service       *application.Service
-	miruFS        fs.FS
-	integrationFS fs.FS
-	httpServer    *http.Server
-	baseURL       string
-	home          string // MEMBOX_HOME; required for mmd-backed video summary
-	token         string // empty = auth disabled (same-origin Miru / tests)
+	service     *application.Service
+	miruFS      fs.FS
+	companionFS fs.FS
+	httpServer  *http.Server
+	baseURL     string
+	home        string // MEMBOX_HOME; required for mmd-backed video summary
+	token       string // empty = auth disabled (same-origin Miru / tests)
 	// documentMu serializes source reads/mutations with annotation restore/save.
 	// The title is editable while restoreReadingState is still resolving paths,
 	// so rename must not split that operation between the old and new location.
@@ -85,8 +85,8 @@ type Server struct {
 
 // NewServer receives frontend files from the composition root rather than
 // embedding them in the backend package.
-func NewServer(service *application.Service, miruFS, integrationFS fs.FS) *Server {
-	return &Server{service: service, miruFS: miruFS, integrationFS: integrationFS}
+func NewServer(service *application.Service, miruFS, companionFS fs.FS) *Server {
+	return &Server{service: service, miruFS: miruFS, companionFS: companionFS}
 }
 
 // SetToken enables bearer checks on extension-facing write endpoints.
@@ -154,7 +154,7 @@ func (s *Server) Start(ctx context.Context, port int) (string, error) {
 	mux.HandleFunc("/api/save", s.handleSave)
 	mux.HandleFunc("/api/sync", s.handleSync)
 	s.registerAgentRoutes(mux)
-	mux.Handle("/membox/", noStore{http.StripPrefix("/membox/", http.FileServer(http.FS(s.integrationFS)))})
+	mux.Handle("/adapters/companion/", noStore{http.StripPrefix("/adapters/companion/", http.FileServer(http.FS(s.companionFS)))})
 	mux.HandleFunc("/", s.handleFrontend)
 
 	listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))

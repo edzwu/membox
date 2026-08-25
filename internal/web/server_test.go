@@ -73,7 +73,7 @@ func TestServerServesReaderAndMarkdown(t *testing.T) {
 	if strings.Contains(string(indexBody), `id="save-note"`) {
 		t.Fatal("served reader still contains the old Save button")
 	}
-	if !strings.Contains(string(indexBody), `src="/membox/integration.js"`) {
+	if !strings.Contains(string(indexBody), `src="/adapters/companion/integration.js"`) {
 		t.Fatalf("index.html missing isolated membox adapter: %s", indexBody[:200])
 	}
 	if strings.Contains(string(indexBody), "brand-social") || !strings.Contains(string(indexBody), `class="topbar-center"`) {
@@ -82,7 +82,7 @@ func TestServerServesReaderAndMarkdown(t *testing.T) {
 	if !strings.Contains(string(indexBody), `id="reading-surface"`) || !strings.Contains(string(indexBody), `id="annotation-layer"`) {
 		t.Fatal("reader should keep article content and annotation cards in separate sibling layers")
 	}
-	adapterResp, err := http.Get(baseURL + "/membox/integration.js")
+	adapterResp, err := http.Get(baseURL + "/adapters/companion/integration.js")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestServerServesReaderAndMarkdown(t *testing.T) {
 		"jp-study.js":    {"membox-jp-study-toggle", "mode: 'jp-study'", "日语精读"},
 	}
 	for module, markers := range featureModules {
-		moduleResp, err := http.Get(baseURL + "/membox/" + module)
+		moduleResp, err := http.Get(baseURL + "/adapters/companion/" + module)
 		if err != nil {
 			t.Fatal(err)
 		}

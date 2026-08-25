@@ -261,9 +261,17 @@ The companion listens on `127.0.0.1` only (preferring port `8787`, written to `~
 Web code is split so Miru can be updated independently:
 
 - `internal/web/frontend/miru/` — product-neutral Miru frontend
-- `internal/web/frontend/membox/` — small membox browser adapter
+- `internal/web/frontend/adapters/companion/` — optional Membox Companion adapter
 - `internal/web/backend/` — Go HTTP/API implementation
 - `internal/web/assets.go` — composition and embedding boundary
+
+Miru is pinned as a Git submodule. Initialize it after cloning and see
+[`internal/web/frontend/README.md`](internal/web/frontend/README.md) for the
+edit/push/update workflow:
+
+```bash
+git submodule update --init --recursive
+```
 
 ```bash
 make check      # gofmt check, go vet, tests

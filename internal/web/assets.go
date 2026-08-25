@@ -1,5 +1,5 @@
-// Package web composes the independent web backend with two frontend trees:
-// the upstream-friendly Miru reader and the small membox integration adapter.
+// Package web composes the independent web backend with the portable Miru
+// reader and its optional Companion extension.
 package web
 
 import (
@@ -13,7 +13,7 @@ import (
 // Frontend assets live outside the backend package so Miru can be refreshed
 // independently without mixing product-specific code into its source tree.
 //
-//go:embed all:frontend/miru all:frontend/membox
+//go:embed frontend/miru frontend/adapters/companion
 var frontendFS embed.FS
 
 // Server keeps the historical public package API while its implementation
@@ -25,9 +25,9 @@ func NewServer(service *application.Service) *Server {
 	if err != nil {
 		panic(err) // compile-time embedded path; an error indicates a broken build
 	}
-	integrationFS, err := fs.Sub(frontendFS, "frontend/membox")
+	companionFS, err := fs.Sub(frontendFS, "frontend/adapters/companion")
 	if err != nil {
 		panic(err)
 	}
-	return backend.NewServer(service, miruFS, integrationFS)
+	return backend.NewServer(service, miruFS, companionFS)
 }
