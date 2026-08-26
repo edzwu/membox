@@ -130,6 +130,8 @@ func (s *Server) Start(ctx context.Context, port int) (string, error) {
 	mux.HandleFunc("/api/companion/presence", s.handleCompanionPresence)
 	mux.HandleFunc("/api/bridge/status", s.handleBridgeStatus)
 	mux.HandleFunc("/api/bridge/clips", s.handleBridgeClips)
+	mux.HandleFunc("/api/bridge/assist/status", s.handleBridgeAssistStatus)
+	mux.HandleFunc("/api/bridge/assist", s.handleBridgeAssist)
 	mux.HandleFunc("/api/ingest", s.handleIngest)
 	mux.HandleFunc("/api/video/summary", s.handleVideoSummary)
 	mux.HandleFunc("/api/resources", s.handleResources)

@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -41,6 +42,93 @@ func getAssistRunner() *assist.Runner {
 		Provider: assist.DefaultProvider,
 		Model:    assist.DefaultModel,
 	}
+}
+
+// handleBridgeAssistStatus reports whether the paired bridge can resolve its
+// Pi runner. It intentionally does not spend a model request; remote auth is
+// conclusively verified by the next assist turn.
+func (s *Server) handleBridgeAssistStatus(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireBridgeToken(writer, request) {
+		return
+	}
+
+	runner := getAssistRunner()
+	piPath := strings.TrimSpace(runner.PiPath)
+	if piPath == "" {
+		piPath = "pi"
+	}
+	provider := strings.TrimSpace(runner.Provider)
+	if provider == "" {
+		provider = assist.DefaultProvider
+	}
+	model := strings.TrimSpace(runner.Model)
+	if model == "" {
+		model = assist.DefaultModel
+	}
+	resolvedPath, err := exec.LookPath(piPath)
+	available := err == nil
+	detail := "Pi runner is available; model authentication is verified on request."
+	if !available {
+		detail = "Pi executable is not available to the membox companion."
+	}
+
+	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+	writer.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(writer).Encode(map[string]any{
+		"available": available,
+		"provider":  provider,
+		"model":     model,
+		"pi_path":   resolvedPath,
+		"detail":    detail,
+	})
+}
+
+// handleBridgeAssist exposes the existing tool-free DeepSeek assist runner to
+// paired browser extensions. Unlike document assist it is not tied to a membox
+// document; the bridge token, localhost binding and extension-only CORS protect
+// this generic model capability.
+func (s *Server) handleBridgeAssist(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireBridgeToken(writer, request) {
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(request.Body, 1<<20))
+	if err != nil {
+		http.Error(writer, "reading assist request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	var payload assist.Request
+	if err := json.Unmarshal(body, &payload); err != nil {
+		http.Error(writer, "invalid assist payload", http.StatusBadRequest)
+		return
+	}
+	req, err := assist.Validate(payload)
+	if err != nil {
+		http.Error(writer, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	runner := getAssistRunner()
+	writer.Header().Set("Content-Type", "application/x-ndjson; charset=utf-8")
+	writer.Header().Set("Cache-Control", "no-store")
+	flusher, _ := writer.(http.Flusher)
+	emit := func(event assist.Event) error {
+		if err := json.NewEncoder(writer).Encode(event); err != nil {
+			return err
+		}
+		if flusher != nil {
+			flusher.Flush()
+		}
+		return nil
+	}
+	_ = runner.Stream(request.Context(), req, emit)
 }
 
 // handleSelectionSummarize summarizes a user-selected excerpt with the local
