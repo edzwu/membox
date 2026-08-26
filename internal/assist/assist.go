@@ -25,8 +25,10 @@ const (
 	ModeAsk  = "ask"
 	ModeEdit = "edit"
 
-	maxInstructionRunes = 2000
-	maxSelectionRunes   = 12000
+	maxInstructionRunes = 4000
+	// Group analysis sends several complete raw JDs as one selection; 60k
+	// runes (~30k tokens) fits deepseek-v4-flash comfortably.
+	maxSelectionRunes   = 60000
 	maxContextRunes     = 4000
 	maxRPCFrameBytes    = 8 << 20
 )
