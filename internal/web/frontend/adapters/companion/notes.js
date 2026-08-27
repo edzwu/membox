@@ -1,14 +1,11 @@
-/* Notes chrome: the top-bar browse button, the notes picker modal (a local,
-   filterable index over the notes already restored into Miru's annotation
-   model — no second backend representation), and long-note rail previews. */
+/* Notes model and presentation: exposes the restored annotation notes to the
+   unified document picker and owns long-note rail previews. */
 
 import { elements } from '../../js/dom.js';
 import { state } from '../../js/state.js';
 import { focusNote } from '../../js/annotations/focus.js';
 import { layoutMarginNotes } from '../../js/annotations/layout.js';
 import { session } from './session.js';
-import { registerModal, closeOtherModals } from './modals.js';
-import { getDocumentNavigation } from './document.js';
 
 // Short notes render full inline body (translation-style). Longer ones collapse
 // to a titled hyperlink that opens the durable note document.
@@ -16,13 +13,7 @@ const INLINE_NOTE_MAX_RUNES = 140;
 const INLINE_NOTE_MAX_LINES = 3;
 const INLINE_NOTE_TITLE_RUNES = 42;
 
-let browseNotesButton = null;
-let notesModal = null;
 let notePreviewTimer = null;
-
-function noteCount() {
-  return state.annotations.filter((entry) => typeof entry.note === 'string' && entry.note.trim()).length;
-}
 
 export function noteDocumentURL(ref) {
   const url = new URL(window.location.href);
@@ -303,78 +294,8 @@ export function scheduleNotePreviewPass() {
   scheduleLongNotePreviews();
 }
 
-export function renderBrowseNotesButton() {
-  const count = noteCount();
-  const countBadge = browseNotesButton.querySelector('.membox-notes-count');
-  countBadge.textContent = String(count);
-  countBadge.hidden = count === 0;
-  browseNotesButton.setAttribute('aria-label', `Browse ${count} note${count === 1 ? '' : 's'} in this document`);
-  browseNotesButton.title = count === 1 ? 'Browse 1 note' : `Browse ${count} notes`;
-}
-
-// Visibility follows the document chrome rules owned by status.js.
-export function setBrowseNotesVisible(visible) {
-  if (browseNotesButton) browseNotesButton.hidden = !visible;
-}
-
-// ---------------------------------------------------------------------------
-// Notes picker modal. Selecting a result focuses its passage.
-// ---------------------------------------------------------------------------
-function createBrowseNotesButton() {
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.id = 'membox-browse-notes';
-  button.className = 'membox-browse-notes';
-  button.hidden = true;
-  button.title = 'Browse notes';
-  button.setAttribute('aria-label', 'Browse notes in this document');
-  button.innerHTML = `
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M5 4.5h14a1.5 1.5 0 0 1 1.5 1.5v9a1.5 1.5 0 0 1-1.5 1.5h-8l-5.5 4v-4H5A1.5 1.5 0 0 1 3.5 15V6A1.5 1.5 0 0 1 5 4.5Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
-      <path d="M8 9h8M8 12.5h5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-    </svg>
-    <span class="membox-notes-count" hidden>0</span>`;
-  getDocumentNavigation().appendChild(button);
-  button.addEventListener('click', openNotesModal);
-  return button;
-}
-
-function createNotesModal() {
-  const backdrop = document.createElement('div');
-  backdrop.className = 'membox-modal-backdrop';
-  backdrop.hidden = true;
-  backdrop.innerHTML = `
-    <div class="membox-modal" role="dialog" aria-modal="true" aria-labelledby="membox-notes-dialog-title">
-      <div class="membox-modal-title" id="membox-notes-dialog-title">Notes in this document</div>
-      <div class="membox-related-picker">
-        <input class="membox-related-search" type="search" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="membox-note-options" placeholder="Filter notes or quoted text…" autocomplete="off" spellcheck="false">
-        <div class="membox-related-options" id="membox-note-options" role="listbox" aria-label="Notes in this document"></div>
-        <div class="membox-modal-hint">Select a note to jump to its passage.</div>
-      </div>
-      <div class="membox-modal-actions">
-        <button type="button" class="membox-modal-btn membox-modal-cancel">Close</button>
-      </div>
-    </div>`;
-  document.body.appendChild(backdrop);
-  const modal = backdrop.querySelector('.membox-modal');
-  const searchInput = backdrop.querySelector('.membox-related-search');
-  const options = backdrop.querySelector('.membox-related-options');
-  backdrop.addEventListener('mousedown', (event) => {
-    if (event.target === backdrop) closeNotesModal();
-  });
-  backdrop.querySelector('.membox-modal-cancel').addEventListener('click', () => closeNotesModal());
-  searchInput.addEventListener('input', renderNoteOptions);
-  searchInput.addEventListener('keydown', onNoteSearchKeydown);
-  modal.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') {
-      event.stopPropagation();
-      closeNotesModal();
-    }
-  });
-  return { backdrop, searchInput, options };
-}
-
-function notePickerItems() {
+// Local picker model consumed by the unified Documents / Notes modal.
+export function notePickerItems() {
   const entries = new Map(state.annotations
     .filter((entry) => typeof entry.note === 'string' && entry.note.trim())
     .map((entry) => [String(entry.id), entry]));
@@ -393,101 +314,12 @@ function notePickerItems() {
   return items;
 }
 
-function renderNoteOptions() {
-  const query = notesModal.searchInput.value.trim().toLocaleLowerCase();
-  const allItems = notePickerItems();
-  const items = query
-    ? allItems.filter((item) => `${item.note}\n${item.excerpt}\n${item.number}`.toLocaleLowerCase().includes(query))
-    : allItems;
-  notesModal.options.textContent = '';
-  notesModal.searchInput.setAttribute('aria-expanded', String(items.length > 0));
-  if (!items.length) {
-    const status = document.createElement('div');
-    status.className = 'membox-related-option-status';
-    status.textContent = allItems.length ? 'No matching notes' : 'No notes in this document';
-    notesModal.options.appendChild(status);
-    return;
-  }
-  for (const item of items) {
-    const option = document.createElement('button');
-    option.type = 'button';
-    option.className = 'membox-related-option';
-    option.setAttribute('role', 'option');
-    option.setAttribute('aria-label', `Note ${item.number}: ${item.note}`);
-    const title = document.createElement('span');
-    title.className = 'membox-related-option-title';
-    title.textContent = item.note;
-    const number = document.createElement('code');
-    number.className = 'membox-related-option-id';
-    number.textContent = `#${item.number}`;
-    const excerpt = document.createElement('span');
-    excerpt.className = 'membox-related-option-path';
-    excerpt.textContent = item.excerpt ? `“${item.excerpt}”` : 'Quoted passage unavailable';
-    option.append(title, number, excerpt);
-    option.addEventListener('click', () => jumpToNote(item.id));
-    option.addEventListener('keydown', onNoteOptionKeydown);
-    notesModal.options.appendChild(option);
-  }
-}
-
-function openNotesModal() {
-  if (!session.connected || !session.documentID) return;
-  closeOtherModals();
-  notesModal.searchInput.value = '';
-  renderNoteOptions();
-  notesModal.backdrop.hidden = false;
-  notesModal.searchInput.focus();
-}
-
-function closeNotesModal(restoreFocus = true) {
-  notesModal.backdrop.hidden = true;
-  if (restoreFocus && !browseNotesButton.hidden) browseNotesButton.focus();
-}
-
-function jumpToNote(id) {
-  closeNotesModal(false);
+export function focusPickerNote(id) {
   focusNote(id, { scrollTo: 'anchor', duration: 3000 });
 }
 
-function onNoteSearchKeydown(event) {
-  if (!['ArrowDown', 'Enter'].includes(event.key)) return;
-  const first = notesModal.options.querySelector('.membox-related-option');
-  if (!first) return;
-  event.preventDefault();
-  if (event.key === 'Enter') first.click();
-  else first.focus();
-}
-
-function onNoteOptionKeydown(event) {
-  if (!['ArrowDown', 'ArrowUp', 'Enter'].includes(event.key)) return;
-  event.preventDefault();
-  if (event.key === 'Enter') {
-    event.currentTarget.click();
-    return;
-  }
-  const options = Array.from(notesModal.options.querySelectorAll('.membox-related-option'));
-  const index = options.indexOf(event.currentTarget);
-  const next = event.key === 'ArrowDown' ? options[index + 1] : options[index - 1];
-  (next || notesModal.searchInput).focus();
-}
-
 export function initNotes() {
-  browseNotesButton = createBrowseNotesButton();
-  notesModal = createNotesModal();
-  registerModal({
-    isOpen: () => !notesModal.backdrop.hidden,
-    close: () => closeNotesModal(false),
-  });
-
-  window.addEventListener('miru-annotations-changed', () => {
-    renderBrowseNotesButton();
-    renderLongNotePreviews();
-    if (!notesModal.backdrop.hidden) renderNoteOptions();
-  });
-  window.addEventListener('miru-annotations-saved', () => {
-    renderBrowseNotesButton();
-    renderLongNotePreviews();
-    if (!notesModal.backdrop.hidden) renderNoteOptions();
-  });
+  window.addEventListener('miru-annotations-changed', renderLongNotePreviews);
+  window.addEventListener('miru-annotations-saved', renderLongNotePreviews);
   window.addEventListener('resize', scheduleLongNotePreviews);
 }

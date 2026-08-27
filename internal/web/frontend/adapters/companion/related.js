@@ -11,7 +11,7 @@ import { session } from './session.js';
 import { registerModal, closeOtherModals } from './modals.js';
 import { fetchRelated, postRelated, searchCandidates } from './api.js';
 import { documentDisplayLabel } from './labels.js';
-import { renderNoteSourceBacklink } from './notes.js';
+import { focusPickerNote, notePickerItems, renderNoteSourceBacklink } from './notes.js';
 import { syncToMembox } from './sync.js';
 
 let relatedPanel = null;
@@ -163,6 +163,7 @@ function createRelatedModal() {
       <div class="membox-modal-tabs" role="tablist" aria-label="Add related document">
         <button type="button" class="membox-modal-tab is-active" role="tab" aria-selected="true" data-mode="existing">Choose existing</button>
         <button type="button" class="membox-modal-tab" role="tab" aria-selected="false" data-mode="new">Create new</button>
+        <button type="button" class="membox-modal-tab" role="tab" aria-selected="false" data-mode="notes" hidden>Notes <span class="membox-modal-tab-count" hidden>0</span></button>
       </div>
       <div class="membox-related-picker" data-panel="existing" role="tabpanel">
         <input class="membox-related-search" type="search" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="membox-related-options" placeholder="Search by title or UUID…" autocomplete="off" spellcheck="false">
@@ -173,6 +174,11 @@ function createRelatedModal() {
         <input class="membox-modal-input" type="text" placeholder="Title" maxlength="200" spellcheck="false">
         <textarea class="membox-modal-body" placeholder="Paste related content (Markdown)…" spellcheck="false"></textarea>
         <div class="membox-modal-hint">Saves a new Markdown document linked to the current one · ⌘Enter to save</div>
+      </div>
+      <div class="membox-related-picker" data-panel="notes" role="tabpanel" hidden>
+        <input class="membox-related-search membox-note-search" type="search" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="membox-picker-note-options" placeholder="Filter notes or quoted text…" autocomplete="off" spellcheck="false">
+        <div class="membox-related-options membox-note-options" id="membox-picker-note-options" role="listbox" aria-label="Notes in this document"></div>
+        <div class="membox-modal-hint">Select a note to jump to its passage.</div>
       </div>
       <div class="membox-modal-actions">
         <button type="button" class="membox-modal-btn membox-modal-cancel">Cancel</button>
@@ -188,18 +194,23 @@ function createRelatedModal() {
   const hint = backdrop.querySelector('.membox-related-picker .membox-modal-hint');
   const titleInput = backdrop.querySelector('.membox-modal-input');
   const bodyInput = backdrop.querySelector('.membox-modal-body');
+  const noteSearchInput = backdrop.querySelector('.membox-note-search');
+  const noteOptions = backdrop.querySelector('.membox-note-options');
   const primaryButton = backdrop.querySelector('.membox-modal-save');
+  const cancelButton = backdrop.querySelector('.membox-modal-cancel');
   const tabs = Array.from(backdrop.querySelectorAll('.membox-modal-tab'));
   const panels = Array.from(backdrop.querySelectorAll('[data-panel]'));
 
   backdrop.addEventListener('mousedown', (event) => {
     if (event.target === backdrop) closeRelatedModal();
   });
-  backdrop.querySelector('.membox-modal-cancel').addEventListener('click', closeRelatedModal);
+  cancelButton.addEventListener('click', closeRelatedModal);
   primaryButton.addEventListener('click', submitPickerSelection);
   tabs.forEach((tab) => tab.addEventListener('click', () => setRelatedModalMode(tab.dataset.mode)));
   searchInput.addEventListener('input', scheduleRelatedSearch);
   searchInput.addEventListener('keydown', onRelatedSearchKeydown);
+  noteSearchInput.addEventListener('input', renderPickerNoteOptions);
+  noteSearchInput.addEventListener('keydown', onPickerNoteSearchKeydown);
   modal.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
       event.stopPropagation();
@@ -209,28 +220,53 @@ function createRelatedModal() {
       void saveRelated();
     }
   });
-  return { backdrop, dialogTitle, tablist, searchInput, options, hint, titleInput, bodyInput, primaryButton, tabs, panels };
+  return {
+    backdrop, dialogTitle, tablist, searchInput, options, hint, titleInput, bodyInput,
+    noteSearchInput, noteOptions, primaryButton, cancelButton, tabs, panels,
+  };
+}
+
+function configurePickerTabs() {
+  const open = pickerPurpose === 'open';
+  const existingTab = relatedModal.tabs.find((tab) => tab.dataset.mode === 'existing');
+  const newTab = relatedModal.tabs.find((tab) => tab.dataset.mode === 'new');
+  const notesTab = relatedModal.tabs.find((tab) => tab.dataset.mode === 'notes');
+  existingTab.textContent = open ? 'Documents' : 'Choose existing';
+  newTab.textContent = 'Create new';
+  newTab.hidden = open;
+  notesTab.hidden = !open;
+  relatedModal.tablist.setAttribute('aria-label', open ? 'Library sections' : 'Add related document');
+  relatedModal.cancelButton.textContent = open ? 'Close' : 'Cancel';
 }
 
 function setRelatedModalMode(mode, focus = true) {
-  relatedModalMode = pickerPurpose === 'open' ? 'existing' : mode === 'new' ? 'new' : 'existing';
+  relatedModalMode = pickerPurpose === 'open'
+    ? mode === 'notes' ? 'notes' : 'existing'
+    : mode === 'new' ? 'new' : 'existing';
   relatedModal.tabs.forEach((tab) => {
     const active = tab.dataset.mode === relatedModalMode;
     tab.classList.toggle('is-active', active);
     tab.setAttribute('aria-selected', String(active));
   });
   relatedModal.panels.forEach((panel) => { panel.hidden = panel.dataset.panel !== relatedModalMode; });
+  relatedModal.primaryButton.hidden = relatedModalMode === 'notes';
   relatedModal.primaryButton.textContent = pickerPurpose === 'open'
     ? 'Open document'
     : relatedModalMode === 'existing' ? 'Link document' : 'Create';
+  if (relatedModalMode === 'notes') renderPickerNoteOptions();
   updateRelatedPrimaryButton();
   if (focus) {
-    (relatedModalMode === 'existing' ? relatedModal.searchInput : relatedModal.titleInput).focus();
+    const target = relatedModalMode === 'notes'
+      ? relatedModal.noteSearchInput
+      : relatedModalMode === 'existing' ? relatedModal.searchInput : relatedModal.titleInput;
+    target.focus();
   }
 }
 
 function updateRelatedPrimaryButton() {
-  const ready = relatedModalMode === 'existing' ? Boolean(selectedRelatedCandidate) : true;
+  const ready = relatedModalMode === 'existing'
+    ? Boolean(selectedRelatedCandidate)
+    : relatedModalMode === 'new';
   relatedModal.primaryButton.disabled = relatedSaving || !ready;
 }
 
@@ -267,6 +303,72 @@ function renderRelatedOptions(items, message = '') {
     option.addEventListener('keydown', onRelatedOptionKeydown);
     relatedModal.options.appendChild(option);
   }
+}
+
+function renderPickerNoteOptions() {
+  const query = relatedModal.noteSearchInput.value.trim().toLocaleLowerCase();
+  const allItems = notePickerItems();
+  const items = query
+    ? allItems.filter((item) => `${item.note}\n${item.excerpt}\n${item.number}`.toLocaleLowerCase().includes(query))
+    : allItems;
+  const notesTab = relatedModal.tabs.find((tab) => tab.dataset.mode === 'notes');
+  const count = notesTab.querySelector('.membox-modal-tab-count');
+  count.textContent = String(allItems.length);
+  count.hidden = allItems.length === 0;
+  relatedModal.noteOptions.textContent = '';
+  relatedModal.noteSearchInput.setAttribute('aria-expanded', String(items.length > 0));
+  if (!items.length) {
+    const status = document.createElement('div');
+    status.className = 'membox-related-option-status';
+    status.textContent = allItems.length ? 'No matching notes' : 'No notes in this document';
+    relatedModal.noteOptions.appendChild(status);
+    return;
+  }
+  for (const item of items) {
+    const option = document.createElement('button');
+    option.type = 'button';
+    option.className = 'membox-related-option';
+    option.setAttribute('role', 'option');
+    option.setAttribute('aria-label', `Note ${item.number}: ${item.note}`);
+    const title = document.createElement('span');
+    title.className = 'membox-related-option-title';
+    title.textContent = item.note;
+    const number = document.createElement('code');
+    number.className = 'membox-related-option-id';
+    number.textContent = `#${item.number}`;
+    const excerpt = document.createElement('span');
+    excerpt.className = 'membox-related-option-path';
+    excerpt.textContent = item.excerpt ? `“${item.excerpt}”` : 'Quoted passage unavailable';
+    option.append(title, number, excerpt);
+    option.addEventListener('click', () => {
+      closeRelatedModal();
+      focusPickerNote(item.id);
+    });
+    option.addEventListener('keydown', onPickerNoteOptionKeydown);
+    relatedModal.noteOptions.appendChild(option);
+  }
+}
+
+function onPickerNoteSearchKeydown(event) {
+  if (!['ArrowDown', 'Enter'].includes(event.key)) return;
+  const first = relatedModal.noteOptions.querySelector('.membox-related-option');
+  if (!first) return;
+  event.preventDefault();
+  if (event.key === 'Enter') first.click();
+  else first.focus();
+}
+
+function onPickerNoteOptionKeydown(event) {
+  if (!['ArrowDown', 'ArrowUp', 'Enter'].includes(event.key)) return;
+  event.preventDefault();
+  if (event.key === 'Enter') {
+    event.currentTarget.click();
+    return;
+  }
+  const options = Array.from(relatedModal.noteOptions.querySelectorAll('.membox-related-option'));
+  const index = options.indexOf(event.currentTarget);
+  const next = event.key === 'ArrowDown' ? options[index + 1] : options[index - 1];
+  (next || relatedModal.noteSearchInput).focus();
 }
 
 function selectRelatedCandidate(item, option) {
@@ -350,17 +452,20 @@ function openPicker(purpose) {
   if (!session.connected || (purpose === 'related' && !session.documentID)) return;
   closeOtherModals();
   pickerPurpose = purpose === 'open' ? 'open' : 'related';
-  relatedModal.dialogTitle.textContent = pickerPurpose === 'open' ? 'Open document' : 'Add related document';
-  relatedModal.tablist.hidden = pickerPurpose === 'open';
+  relatedModal.backdrop.dataset.pickerPurpose = pickerPurpose;
+  relatedModal.dialogTitle.textContent = pickerPurpose === 'open' ? 'Library' : 'Add related document';
+  configurePickerTabs();
   relatedModal.hint.textContent = pickerPurpose === 'open'
     ? 'Recently opened first · remaining files are sorted by recent changes · Ctrl+O'
     : 'Recently opened first · remaining files are sorted by recent changes.';
   relatedModal.searchInput.value = '';
+  relatedModal.noteSearchInput.value = '';
   relatedModal.titleInput.value = '';
   relatedModal.bodyInput.value = '';
   selectedRelatedCandidate = null;
   relatedModal.backdrop.hidden = false;
   notifyDocumentPickerState(pickerPurpose === 'open');
+  if (pickerPurpose === 'open') renderPickerNoteOptions();
   setRelatedModalMode('existing');
   renderRelatedOptions([], 'Loading files…');
   void searchRelatedCandidates('');
@@ -377,7 +482,7 @@ export function openDocumentPicker() {
 // Ctrl+O entry point shared with the composition root's keydown handler.
 export function handleOpenShortcut() {
   if (relatedModal && !relatedModal.backdrop.hidden && pickerPurpose === 'open') {
-    relatedModal.searchInput.focus();
+    setRelatedModalMode('existing');
     return;
   }
   openDocumentPicker();
@@ -393,6 +498,7 @@ function closeRelatedModal() {
 }
 
 function submitPickerSelection() {
+  if (relatedModalMode === 'notes') return;
   if (pickerPurpose === 'open') void openSelectedDocument();
   else if (relatedModalMode === 'existing') void linkExistingRelated();
   else void saveRelated();
@@ -476,4 +582,9 @@ export function initRelated() {
     isOpen: () => !relatedModal.backdrop.hidden,
     close: closeRelatedModal,
   });
+  const refreshNotes = () => {
+    if (!relatedModal.backdrop.hidden && pickerPurpose === 'open') renderPickerNoteOptions();
+  };
+  window.addEventListener('miru-annotations-changed', refreshNotes);
+  window.addEventListener('miru-annotations-saved', refreshNotes);
 }

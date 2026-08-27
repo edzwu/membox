@@ -95,7 +95,8 @@ func TestServerServesReaderAndMarkdown(t *testing.T) {
 	featureModules := map[string][]string{
 		"connection.js":  {"membox-connection"},
 		"document.js":    {"membox-document-switcher", "Switch document · Ctrl+O", "membox-document-navigation"},
-		"notes.js":       {"membox-browse-notes", "Notes in this document", "noteDocumentURL"},
+		"notes.js":       {"notePickerItems", "focusPickerNote", "noteDocumentURL"},
+		"related.js":     {`data-mode="notes"`, "membox-note-search", "Library"},
 		"note-images.js": {"registerAnnotImagePasteHandler", "uploadNoteImage", "/api/note-assets/"},
 		"pdf-import.js":  {"Drop one PDF at a time", "importPDF(file)"},
 		"translation.js": {"streamTranslation", "runSelectionRows", "registerAnnotAction"},

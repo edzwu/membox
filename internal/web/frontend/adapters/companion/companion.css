@@ -2,8 +2,7 @@
 /* Compact document-picker trigger. The article already owns the visible,
    editable title; topbar chrome only needs to expose the switch action. */
 .membox-document-navigation {
-  width: auto;
-  min-width: 36px;
+  width: 36px;
   height: 36px;
   flex: 0 0 auto;
   display: inline-flex;
@@ -87,7 +86,7 @@
   }
 
   .membox-document-navigation {
-    min-width: 36px;
+    width: 36px;
   }
 }
 
@@ -815,62 +814,6 @@ dt > .membox-jp-study {
   }
 }
 
-/* The notes browser is paired with the file picker but uses a deliberately
-   different speech-bubble silhouette. */
-.membox-browse-notes {
-  position: relative;
-  appearance: none;
-  width: 42px;
-  height: 34px;
-  padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  border: 0;
-  border-left: 1px solid var(--line);
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-  transition: color 0.15s ease, background 0.15s ease;
-}
-
-.membox-browse-notes[hidden],
-.membox-notes-count[hidden] {
-  display: none;
-}
-
-.membox-browse-notes svg {
-  width: 18px;
-  height: 18px;
-}
-
-.membox-notes-count {
-  position: absolute;
-  top: 3px;
-  right: 3px;
-  min-width: 13px;
-  height: 13px;
-  padding: 0 3px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 999px;
-  background: var(--accent);
-  color: var(--paper);
-  font-family: var(--font-mono);
-  font-size: 8px;
-  font-weight: 600;
-  line-height: 1;
-}
-
-.membox-browse-notes:hover,
-.membox-browse-notes:focus-visible {
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent-soft) 62%, transparent);
-  outline: none;
-}
-
 /* Inline notes: short body under the passage; long notes become a titled link. */
 .annotation-layer.membox-notes-relayout {
   overflow-anchor: none;
@@ -1109,6 +1052,30 @@ dt > .membox-jp-study {
   box-shadow: 0 24px 64px var(--shadow);
 }
 
+/* Documents and Notes are two views of one library, so switching tabs must
+   not resize/recenter the dialog. Let each panel consume the same fixed modal
+   body and scroll its own result list instead. */
+.membox-modal-backdrop[data-picker-purpose="open"] .membox-modal {
+  height: min(560px, calc(100dvh - 32px));
+}
+
+.membox-modal-backdrop[data-picker-purpose="open"] .membox-related-picker {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.membox-modal-backdrop[data-picker-purpose="open"] .membox-related-options {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+}
+
+.membox-modal-backdrop[data-picker-purpose="open"] .membox-modal-hint {
+  flex: 0 0 34px;
+  height: 34px;
+  overflow: hidden;
+}
+
 .membox-modal-title {
   font-family: var(--font-sans);
   font-size: 14px;
@@ -1145,6 +1112,26 @@ dt > .membox-jp-study {
   background: var(--paper-raised);
   color: var(--ink);
   box-shadow: 0 1px 4px var(--shadow);
+}
+
+.membox-modal-tab-count {
+  display: inline-flex;
+  min-width: 16px;
+  height: 16px;
+  margin-left: 5px;
+  padding: 0 5px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  line-height: 1;
+}
+
+.membox-modal-tab-count[hidden] {
+  display: none;
 }
 
 .membox-related-picker,

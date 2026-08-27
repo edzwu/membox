@@ -16,8 +16,8 @@
      document.js       document binding, loading, rename, switcher
      reading-state.js  sidecar persist/restore, revision, progress, read status
      sync.js           explicit sync + silent auto-create of pasted content
-     related.js        related-documents panel + link/create/open picker
-     notes.js          browse-notes button + picker, long-note rail previews
+     related.js        related-documents panel + unified Documents/Notes picker
+     notes.js          note picker model + long-note rail previews
      note-images.js    clipboard images → private asset store + Markdown refs
      dictionary.js     single-word Free Dictionary lookup → related note
      presence.js       tab heartbeat for the companion/TUI census */

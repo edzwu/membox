@@ -10,7 +10,6 @@ import { showToast, writeClipboard } from '../../js/ui/feedback.js';
 import { session } from './session.js';
 import { syncToMembox } from './sync.js';
 import { getDocumentNavigation } from './document.js';
-import { renderBrowseNotesButton, setBrowseNotesVisible } from './notes.js';
 import { hideRelatedPanel, loadRelated, openRelatedModal } from './related.js';
 
 let statusDock = null;
@@ -150,7 +149,6 @@ function createAddRelatedButton() {
 function renderDisconnectedStatus() {
   getDocumentNavigation().hidden = true;
   addRelatedButton.hidden = true;
-  setBrowseNotesVisible(false);
   hideRelatedPanel();
   if (statusDock) {
     statusDock.hidden = true;
@@ -190,14 +188,11 @@ export function renderDocStatus() {
     statusBadge.setAttribute('aria-label', saving ? 'Saving changes' : 'Save changes');
     statusBadge.title = saving ? 'Saving changes…' : 'Unsaved changes · click to save';
   }
-  renderBrowseNotesButton();
   if (session.documentID) {
     addRelatedButton.hidden = false;
-    setBrowseNotesVisible(true);
     void loadRelated();
   } else {
     addRelatedButton.hidden = true;
-    setBrowseNotesVisible(false);
     hideRelatedPanel();
   }
 }
