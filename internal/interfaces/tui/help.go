@@ -42,7 +42,7 @@ func helpSections() []helpSection {
 			{"/", "filter documents (vim-style)"},
 			{"space", "toggle details"},
 			{"e / o / d", "edit / open app / move to trash"},
-			{"ctrl+n", "quick note → $EDITOR → name from # H1 or mmd"},
+			{"ctrl+n", "draft first → $EDITOR → H1 or background mmd naming"},
 			{"r / p / s / ctrl+h", "rename file/PDF title / pin / summarize / toggle *-note.md"},
 			{"q / esc", "back / close result view"},
 		}},

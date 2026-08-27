@@ -200,14 +200,19 @@ func (m Model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			commands = append(commands, m.spinner.Tick, resolveEditorCmd(m.ctx, m.app, document.ID))
 		}
 	case "ctrl+n":
-		// Quick note: empty Markdown → $EDITOR → on :wq name from H1 or mmd.
-		m.loading = true
+		// Release the terminal immediately, then reserve the O_EXCL draft and
+		// launch $EDITOR inside one Bubble Tea exec handoff. Catalog work waits
+		// until :wq, so corpus size is absent from the launch path.
+		m.loading = false
 		m.statusMessage = "new note…"
 		from := ""
 		if document, ok := m.selectedDocument(); ok {
 			from = document.ID
 		}
-		commands = append(commands, m.spinner.Tick, createQuickNoteCmd(m.ctx, m.app, m.launcher, from))
+		executor := &quickNoteEditorCommand{ctx: m.ctx, app: m.app, launcher: m.launcher}
+		return m, tea.Exec(executor, func(err error) tea.Msg {
+			return editorDoneMsg{quickNotePath: executor.path, quickNoteFrom: from, err: err}
+		})
 	case "o":
 		if document, ok := m.selectedDocument(); ok {
 			commands = append(commands, openCmd(m.ctx, m.app, m.launcher, document.ID))
@@ -1366,28 +1371,53 @@ func reindexCmd(ctx context.Context, app App, selector string) tea.Cmd {
 	}
 }
 
-func createQuickNoteCmd(ctx context.Context, app App, launcher host.Launcher, fromSelector string) tea.Cmd {
+type quickNoteEditorCommand struct {
+	ctx      context.Context
+	app      App
+	launcher host.Launcher
+	path     string
+	stdin    io.Reader
+	stdout   io.Writer
+	stderr   io.Writer
+}
+
+func (c *quickNoteEditorCommand) SetStdin(reader io.Reader)  { c.stdin = reader }
+func (c *quickNoteEditorCommand) SetStdout(writer io.Writer) { c.stdout = writer }
+func (c *quickNoteEditorCommand) SetStderr(writer io.Writer) { c.stderr = writer }
+
+func (c *quickNoteEditorCommand) Run() error {
+	draft, err := c.app.CreateQuickNoteDraft(c.ctx)
+	if err != nil {
+		return err
+	}
+	c.path = draft.Path
+	editor, err := c.launcher.EditorCommand(c.ctx, draft.Path)
+	if err != nil {
+		return err
+	}
+	if editor.Stdin == nil {
+		editor.Stdin = c.stdin
+	}
+	if editor.Stdout == nil {
+		editor.Stdout = c.stdout
+	}
+	if editor.Stderr == nil {
+		editor.Stderr = c.stderr
+	}
+	return editor.Run()
+}
+
+func finalizeQuickNoteDraftCmd(ctx context.Context, app App, path, fromSelector string) tea.Cmd {
 	return func() tea.Msg {
-		result, err := app.CreateQuickNote(ctx, fromSelector)
-		if err != nil {
-			return noteCreatedMsg{err: err, quickNote: true}
-		}
-		editor, editorErr := launcher.EditorCommand(ctx, result.Document.Path)
-		if editorErr != nil {
-			return noteCreatedMsg{document: result.Document, err: editorErr, quickNote: true}
-		}
-		return noteCreatedMsg{document: result.Document, command: editor, quickNote: true}
+		result, err := app.FinalizeQuickNoteDraft(ctx, path, fromSelector)
+		return quickNoteFinalizedMsg{result: result, err: err}
 	}
 }
 
-func finalizeQuickNoteCmd(ctx context.Context, app App, selector string) tea.Cmd {
+func nameQuickNoteCmd(ctx context.Context, app App, selector string) tea.Cmd {
 	return func() tea.Msg {
-		// Pick up body edits before naming.
-		if err := app.ReindexDocument(ctx, membox.ReindexDocumentCommand{Selector: selector}); err != nil {
-			return quickNoteFinalizedMsg{err: err}
-		}
 		result, err := app.FinalizeQuickNote(ctx, selector)
-		return quickNoteFinalizedMsg{result: result, err: err}
+		return quickNoteNamedMsg{result: result, err: err}
 	}
 }
 func togglePinCmd(ctx context.Context, app App, selector string) tea.Cmd {

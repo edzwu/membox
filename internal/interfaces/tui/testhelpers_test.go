@@ -45,11 +45,11 @@ type fakeApp struct {
 	pdfProgress        []membox.PDFConversionProgress
 
 	// Web Companion control knobs for tests.
-	webRunning      bool
-	webDirtyTabs    int
-	webTabs         int
-	webMode         string
-	webOnExit       string
+	webRunning     bool
+	webDirtyTabs   int
+	webTabs        int
+	webMode        string
+	webOnExit      string
 	webEnsureErr   error
 	webStopErr     error
 	webEnsureCalls int
@@ -158,13 +158,16 @@ func (f *fakeApp) CreateNote(_ context.Context, command membox.CreateNoteCommand
 	}
 	return result, nil
 }
-func (f *fakeApp) CreateQuickNote(_ context.Context, fromSelector string) (membox.CreateNoteResult, error) {
-	document := membox.DocumentView{ID: "quick-note", Title: "Untitled", Path: "/tmp/untitled.md", RelativePath: "untitled.md", Status: "active"}
-	result := membox.CreateNoteResult{Document: document}
-	if fromSelector != "" {
-		result.Link = &membox.LinkView{FromDocumentID: fromSelector, ToDocumentID: document.ID, Kind: "manual"}
-	}
-	return result, nil
+func (f *fakeApp) CreateQuickNoteDraft(context.Context) (membox.QuickNoteDraftView, error) {
+	return membox.QuickNoteDraftView{Path: "/tmp/untitled-draft.md"}, nil
+}
+func (f *fakeApp) FinalizeQuickNoteDraft(_ context.Context, _ string, _ string) (membox.FinalizeQuickNoteResult, error) {
+	return membox.FinalizeQuickNoteResult{
+		Document: membox.DocumentView{ID: "quick-note", Title: "Named", Path: "/tmp/named.md", RelativePath: "named.md", Status: "active"},
+		Path:     "/tmp/named.md",
+		Title:    "Named",
+		Filename: "named.md",
+	}, nil
 }
 func (f *fakeApp) FinalizeQuickNote(_ context.Context, selector string) (membox.FinalizeQuickNoteResult, error) {
 	return membox.FinalizeQuickNoteResult{
@@ -326,4 +329,3 @@ func (f *fakeApp) StopWeb(context.Context) error {
 	f.webRunning = false
 	return nil
 }
-

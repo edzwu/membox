@@ -53,7 +53,8 @@ type App interface {
 	ConvertPDF(context.Context, membox.ConvertPDFCommand) (membox.ConvertPDFResult, error)
 	SetPDFConverterServer(context.Context, string) (membox.PDFConverterConfigView, error)
 	CreateNote(context.Context, membox.CreateNoteCommand) (membox.CreateNoteResult, error)
-	CreateQuickNote(context.Context, string) (membox.CreateNoteResult, error)
+	CreateQuickNoteDraft(context.Context) (membox.QuickNoteDraftView, error)
+	FinalizeQuickNoteDraft(context.Context, string, string) (membox.FinalizeQuickNoteResult, error)
 	FinalizeQuickNote(context.Context, string) (membox.FinalizeQuickNoteResult, error)
 	CreateTopic(context.Context, membox.CreateTopicCommand) (membox.CreateTopicResult, error)
 	ListTopics(context.Context, membox.ListTopicsQuery) ([]membox.TopicView, error)
@@ -272,7 +273,7 @@ type previewMsg struct {
 	content    string // raw Markdown (or plain placeholder)
 	rendered   string // pre-rendered ANSI at width (may be empty on error path)
 	width      int
-	size       int64  // source size used for cache invalidation
+	size       int64 // source size used for cache invalidation
 	generation uint64
 	err        error
 }
@@ -287,13 +288,18 @@ type editReadyMsg struct {
 	err      error
 }
 type editorDoneMsg struct {
-	selector  string
-	viewer    bool
-	quickNote bool
-	err       error
+	selector      string
+	viewer        bool
+	quickNotePath string
+	quickNoteFrom string
+	err           error
 }
 type reindexMsg struct{ err error }
 type quickNoteFinalizedMsg struct {
+	result membox.FinalizeQuickNoteResult
+	err    error
+}
+type quickNoteNamedMsg struct {
 	result membox.FinalizeQuickNoteResult
 	err    error
 }
@@ -310,10 +316,9 @@ type openWebMsg struct {
 }
 
 type noteCreatedMsg struct {
-	document  membox.DocumentView
-	command   *exec.Cmd
-	quickNote bool
-	err       error
+	document membox.DocumentView
+	command  *exec.Cmd
+	err      error
 }
 type summarizeDoneMsg struct {
 	documentID string
@@ -698,13 +703,15 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = msg.err
 		if msg.err == nil && !msg.viewer {
 			m.loading = true
-			if msg.quickNote {
-				// Scratch notes (ctrl+n): reindex is folded into finalize so the
-				// body is fresh before H1 / mmd naming runs.
-				commands = append(commands, m.spinner.Tick, finalizeQuickNoteCmd(m.ctx, m.app, msg.selector))
+			if msg.quickNotePath != "" {
+				commands = append(commands, m.spinner.Tick, finalizeQuickNoteDraftCmd(
+					m.ctx, m.app, msg.quickNotePath, msg.quickNoteFrom,
+				))
 			} else {
 				commands = append(commands, m.spinner.Tick, reindexCmd(m.ctx, m.app, msg.selector))
 			}
+		} else if msg.quickNotePath != "" {
+			m.statusMessage = "quick note draft kept: " + filepath.Base(msg.quickNotePath)
 		}
 		// Returning from the viewer keeps the thread tree on its original
 		// focus — opening a linked document never re-roots the tree.
@@ -716,19 +723,29 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			break
 		}
 		if msg.result.Deleted {
-			m.removeDeletedDocument(msg.result.Document.ID)
 			m.statusMessage = "empty note discarded"
 			commands = append(commands, m.loadPreview(), listDocumentsCmd(m.ctx, m.app, m.listSequence))
 			break
 		}
-		// Refresh list then select the renamed note.
+		m.statusMessage = shortID(msg.result.Document.ID) + " " + msg.result.Filename
+		commands = append(commands, m.loadPreview(), listDocumentsCmd(m.ctx, m.app, m.listSequence))
+		m.pendingSelectID = msg.result.Document.ID
+		if msg.result.NeedsNaming {
+			m.statusMessage += " · naming in background…"
+			commands = append(commands, nameQuickNoteCmd(m.ctx, m.app, msg.result.Document.ID))
+		}
+	case quickNoteNamedMsg:
+		if msg.err != nil {
+			m.statusMessage = "quick note saved · background naming failed: " + msg.err.Error()
+			break
+		}
 		m.statusMessage = shortID(msg.result.Document.ID) + " " + msg.result.Filename
 		if msg.result.UsedLLM {
 			m.statusMessage += " · named by mmd"
 		}
-		commands = append(commands, m.loadPreview(), listDocumentsCmd(m.ctx, m.app, m.listSequence))
-		// Stash desired selection; listDocumentsMsg will restore by id when possible.
-		m.pendingSelectID = msg.result.Document.ID
+		// Refresh the filename without forcing focus back to this note: mmd may
+		// finish after the user has already moved elsewhere in the tree.
+		commands = append(commands, listDocumentsCmd(m.ctx, m.app, m.listSequence))
 	case reindexMsg:
 		m.loading, m.err = false, msg.err
 		if msg.err == nil {
@@ -776,11 +793,10 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusMessage = shortID(msg.document.ID) + " " + filepath.Base(msg.document.Path)
 			m.clearExecutedCommand()
 			if msg.command != nil {
-				// The note is opened in the editor (vim), not a viewer: on wq the
-				// standard edit-completion path runs (reindex + list refresh),
-				// or quick-note finalize when created via ctrl+n.
+				// Regular created notes are already indexed; on wq the standard
+				// edit-completion path refreshes their catalog body.
 				return m, tea.ExecProcess(msg.command, func(err error) tea.Msg {
-					return editorDoneMsg{selector: msg.document.ID, viewer: false, quickNote: msg.quickNote, err: err}
+					return editorDoneMsg{selector: msg.document.ID, viewer: false, err: err}
 				})
 			}
 		}

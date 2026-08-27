@@ -267,40 +267,37 @@ func (s *Service) CreateNote(ctx context.Context, opts CreateNoteOptions) (Creat
 	if err := s.writer.WriteNew(ctx, absolute, body); err != nil {
 		return CreateNoteResult{}, err
 	}
-	// The note is verified by path below, not by the scan's add/update split:
-	// when the file already existed in the catalog (e.g. deleted externally and
-	// recreated, or a rename matched it), the scan reports Updated instead of
-	// Added — the note is still correctly indexed.
-	relative, err := filepath.Rel(indexedPath.Root, absolute)
-	if err != nil {
-		return CreateNoteResult{}, err
-	}
 	// Fast path: index exactly the freshly written file instead of walking the
 	// whole directory on every clip (`mm path scan` still does the full walk).
-	// Fall back to the full scan when the single-file observation fails or the
-	// path turns out to be cataloged (external recreation / rename matched it).
+	// When it succeeds, keep the returned document — reloading every document
+	// in the path merely to find this one made quick-note creation O(corpus).
 	created, fastErr := s.indexNewFile(ctx, indexedPath, absolute)
 	if created == nil {
+		// The fallback scan may report an update rather than an add when an
+		// externally recreated path matched catalog history, so resolve by path.
 		if _, scanErr := s.scanOne(ctx, indexedPath); scanErr != nil {
 			if fastErr != nil {
 				return CreateNoteResult{}, errors.Join(fastErr, scanErr)
 			}
 			return CreateNoteResult{}, scanErr
 		}
-	}
-	documents, err := s.store.DocumentsForPath(ctx, indexedPath.ID)
-	if err != nil {
-		return CreateNoteResult{}, err
-	}
-	created = nil
-	for _, document := range documents {
-		if document.Location.RelativePath == filepath.ToSlash(relative) && document.Status == catalog.DocumentActive {
-			created = document
-			break
+		relative, relErr := filepath.Rel(indexedPath.Root, absolute)
+		if relErr != nil {
+			return CreateNoteResult{}, relErr
 		}
-	}
-	if created == nil {
-		return CreateNoteResult{}, fmt.Errorf("created note %q was not indexed", absolute)
+		documents, listErr := s.store.DocumentsForPath(ctx, indexedPath.ID)
+		if listErr != nil {
+			return CreateNoteResult{}, listErr
+		}
+		for _, document := range documents {
+			if document.Location.RelativePath == filepath.ToSlash(relative) && document.Status == catalog.DocumentActive {
+				created = document
+				break
+			}
+		}
+		if created == nil {
+			return CreateNoteResult{}, fmt.Errorf("created note %q was not indexed", absolute)
+		}
 	}
 	result := CreateNoteResult{Document: created, Path: absolute}
 	if from != nil {
@@ -337,6 +334,10 @@ func (s *Service) CreateNote(ctx context.Context, opts CreateNoteOptions) (Creat
 // When the observation fails the caller falls back to a full scan so the
 // note is still indexed with identical semantics to before.
 func (s *Service) indexNewFile(ctx context.Context, indexedPath *catalog.IndexedPath, absolute string) (*catalog.Document, error) {
+	return s.indexNewFileWithTitle(ctx, indexedPath, absolute, "")
+}
+
+func (s *Service) indexNewFileWithTitle(ctx context.Context, indexedPath *catalog.IndexedPath, absolute, title string) (*catalog.Document, error) {
 	relative, err := filepath.Rel(indexedPath.Root, absolute)
 	if err != nil {
 		return nil, fmt.Errorf("relating note path: %w", err)
@@ -348,6 +349,9 @@ func (s *Service) indexNewFile(ctx context.Context, indexedPath *catalog.Indexed
 	observation, err := s.scanner.ObserveFile(ctx, location, absolute)
 	if err != nil {
 		return nil, err
+	}
+	if title = strings.TrimSpace(title); title != "" {
+		observation.Title = title
 	}
 	id, err := s.ids.NewDocumentID()
 	if err != nil {

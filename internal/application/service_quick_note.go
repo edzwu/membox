@@ -22,12 +22,13 @@ type NoteTitleNamer interface {
 // FinalizeQuickNoteResult is the outcome of naming a scratch note after the
 // editor closes (ctrl+n → vim → :wq).
 type FinalizeQuickNoteResult struct {
-	Document *catalog.Document
-	Path     string
-	Title    string
-	Filename string
-	Deleted  bool
-	UsedLLM  bool
+	Document    *catalog.Document
+	Path        string
+	Title       string
+	Filename    string
+	Deleted     bool
+	UsedLLM     bool
+	NeedsNaming bool
 }
 
 // FinalizeQuickNote renames a scratch note from its body:

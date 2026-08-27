@@ -1467,51 +1467,67 @@ func TestModel_UnpinMovesCursorToNextPinnedDocument(t *testing.T) {
 	}
 }
 
-func TestCtrlNStartsQuickNote(t *testing.T) {
+func TestQuickNoteProseNamingRunsInBackground(t *testing.T) {
 	model := New(context.Background(), &fakeApp{}, fakeLauncher{})
+	model.items = documentItems([]membox.DocumentView{
+		{ID: "doc-1", Title: "Existing", Path: "/tmp/existing.md", RelativePath: "existing.md", Status: "active"},
+	})
+	model.refreshFilter()
+	updated, cmd := model.Update(quickNoteFinalizedMsg{result: membox.FinalizeQuickNoteResult{
+		Document:    membox.DocumentView{ID: "quick-note", Title: "Note 2026", Path: "/tmp/note-2026.md", Status: "active"},
+		Filename:    "note-2026.md",
+		NeedsNaming: true,
+	}})
+	model = updated.(Model)
+	if model.loading {
+		t.Fatal("background naming must not keep the TUI loading")
+	}
+	if !strings.Contains(model.statusMessage, "naming in background") {
+		t.Fatalf("status=%q", model.statusMessage)
+	}
+	if cmd == nil {
+		t.Fatal("expected background naming command")
+	}
+	found := false
+	if batch, ok := cmd().(tea.BatchMsg); ok {
+		for _, sub := range batch {
+			if sub == nil {
+				continue
+			}
+			if _, ok := sub().(quickNoteNamedMsg); ok {
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
+		t.Fatal("quick-note finalization did not schedule background mmd naming")
+	}
+}
+
+func TestCtrlNHandsTerminalDirectlyToQuickNoteEditor(t *testing.T) {
+	app := &fakeApp{}
+	model := New(context.Background(), app, fakeLauncher{})
 	model.items = documentItems([]membox.DocumentView{
 		{ID: "doc-1", Title: "Existing", Path: "/tmp/existing.md", RelativePath: "existing.md", Status: "active"},
 	})
 	model.refreshFilter()
 	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
 	model = updated.(Model)
-	if !model.loading {
-		t.Fatal("ctrl+n should set loading")
+	if model.loading {
+		t.Fatal("ctrl+n should hand off the terminal instead of showing a loading phase")
 	}
 	if cmd == nil {
-		t.Fatal("ctrl+n should schedule createQuickNoteCmd")
+		t.Fatal("ctrl+n should schedule a direct editor exec")
 	}
-	// Batch(spinner, createQuickNoteCmd) — find the noteCreatedMsg producer.
-	var created noteCreatedMsg
-	found := false
-	msg := cmd()
-	switch batch := msg.(type) {
-	case noteCreatedMsg:
-		created, found = batch, true
-	case tea.BatchMsg:
-		for _, sub := range batch {
-			if sub == nil {
-				continue
-			}
-			if c, ok := sub().(noteCreatedMsg); ok {
-				created, found = c, true
-				break
-			}
-		}
+
+	// The ExecCommand itself reserves the draft after Bubble Tea releases the
+	// terminal, then starts the editor without an intermediate model render.
+	executor := &quickNoteEditorCommand{ctx: context.Background(), app: app, launcher: fakeLauncher{}}
+	if err := executor.Run(); err != nil {
+		t.Fatal(err)
 	}
-	if !found {
-		t.Fatalf("expected noteCreatedMsg in ctrl+n command batch, got %T", msg)
-	}
-	if created.err != nil {
-		t.Fatal(created.err)
-	}
-	if !created.quickNote {
-		t.Fatal("expected quickNote=true")
-	}
-	if created.document.ID != "quick-note" {
-		t.Fatalf("document=%+v", created.document)
-	}
-	if created.command == nil {
-		t.Fatal("expected editor command")
+	if executor.path != "/tmp/untitled-draft.md" {
+		t.Fatalf("draft path=%q", executor.path)
 	}
 }

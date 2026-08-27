@@ -128,6 +128,127 @@ func TestFinalizeQuickNoteTrashesEmpty(t *testing.T) {
 	}
 }
 
+func TestQuickNoteDraftDefersIndexUntilEditorExit(t *testing.T) {
+	service, _ := newQuickNoteService(t)
+	ctx := context.Background()
+
+	draft, err := service.CreateQuickNoteDraft(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(filepath.Base(draft.Path), "untitled-") {
+		t.Fatalf("draft path=%q", draft.Path)
+	}
+	documents, err := service.ListDocuments(ctx, 10, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(documents) != 0 {
+		t.Fatalf("draft should not be indexed before editor exit: %+v", documents)
+	}
+
+	if err := os.WriteFile(draft.Path, []byte("# Fast Capture\n\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.FinalizeQuickNoteDraft(ctx, draft.Path, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.NeedsNaming || result.UsedLLM || result.Deleted {
+		t.Fatalf("unexpected flags: %+v", result)
+	}
+	if result.Filename != "fast-capture.md" || result.Title != "Fast Capture" {
+		t.Fatalf("finalized=%+v", result)
+	}
+	if result.Document == nil || result.Document.Index.Title != "Fast Capture" {
+		t.Fatalf("indexed document=%+v", result.Document)
+	}
+	if _, err := os.Stat(draft.Path); !os.IsNotExist(err) {
+		t.Fatalf("draft path should have moved: %v", err)
+	}
+}
+
+func TestQuickNoteDraftLinksSelectedSourceAfterPublish(t *testing.T) {
+	service, _ := newQuickNoteService(t)
+	ctx := context.Background()
+	source, err := service.CreateNote(ctx, application.CreateNoteOptions{Title: "Source", Body: "# Source\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft, err := service.CreateQuickNoteDraft(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(draft.Path, []byte("# Linked Capture\n\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	published, err := service.FinalizeQuickNoteDraft(ctx, draft.Path, string(source.Document.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, graph, err := service.GetDocumentGraph(ctx, string(source.Document.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(graph.Outgoing) != 1 || published.Document == nil || graph.Outgoing[0].Document.ID != published.Document.ID {
+		t.Fatalf("source graph=%+v published=%+v", graph, published)
+	}
+}
+
+func TestQuickNoteDraftNamesProseInBackground(t *testing.T) {
+	service, _ := newQuickNoteService(t)
+	ctx := context.Background()
+	draft, err := service.CreateQuickNoteDraft(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(draft.Path, []byte("prefill is compute-bound; decode is memory-bound.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	published, err := service.FinalizeQuickNoteDraft(ctx, draft.Path, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !published.NeedsNaming || published.UsedLLM || published.Document == nil {
+		t.Fatalf("prose draft should publish before LLM naming: %+v", published)
+	}
+
+	namer := &stubNamer{title: "Prefill vs Decode"}
+	named, err := service.FinalizeQuickNote(ctx, string(published.Document.ID), namer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if namer.calls != 1 || !named.UsedLLM || named.Filename != "prefill-vs-decode.md" {
+		t.Fatalf("background naming=%+v calls=%d", named, namer.calls)
+	}
+}
+
+func TestQuickNoteDraftDiscardsEmptyWithoutIndexing(t *testing.T) {
+	service, _ := newQuickNoteService(t)
+	ctx := context.Background()
+	draft, err := service.CreateQuickNoteDraft(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.FinalizeQuickNoteDraft(ctx, draft.Path, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Deleted || result.Document != nil {
+		t.Fatalf("empty draft result=%+v", result)
+	}
+	if _, err := os.Stat(draft.Path); !os.IsNotExist(err) {
+		t.Fatalf("empty draft should be removed: %v", err)
+	}
+	documents, err := service.ListDocuments(ctx, 10, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(documents) != 0 {
+		t.Fatalf("empty draft leaked into catalog: %+v", documents)
+	}
+}
+
 func TestQuickNoteTitlePrompt(t *testing.T) {
 	prompt := application.QuickNoteTitlePrompt("body text here")
 	if !strings.Contains(prompt, "body text here") {
