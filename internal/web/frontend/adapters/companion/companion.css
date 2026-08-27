@@ -7,36 +7,26 @@
   flex: 0 0 auto;
   display: inline-flex;
   align-items: stretch;
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--paper-raised);
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .membox-document-navigation[hidden] {
   display: none;
 }
 
-.membox-document-navigation:focus-within,
-.membox-document-navigation:has(.membox-document-switcher.is-open) {
-  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-soft) 54%, transparent);
-}
-
 .membox-document-switcher {
   appearance: none;
-  width: 34px;
-  height: 34px;
+  width: 36px;
+  height: 36px;
   padding: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  flex: 0 0 34px;
+  flex: 0 0 36px;
   border: 0;
+  border-radius: var(--radius);
   background: transparent;
-  color: var(--ink-soft);
+  color: var(--muted);
   font-family: var(--font-sans);
   cursor: pointer;
   transition: color 0.15s ease, background 0.15s ease;
@@ -50,13 +40,13 @@
 .membox-document-switcher:focus-visible,
 .membox-document-switcher.is-open {
   color: var(--accent);
-  background: color-mix(in srgb, var(--accent-soft) 52%, transparent);
+  background: var(--accent-soft);
   outline: none;
 }
 
 .membox-document-switcher-icon {
-  width: 19px;
-  height: 19px;
+  width: 17px;
+  height: 17px;
   color: currentColor;
   flex: 0 0 auto;
 }

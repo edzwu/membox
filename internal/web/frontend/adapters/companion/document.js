@@ -36,10 +36,10 @@ function createDocumentSwitcher() {
   button.setAttribute('aria-expanded', 'false');
   button.innerHTML = `
     <svg class="membox-document-switcher-icon" viewBox="0 0 24 24" aria-hidden="true">
-      <rect x="4" y="4" width="6" height="6" rx="1.25" fill="currentColor"/>
-      <rect x="14" y="4" width="6" height="6" rx="1.25" fill="currentColor"/>
-      <rect x="4" y="14" width="6" height="6" rx="1.25" fill="currentColor"/>
-      <rect x="14" y="14" width="6" height="6" rx="1.25" fill="currentColor"/>
+      <rect x="4" y="4" width="6" height="6" rx="1.25" fill="none" stroke="currentColor" stroke-width="1.7"/>
+      <rect x="14" y="4" width="6" height="6" rx="1.25" fill="none" stroke="currentColor" stroke-width="1.7"/>
+      <rect x="4" y="14" width="6" height="6" rx="1.25" fill="none" stroke="currentColor" stroke-width="1.7"/>
+      <rect x="14" y="14" width="6" height="6" rx="1.25" fill="none" stroke="currentColor" stroke-width="1.7"/>
     </svg>`;
   documentNavigation.appendChild(button);
   return button;
