@@ -27,6 +27,12 @@ let relatedSearchController = null;
 let relatedSearchGeneration = 0;
 let relatedLoadGeneration = 0;
 
+function notifyDocumentPickerState(open) {
+  window.dispatchEvent(new CustomEvent('membox-document-picker-state', {
+    detail: { open: Boolean(open) },
+  }));
+}
+
 function createRelatedPanel() {
   const panel = document.createElement('div');
   panel.className = 'membox-related';
@@ -354,6 +360,7 @@ function openPicker(purpose) {
   relatedModal.bodyInput.value = '';
   selectedRelatedCandidate = null;
   relatedModal.backdrop.hidden = false;
+  notifyDocumentPickerState(pickerPurpose === 'open');
   setRelatedModalMode('existing');
   renderRelatedOptions([], 'Loading files…');
   void searchRelatedCandidates('');
@@ -377,10 +384,12 @@ export function handleOpenShortcut() {
 }
 
 function closeRelatedModal() {
+  const documentPickerWasOpen = pickerPurpose === 'open' && !relatedModal.backdrop.hidden;
   window.clearTimeout(relatedSearchTimer);
   if (relatedSearchController) relatedSearchController.abort();
   relatedSearchGeneration++;
   relatedModal.backdrop.hidden = true;
+  if (documentPickerWasOpen) notifyDocumentPickerState(false);
 }
 
 function submitPickerSelection() {

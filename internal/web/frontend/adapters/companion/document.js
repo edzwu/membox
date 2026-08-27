@@ -31,16 +31,14 @@ function createDocumentSwitcher() {
   button.className = 'membox-document-switcher';
   button.hidden = true;
   button.title = 'Switch document · Ctrl+O';
-  button.setAttribute('aria-label', 'Switch document');
+  button.setAttribute('aria-label', 'Open document');
+  button.setAttribute('aria-haspopup', 'dialog');
+  button.setAttribute('aria-expanded', 'false');
   button.innerHTML = `
     <svg class="membox-document-switcher-icon" viewBox="0 0 24 24" aria-hidden="true">
       <path d="M7 7V5a2 2 0 0 1 2-2h8l3 3v11a2 2 0 0 1-2 2h-2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
       <rect x="4" y="7" width="12" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/>
       <path d="M7 12h6M7 16h6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-    </svg>
-    <span class="membox-document-switcher-label">Open document</span>
-    <svg class="membox-document-switcher-chevron" viewBox="0 0 16 16" aria-hidden="true">
-      <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
     </svg>`;
   documentNavigation.appendChild(button);
   return button;
@@ -51,8 +49,7 @@ export function renderDocumentSwitcher() {
   documentSwitcher.hidden = !session.connected;
   const liveTitle = document.getElementById('doc-title')?.textContent?.replace(/\s+/g, ' ').trim();
   const title = liveTitle || state.docTitle || 'Open document';
-  documentSwitcher.querySelector('.membox-document-switcher-label').textContent = title;
-  documentSwitcher.setAttribute('aria-label', session.documentID ? `Switch document from ${title}` : 'Open document');
+  documentSwitcher.setAttribute('aria-label', session.documentID ? `Switch document: ${title}` : 'Open document');
 }
 
 export function replaceDocumentID(id) {
@@ -206,6 +203,11 @@ export function initDocumentUI({ onOpenPicker }) {
 
   documentSwitcher = createDocumentSwitcher();
   documentSwitcher.addEventListener('click', onOpenPicker);
+  window.addEventListener('membox-document-picker-state', (event) => {
+    const open = Boolean(event.detail?.open);
+    documentSwitcher.classList.toggle('is-open', open);
+    documentSwitcher.setAttribute('aria-expanded', String(open));
+  });
 
   new MutationObserver(renderDocumentSwitcher).observe(elements.article, {
     childList: true,
