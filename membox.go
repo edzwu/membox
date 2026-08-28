@@ -257,7 +257,11 @@ func (b *Box) OpenDocumentWeb(ctx context.Context, selector string) (string, err
 	if err != nil {
 		return "", err
 	}
-	return status.URL + "/?id=" + url.QueryEscape(b.ShortID(ctx, string(document.ID))), nil
+	// Use the full physical UUID: the companion caches its logical-id map
+	// and never learns about documents created by other processes (e.g. a
+	// CLI `mm doc new`), so short ids can 404 until the cache is rebuilt.
+	// Full ids resolve via the primary-key fast path, always fresh.
+	return status.URL + "/?id=" + url.QueryEscape(string(document.ID)), nil
 }
 
 type PathView struct {

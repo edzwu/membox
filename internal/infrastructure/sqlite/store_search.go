@@ -256,7 +256,25 @@ func (s *Store) ResolveDocument(ctx context.Context, selector string) (*catalog.
 	}
 	s.logicalMu.RUnlock()
 	if err != nil {
-		return nil, "", err
+		// The logical-id map is cached per process and only invalidated by
+		// local writes; documents created by other processes (CLI, mmd) stay
+		// invisible until a rebuild. Retry once with a fresh map before
+		// declaring the selector unknown.
+		s.invalidateLogicalIDs()
+		if rerr := s.ensureLogicalIDs(ctx); rerr != nil {
+			return nil, "", rerr
+		}
+		s.logicalMu.RLock()
+		physical, exactLogical = s.physicalByLogical[selector]
+		if exactLogical {
+			err = nil
+		} else {
+			physical, err = catalog.MatchLogicalSelector(selector, s.logicalByPhys)
+		}
+		s.logicalMu.RUnlock()
+		if err != nil {
+			return nil, "", err
+		}
 	}
 	doc, path, err := s.getDocumentByID(ctx, physical)
 	if err != nil {
