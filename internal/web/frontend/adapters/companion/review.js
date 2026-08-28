@@ -8,9 +8,10 @@ import { onRender } from './events.js';
 
 const REVIEW_ICON =
   '<svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">' +
-  '<path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" ' +
-  'd="M9 4h8a3 3 0 0 1 3 3v8"/>' +
-  '<rect x="4" y="9" width="11" height="11" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.7"/>' +
+  '<circle cx="5" cy="8" r="1.5" fill="currentColor"/>' +
+  '<path d="M8.5 8H19M5 16h10.5" fill="none" stroke="currentColor" ' +
+  'stroke-width="1.7" stroke-linecap="round"/>' +
+  '<circle cx="19" cy="16" r="1.5" fill="currentColor"/>' +
   '</svg>';
 
 const REPLY_ICON =
