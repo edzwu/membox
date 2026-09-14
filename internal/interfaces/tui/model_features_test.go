@@ -287,6 +287,73 @@ func TestModel_CtrlRImmediatelyFocusesPDFImportedByCompanion(t *testing.T) {
 	}
 }
 
+func TestModel_StartupSettingsTriggerBackgroundScan(t *testing.T) {
+	app := &fakeApp{}
+	model := New(context.Background(), app, fakeLauncher{})
+	model.width, model.height = 100, 20
+
+	updated, command := model.Update(settingsMsg{settings: []membox.SettingView{
+		{Key: "scan_on_start", Label: "scan on start", Value: "background", Options: []string{"background", "off"}},
+	}})
+	model = updated.(Model)
+	if command == nil {
+		t.Fatal("scan_on_start=background did not schedule a startup scan")
+	}
+	if !model.scanning || model.statusMessage != "scanning…" {
+		t.Fatalf("startup scan state: scanning=%v status=%q", model.scanning, model.statusMessage)
+	}
+	if model.startupScanPending {
+		t.Fatal("startup scan should be armed exactly once")
+	}
+
+	// The batched command (spinner + reload + scan) must include scanMsg.
+	found := false
+	if batch, ok := command().(tea.BatchMsg); ok {
+		for _, cmd := range batch {
+			if cmd == nil {
+				continue
+			}
+			if _, ok := cmd().(scanMsg); ok {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatal("startup scan batch did not include scanMsg")
+	}
+	if app.scanCount == 0 {
+		t.Fatal("startup scan did not reach the app")
+	}
+
+	// A later settings reload (e.g. after a config change) must not rescan.
+	scans := app.scanCount
+	updated, command = model.Update(settingsMsg{settings: []membox.SettingView{
+		{Key: "scan_on_start", Label: "scan on start", Value: "background", Options: []string{"background", "off"}},
+	}})
+	model = updated.(Model)
+	_ = model
+	if command != nil || app.scanCount != scans {
+		t.Fatal("startup scan fired more than once")
+	}
+}
+
+func TestModel_StartupScanDisabledBySetting(t *testing.T) {
+	app := &fakeApp{}
+	model := New(context.Background(), app, fakeLauncher{})
+	model.width, model.height = 100, 20
+
+	updated, command := model.Update(settingsMsg{settings: []membox.SettingView{
+		{Key: "scan_on_start", Label: "scan on start", Value: "off", Options: []string{"background", "off"}},
+	}})
+	model = updated.(Model)
+	if command != nil || model.scanning || app.scanCount != 0 {
+		t.Fatalf("scan_on_start=off should not scan: cmd=%v scanning=%v count=%d", command != nil, model.scanning, app.scanCount)
+	}
+	if model.startupScanPending {
+		t.Fatal("startup scan decision should be consumed even when disabled")
+	}
+}
+
 func TestModel_ConfigPanelSelectAndConfirm(t *testing.T) {
 	app := &fakeApp{}
 	model := New(context.Background(), app, fakeLauncher{})

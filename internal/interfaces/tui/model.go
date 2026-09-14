@@ -228,6 +228,11 @@ type Model struct {
 	helpVisible         bool
 	helpScroll          int
 
+	// startupScanPending arms the one-shot background scan: the first
+	// settingsMsg (from Init) decides via scan_on_start whether the catalog
+	// is refreshed from the filesystem after the initial SQLite render.
+	startupScanPending bool
+
 	// Web Companion control plane mirror plus the quit-time lifecycle prompt.
 	web           webState
 	webQuitPrompt bool
@@ -426,7 +431,7 @@ func New(ctx context.Context, app App, launcher host.Launcher) Model {
 	spin := spinner.New()
 	spin.Spinner = spinner.Dot
 	vp := viewport.New(40, 10)
-	model := Model{ctx: ctx, app: app, launcher: launcher, input: input, spinner: spin, preview: vp, searchMode: searchModeName, inputMode: inputModeSearch, mediaScope: mediaScopeAll, viewMode: viewTree, viewerMode: "leaf", summarizing: map[string]bool{}, web: webState{}, agent: newAgentUIState()}
+	model := Model{ctx: ctx, app: app, launcher: launcher, input: input, spinner: spin, preview: vp, searchMode: searchModeName, inputMode: inputModeSearch, mediaScope: mediaScopeAll, viewMode: viewTree, viewerMode: "leaf", summarizing: map[string]bool{}, web: webState{}, agent: newAgentUIState(), startupScanPending: true}
 	model.web.starting = true
 	model.preview.SetContent(previewPlaceholder("Loading documents…"))
 	return model
@@ -547,6 +552,18 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			m.refreshFilter()
+			// Lazy scan on entry: the tree is already rendering from SQLite, so
+			// a background scan can pick up external edits without blocking
+			// startup. Only the first settings load triggers it.
+			if m.startupScanPending {
+				m.startupScanPending = false
+				for _, setting := range msg.settings {
+					if setting.Key == "scan_on_start" && setting.Value == "background" {
+						commands = append(commands, m.startScan())
+						break
+					}
+				}
+			}
 		}
 	case settingSavedMsg:
 		m.loading, m.err = false, msg.err

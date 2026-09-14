@@ -32,20 +32,28 @@ var settingSpecs = []Setting{
 	{Key: SettingMainPath, Label: "main path", Value: "", Options: nil},
 	{Key: SettingHideNotes, Label: "hide notes", Value: "on", Options: []string{"on", "off"}},
 	{Key: SettingWebOnExit, Label: "web on exit", Value: OnExitAsk, Options: []string{OnExitAsk, OnExitStop, OnExitKeep}},
+	{Key: SettingScanOnStart, Label: "scan on start", Value: ScanOnStartBackground, Options: []string{ScanOnStartBackground, ScanOnStartOff}},
 }
 
 const (
-	ViewerLeaf       = "leaf"
-	ViewerWeb        = "web"
-	SettingMainPath  = "main_path"
-	SettingHideNotes = "hide_notes"
-	SettingWebOnExit = "web_on_exit"
+	ViewerLeaf         = "leaf"
+	ViewerWeb          = "web"
+	SettingMainPath    = "main_path"
+	SettingHideNotes   = "hide_notes"
+	SettingWebOnExit   = "web_on_exit"
+	SettingScanOnStart = "scan_on_start"
 
 	// Web Companion behavior after the TUI quits: ask interactively, stop the
 	// companion, or keep it running for the browser.
 	OnExitAsk  = "ask"
 	OnExitStop = "stop"
 	OnExitKeep = "keep"
+
+	// Scan-on-start behavior when the TUI opens: run a background filesystem
+	// scan after the SQLite catalog is already rendered, or skip it entirely
+	// (ctrl+r still scans manually).
+	ScanOnStartBackground = "background"
+	ScanOnStartOff        = "off"
 )
 
 // GetViewer returns the configured viewer mode, defaulting to leaf.

@@ -69,7 +69,7 @@ SQLite FTS5       rebuildable search projection
 
 Listings, TUI, and CLI show the **logical** short id. Type it left-to-right (`mm doc show ab12`). Full physical UUIDs always work. UUIDv7 time prefixes (e.g. `01a014b8…`) collide heavily, so short selectors prefer the distinguishing tail rather than the physical prefix. Physical primary keys are never rewritten.
 
-External edits are reflected after `mm path scan`. The scanner supports `.md`, `.markdown`, and `.pdf`. A conservative scanner preserves identity for unique filesystem-file-key and exact-hash renames; ambiguous matches are never automatically merged.
+External edits are reflected after `mm path scan` (or `ctrl+r` in the TUI). On startup the TUI first renders the SQLite catalog immediately, then runs a background scan so external changes appear without blocking; disable this with the `scan on start` setting (`ctrl+o` panel, values `background`/`off`). The scanner supports `.md`, `.markdown`, and `.pdf`. A conservative scanner preserves identity for unique filesystem-file-key and exact-hash renames; ambiguous matches are never automatically merged.
 
 ## PDF library
 
