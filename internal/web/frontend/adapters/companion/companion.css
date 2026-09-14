@@ -2087,6 +2087,7 @@ a.membox-agent-doc-link {
   order: 0;
   flex: 0 0 34px;
   width: 34px;
+
   position: sticky;
   /* Vertically centered against the viewport, not parked at the sheet top. */
   top: 38vh;
