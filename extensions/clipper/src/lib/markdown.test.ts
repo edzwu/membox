@@ -164,6 +164,34 @@ describe('htmlToMarkdown', () => {
     expect(markdown).not.toContain('headerlink');
     expect(markdown).not.toContain('¶');
   });
+
+  // Regression: fullstackopen clips its back-to-top UI icon as
+  // <img src="data:image/svg+xml;base64,...">. markdown-it's validateLink
+  // rejects data:image/svg+xml, so the whole image construct surfaced as a
+  // raw base64 text blob; DOMPurify strips it too (SVG = XSS vector).
+  it('drops data-URI images (page chrome like SVG icons)', () => {
+    const markdown = htmlToMarkdown(`
+      <p>Before</p>
+      <img src="data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=" alt="arrow-up" />
+      <p><a href="https://fullstackopen.com/en/part3">b Next section</a></p>
+    `);
+    expect(markdown).not.toContain('data:image');
+    expect(markdown).not.toContain('arrow-up');
+    expect(markdown).toContain('[b Next section](https://fullstackopen.com/en/part3)');
+  });
+
+  it('rescues lazy-loaded images whose real URL sits in data-src', () => {
+    const markdown = htmlToMarkdown(`
+      <img src="data:image/gif;base64,R0lGODlhAQABAAAAACw="
+           data-src="https://cdn.ex.com/real.png" alt="diagram" />
+    `);
+    expect(markdown).toBe('![diagram](https://cdn.ex.com/real.png)');
+  });
+
+  it('keeps ordinary http(s) images untouched', () => {
+    const markdown = htmlToMarkdown('<img src="https://ex.com/pic.png" alt="p" />');
+    expect(markdown).toBe('![p](https://ex.com/pic.png)');
+  });
 });
 
 describe('looksLikeMermaid', () => {
