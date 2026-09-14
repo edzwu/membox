@@ -333,6 +333,10 @@ func (s *Server) handleDocument(writer http.ResponseWriter, request *http.Reques
 		s.handleDocumentAssist(writer, request, strings.TrimSuffix(selector, "/assist"))
 		return
 	}
+	if strings.HasSuffix(selector, "/trash") {
+		s.handleDocumentTrash(writer, request, strings.TrimSuffix(selector, "/trash"))
+		return
+	}
 	if strings.HasSuffix(selector, "/summarize-document") {
 		s.handleDocumentSummarize(writer, request, strings.TrimSuffix(selector, "/summarize-document"))
 		return

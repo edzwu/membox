@@ -2080,3 +2080,68 @@ a.membox-agent-doc-link {
     height: min(68vh, calc(100vh - 88px));
   }
 }
+
+/* File action rail — vertical strip docked left of the sheet, mirroring the
+   TOC rail on the right. Quiet by default; full opacity on hover/focus. */
+.membox-file-rail {
+  order: 0;
+  flex: 0 0 34px;
+  width: 34px;
+  position: sticky;
+  top: calc(var(--topbar-height) + 52px);
+  align-self: flex-start;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  opacity: 0.45;
+  transition: opacity 0.15s ease;
+  z-index: 90;
+}
+
+.membox-file-rail:hover,
+.membox-file-rail:focus-within {
+  opacity: 1;
+}
+
+.membox-file-rail[hidden] {
+  display: none;
+}
+
+.membox-file-rail .file-action {
+  appearance: none;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--muted);
+  font-family: var(--font-serif);
+  font-size: 13px;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.membox-file-rail .file-action:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.membox-file-rail .file-action-danger:hover,
+.membox-file-rail .file-action-danger.is-armed {
+  color: #a33c2e;
+  border-color: #a33c2e;
+}
+
+.membox-file-rail .file-action-danger.is-armed {
+  background: color-mix(in srgb, #a33c2e 8%, var(--paper));
+}
+
+@media (max-width: 768px) {
+  .membox-file-rail {
+    display: none;
+  }
+}

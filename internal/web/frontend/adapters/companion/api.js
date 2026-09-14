@@ -332,3 +332,15 @@ export function postPresence(params, gone) {
     cache: 'no-store',
   });
 }
+
+export async function trashDocument(id) {
+  // Destructive action: the backend requires the Miru header so a cross-site
+  // form POST cannot trash documents. Set it explicitly (request() doesn't).
+  const response = await fetch(`/api/doc/${encodeURIComponent(id)}/trash`, {
+    method: 'POST',
+    headers: { 'X-Membox-Miru': '1' },
+    cache: 'no-store',
+  });
+  if (!response.ok) throw new Error((await response.text()).trim() || `HTTP ${response.status}`);
+  return response.json();
+}
