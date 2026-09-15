@@ -285,6 +285,50 @@ export async function streamDocSummarize(documentID, { force = false } = {}, onE
   if (buffer.trim()) consume(buffer.replace(/\r$/, ''));
 }
 
+// Full-document layout polish — NDJSON progress stream from the local mmd
+// model (or deepseek via Pi). The backend returns the optimized Markdown for
+// preview and never writes the file; applying stays with the sync path.
+export async function streamDocRewrite(documentID, { model = '' } = {}, onEvent, signal) {
+  const response = await fetch(`/api/doc/${encodeURIComponent(documentID)}/rewrite`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Membox-Miru': '1' },
+    body: JSON.stringify({ model }),
+    cache: 'no-store',
+    signal,
+  });
+  if (!response.ok) throw new Error((await response.text()).trim() || `HTTP ${response.status}`);
+  if (!response.body) throw new Error('Rewrite stream unavailable');
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let result = null;
+  const consume = (line) => {
+    if (!line.trim()) return;
+    const event = JSON.parse(line);
+    if (event.type === 'error') throw new Error(event.text || 'Rewrite failed');
+    if (event.type === 'done') {
+      result = event;
+      return;
+    }
+    onEvent(event);
+  };
+  while (true) {
+    const { value, done: eof } = await reader.read();
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !eof });
+    let newline = buffer.indexOf('\n');
+    while (newline >= 0) {
+      const line = buffer.slice(0, newline).replace(/\r$/, '');
+      buffer = buffer.slice(newline + 1);
+      consume(line);
+      newline = buffer.indexOf('\n');
+    }
+    if (eof) break;
+  }
+  if (buffer.trim()) consume(buffer.replace(/\r$/, ''));
+  if (!result) throw new Error('Rewrite stream ended without a result');
+  return result;
+}
+
 // Free Dictionary lookup — same source as ~/repo/lookup.
 export async function fetchLookup(word, { signal } = {}) {
   const response = await request(`/api/lookup?q=${encodeURIComponent(word)}`, { signal });

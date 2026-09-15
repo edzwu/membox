@@ -72,6 +72,19 @@ export async function autoCreateForAnnotations() {
 }
 
 export async function syncToMembox() {
+  return syncCurrent({ forceBoundIdentity: false });
+}
+
+/* Replace the bound document's Markdown in place (same UUID). For flows that
+   intentionally rewrite content — e.g. the layout-polish preview's 「应用」 —
+   where the paste heuristic (body === loadedMarkdown) would wrongly create a
+   new document. Callers must restore annotations onto the new text first, so
+   the replace-sidecar still carries every note. */
+export async function syncReplacementToMembox() {
+  return syncCurrent({ forceBoundIdentity: true });
+}
+
+async function syncCurrent({ forceBoundIdentity }) {
   if (session.syncing) return;
   const body = state.currentMarkdown || '';
   if (!body.trim()) {
@@ -87,7 +100,10 @@ export async function syncToMembox() {
 
   // A paste/drop over a loaded document is a new note, not an implicit
   // overwrite. Explicitly loaded content keeps its UUID while unchanged.
-  const id = session.documentID && body === session.loadedMarkdown ? session.documentID : '';
+  // Deliberate rewrite flows (layout polish) opt out via forceBoundIdentity.
+  const id = session.documentID && (forceBoundIdentity || body === session.loadedMarkdown)
+    ? session.documentID
+    : '';
   const title = (state.docTitle || '').trim() || 'Untitled';
   const savedSessionId = state.annotationSessionId;
   const savedVersion = state.annotationVersion;

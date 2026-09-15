@@ -2147,3 +2147,184 @@ a.membox-agent-doc-link {
     display: none;
   }
 }
+
+/* --- Layout polish (magic wand) --- */
+
+.polish-action.is-running svg {
+  animation: polish-spin 1.1s linear infinite;
+}
+
+@keyframes polish-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Bottom confirm bar while previewing the optimized render. */
+.polish-bar {
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(720px, calc(100vw - 48px));
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--paper-raised, var(--paper));
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  box-shadow: 0 6px 24px rgb(0 0 0 / 0.12);
+}
+
+.polish-bar-icon {
+  display: inline-flex;
+  color: var(--accent);
+}
+
+.polish-bar-summary.is-warning {
+  color: #a33c2e;
+}
+
+.polish-bar-model {
+  margin-left: 8px;
+  opacity: 0.65;
+  font-size: 11px;
+}
+
+.polish-bar-spacer {
+  flex: 1 1 auto;
+}
+
+.polish-btn {
+  padding: 4px 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--paper);
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.polish-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.polish-btn-apply {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
+}
+
+.polish-btn[disabled] {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Classified source diff overlay. */
+.polish-diff-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(0 0 0 / 0.35);
+}
+
+.polish-diff-panel {
+  display: flex;
+  flex-direction: column;
+  width: min(860px, calc(100vw - 64px));
+  max-height: min(78vh, 900px);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--paper);
+  overflow: hidden;
+}
+
+.polish-diff-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.polish-diff-violation {
+  color: #a33c2e;
+  font-weight: 600;
+}
+
+.polish-diff-body {
+  overflow: auto;
+  padding: 10px 0;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.polish-diff-empty {
+  padding: 12px 16px;
+  color: var(--muted);
+}
+
+.polish-diff-hunk {
+  padding: 4px 0;
+  border-top: 1px dashed var(--line);
+}
+
+.polish-diff-hunk:first-child {
+  border-top: 0;
+}
+
+.polish-diff-hunk.is-violation {
+  border-left: 3px solid #a33c2e;
+}
+
+.polish-diff-line {
+  padding: 0 14px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--muted);
+}
+
+.polish-diff-line.is-same {
+  opacity: 0.55;
+}
+
+.polish-diff-line.is-del {
+  background: color-mix(in srgb, #a33c2e 10%, transparent);
+  color: #a33c2e;
+}
+
+.polish-diff-line.is-add {
+  background: color-mix(in srgb, #2e7d46 12%, transparent);
+  color: #2e7d46;
+}
+
+[data-theme='dark'] .polish-diff-line.is-del {
+  color: #e0837a;
+}
+
+[data-theme='dark'] .polish-diff-line.is-add {
+  color: #7fc98f;
+}
+
+.polish-diff-sign {
+  display: inline-block;
+  width: 14px;
+  opacity: 0.7;
+}
+
+/* .file-action sets display:inline-flex, which would defeat the hidden attr. */
+.membox-file-rail .file-action[hidden] {
+  display: none;
+}

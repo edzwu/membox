@@ -96,3 +96,11 @@ export function initFileActions() {
   syncVisibility();
   window.addEventListener('miru-document-change', syncVisibility);
 }
+
+/* Other whole-document features (e.g. layout polish) share this rail instead
+   of growing their own floating chrome. */
+export function addFileAction(button, { beforeAction } = {}) {
+  if (!rail) return;
+  const anchor = beforeAction ? rail.querySelector(`[data-action="${beforeAction}"]`) : null;
+  rail.insertBefore(button, anchor);
+}

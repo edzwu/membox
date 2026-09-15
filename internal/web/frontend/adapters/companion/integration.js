@@ -20,7 +20,9 @@
      notes.js          note picker model + long-note rail previews
      note-images.js    clipboard images → private asset store + Markdown refs
      dictionary.js     single-word Free Dictionary lookup → related note
-     presence.js       tab heartbeat for the companion/TUI census */
+     presence.js       tab heartbeat for the companion/TUI census
+     polish.js         magic-wand layout polish: LLM rewrite → rendered
+                       preview → classified diff → apply/discard */
 
 import { elements } from '../../js/dom.js';
 import { isEditableTarget } from '../../js/utils.js';
@@ -40,6 +42,7 @@ import { initTranslation } from './translation.js';
 import { initJpStudy } from './jp-study.js';
 import { initDocSummarize } from './doc-summarize.js';
 import { initFileActions } from './file-actions.js';
+import { initPolish } from './polish.js';
 import { initDictionary } from './dictionary.js';
 import { initSeriesNav } from './series-nav.js';
 import { initWikiLinks } from './wiki-links.js';
@@ -72,6 +75,7 @@ initTranslation();
 initJpStudy();
 initDocSummarize();
 initFileActions();
+initPolish();
 initDictionary();
 initSeriesNav();
 initWikiLinks();

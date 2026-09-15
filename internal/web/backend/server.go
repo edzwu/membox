@@ -341,6 +341,10 @@ func (s *Server) handleDocument(writer http.ResponseWriter, request *http.Reques
 		s.handleDocumentSummarize(writer, request, strings.TrimSuffix(selector, "/summarize-document"))
 		return
 	}
+	if strings.HasSuffix(selector, "/rewrite") {
+		s.handleDocumentRewrite(writer, request, strings.TrimSuffix(selector, "/rewrite"))
+		return
+	}
 	if strings.HasSuffix(selector, "/summarize") {
 		s.handleSelectionSummarize(writer, request, strings.TrimSuffix(selector, "/summarize"))
 		return
