@@ -22,7 +22,8 @@
      dictionary.js     single-word Free Dictionary lookup → related note
      presence.js       tab heartbeat for the companion/TUI census
      polish.js         magic-wand layout polish: LLM rewrite → rendered
-                       preview → classified diff → apply/discard */
+                       preview → classified diff → apply/discard
+     retitle.js        AI title suggestion from the outline + lead sample */
 
 import { elements } from '../../js/dom.js';
 import { isEditableTarget } from '../../js/utils.js';
@@ -43,6 +44,7 @@ import { initJpStudy } from './jp-study.js';
 import { initDocSummarize } from './doc-summarize.js';
 import { initFileActions } from './file-actions.js';
 import { initPolish } from './polish.js';
+import { initRetitle } from './retitle.js';
 import { initDictionary } from './dictionary.js';
 import { initSeriesNav } from './series-nav.js';
 import { initWikiLinks } from './wiki-links.js';
@@ -76,6 +78,7 @@ initJpStudy();
 initDocSummarize();
 initFileActions();
 initPolish();
+initRetitle();
 initDictionary();
 initSeriesNav();
 initWikiLinks();

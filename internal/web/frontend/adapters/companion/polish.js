@@ -1,21 +1,25 @@
-/* 一键排版优化 (magic wand): send the bound document through the backend
-   rewrite pipeline (default local qwen3:14b, Alt-click for deepseek), then
-   preview the result rendered, inspect a classified source diff, and apply
-   through the normal sync path — or discard.
+/* 一键排版优化 (magic wand).
 
-   Trust model: the rewrite contract is "layout only, body verbatim", and the
-   diff modal verifies it mechanically — heading-level and whitespace hunks
-   are green, any body-text change is a red violation the user can reject. */
+   Default click — fast outline polish: only the heading lines (fence-aware,
+   never the body) go to DeepSeek, which returns corrected levels; the levels
+   are applied deterministically to the source. Alt-click — full-document
+   rewrite through the local model for heavier cleanup (PDF debris etc.).
+
+   Both paths end in the same preview: rendered result, classified source
+   diff, apply/discard. Trust model: the outline contract is "levels only,
+   body verbatim", and the diff modal verifies it mechanically — heading
+   hunks are green, any body-text change is a red violation. */
 
 import { state } from '../../js/state.js';
 import { loadDocument } from '../../js/document.js';
 import { setAnnotInteractionsEnabled } from '../../js/annotations/toolbar.js';
+import { extractHeadings, applyHeadingEdits } from '../../js/markdown/structure.js';
 import { buildDiffHunks } from '../../js/linediff.js';
 import { escapeHtml } from '../../js/utils.js';
 import { showToast } from '../../js/ui/feedback.js';
 import { session } from './session.js';
 import { onRender } from './events.js';
-import { streamDocRewrite } from './api.js';
+import { streamDocRewrite, postPolishOutline } from './api.js';
 import { syncReplacementToMembox } from './sync.js';
 import { restoreReadingState } from './reading-state.js';
 import { addFileAction } from './file-actions.js';
@@ -48,20 +52,70 @@ function renderDock() {
   dockButton.disabled = running;
 }
 
-async function startPolish(useCloud) {
+/* Default click: outline polish via DeepSeek. Only the heading lines plus a
+   short sample of each section's opening go to the model — never the body —
+   so the round-trip is fast; the returned level/text edits are applied to
+   the source deterministically. */
+async function startOutlinePolish() {
+  if (running || previewing || !polishAvailable()) return;
+  const source = state.currentMarkdown || '';
+  const headings = extractHeadings(source);
+  if (headings.length < 2) {
+    showToast('标题太少，无需层级优化');
+    return;
+  }
+  running = true;
+  controller = new AbortController();
+  renderDock();
+  showToast(`分析 ${headings.length} 个标题的层级与语义… (DeepSeek)`);
+  try {
+    const result = await postPolishOutline(
+      headings.map((h) => ({ level: h.level, text: h.text, sample: h.sample })),
+      { signal: controller.signal },
+    );
+    const edits = Array.isArray(result.edits) ? result.edits : [];
+    if (edits.length !== headings.length) {
+      throw new Error(`模型返回了 ${edits.length} 条修改，应有 ${headings.length} 条`);
+    }
+    const changed = edits.filter(
+      (edit, i) => edit.level !== headings[i].level || String(edit.text || '').trim() !== headings[i].text,
+    ).length;
+    if (!changed) {
+      showToast('标题层级已经很合理');
+      return;
+    }
+    const optimized = applyHeadingEdits(source, headings, edits);
+    enterPreview(optimized, result.label || 'deepseek');
+  } catch (err) {
+    if (err?.name === 'AbortError' || controller?.signal.aborted) {
+      showToast('排版优化已取消');
+    } else {
+      console.error('membox: outline polish failed', err);
+      showToast(err?.message || '层级分析失败');
+    }
+  } finally {
+    running = false;
+    controller = null;
+    renderDock();
+  }
+}
+
+/* Alt-click: full-document rewrite through the chunked docrewrite pipeline
+   (local qwen3:14b via mmd) — slower but also repairs broken prose, fences
+   and formulas, e.g. PDF conversion debris. */
+async function startFullRewrite() {
   if (running || previewing || !polishAvailable()) return;
   running = true;
   controller = new AbortController();
   renderDock();
-  const model = useCloud ? 'deepseek' : '';
-  showToast(useCloud ? '排版优化中… (deepseek)' : '排版优化中… (本地模型)');
+  showToast('全文排版重写中… (本地模型)');
   try {
     const result = await streamDocRewrite(
       session.documentID,
-      { model },
+      {},
       (event) => {
         if (event.type === 'progress' && event.total > 1) {
-          showToast(`排版优化中… ${event.done}/${event.total} ${event.detail || ''}`);
+          showToast(`排版重写中… ${event.done}/${event.total} ${event.detail || ''}`);
         }
       },
       controller.signal,
@@ -230,11 +284,13 @@ export function initPolish() {
   dockButton.type = 'button';
   dockButton.className = 'file-action polish-action';
   dockButton.dataset.action = 'polish';
-  dockButton.title = '一键排版优化（本地模型）· Alt-click 用 DeepSeek';
+  dockButton.title = '标题层级优化（DeepSeek 仅看大纲）· Alt-click 全文深度重写（本地模型）';
   dockButton.setAttribute('aria-label', dockButton.title);
   dockButton.innerHTML = WAND_ICON;
   dockButton.hidden = true;
-  dockButton.addEventListener('click', (event) => void startPolish(event.altKey));
+  dockButton.addEventListener('click', (event) => {
+    void (event.altKey ? startFullRewrite() : startOutlinePolish());
+  });
   // Shares the left file rail with summarize/delete, ahead of the danger
   // zone button.
   addFileAction(dockButton, { beforeAction: 'delete' });

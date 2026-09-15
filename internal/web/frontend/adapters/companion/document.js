@@ -74,7 +74,7 @@ export function unbindDocument() {
   hideSeriesNav();
 }
 
-async function renameCurrentDocument(titleElement, previousTitle, nextTitle) {
+export async function renameCurrentDocument(titleElement, previousTitle, nextTitle) {
   const renamedDocumentID = session.documentID;
   const currentFilename = state.droppedFilename || '';
   const extensionMatch = currentFilename.match(/\.(?:md|markdown)$/i);

@@ -145,6 +145,8 @@ func (s *Server) Start(ctx context.Context, port int) (string, error) {
 	mux.HandleFunc("/api/note-assets", s.handleNoteImageUpload)
 	mux.HandleFunc("/api/note-assets/", s.handleNoteImage)
 	mux.HandleFunc("/api/translation/stream", s.handleTranslationStream)
+	mux.HandleFunc("/api/polish-outline", s.handlePolishOutline)
+	mux.HandleFunc("/api/suggest-title", s.handleSuggestTitle)
 	mux.HandleFunc("/api/lookup", s.handleLookup)
 	mux.HandleFunc("/api/pdf-assets/", s.handlePDFAsset)
 	mux.HandleFunc("/api/save", s.handleSave)

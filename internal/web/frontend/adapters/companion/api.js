@@ -332,6 +332,34 @@ export async function streamDocRewrite(documentID, { model = '' } = {}, onEvent,
   return result;
 }
 
+// Heading-outline polish: headings only (never the body) go to the model
+// (deepseek by default) which returns corrected levels. One small JSON call.
+export async function postPolishOutline(headings, { model = '', signal } = {}) {
+  const response = await fetch('/api/polish-outline', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Membox-Miru': '1' },
+    body: JSON.stringify({ headings, model }),
+    cache: 'no-store',
+    signal,
+  });
+  if (!response.ok) throw new Error((await response.text()).trim() || `HTTP ${response.status}`);
+  return response.json();
+}
+
+// AI retitle: the outline (headings + samples) plus lead and current title
+// go to the model (deepseek by default); returns a suggested title string.
+export async function postSuggestTitle(payload, { signal } = {}) {
+  const response = await fetch('/api/suggest-title', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Membox-Miru': '1' },
+    body: JSON.stringify(payload),
+    cache: 'no-store',
+    signal,
+  });
+  if (!response.ok) throw new Error((await response.text()).trim() || `HTTP ${response.status}`);
+  return response.json();
+}
+
 // Free Dictionary lookup — same source as ~/repo/lookup.
 export async function fetchLookup(word, { signal } = {}) {
   const response = await request(`/api/lookup?q=${encodeURIComponent(word)}`, { signal });
