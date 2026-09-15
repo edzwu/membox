@@ -20,6 +20,9 @@ type Service struct {
 	clock    port.Clock
 	history  port.GitHistory
 	contents port.ImmutableContentStore
+	// blogGit commits/pushes generated blog bundles. Nil until bootstrap wires
+	// it; publish operations fail fast without it.
+	blogGit port.BlogCommitter
 	// mutations serializes every mutating operation across all processes
 	// sharing this membox home. Nil in unit tests without a home directory.
 	mutations port.MutationLocker
@@ -37,6 +40,10 @@ func (s *Service) SetMutationLocker(locker port.MutationLocker) { s.mutations = 
 // SetContentStore enables immutable content/version capture. It is wired by
 // mmd; legacy in-process clients can continue operating during migration.
 func (s *Service) SetContentStore(store port.ImmutableContentStore) { s.contents = store }
+
+// SetBlogCommitter installs the Git commit/push adapter used by publish
+// operations. Wired by bootstrap; nil in unit tests.
+func (s *Service) SetBlogCommitter(committer port.BlogCommitter) { s.blogGit = committer }
 
 // Store returns the outbound catalog port. Used by composition roots (Companion)
 // to access optional store capabilities such as the Agent session catalog.

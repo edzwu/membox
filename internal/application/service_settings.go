@@ -33,6 +33,8 @@ var settingSpecs = []Setting{
 	{Key: SettingHideNotes, Label: "hide notes", Value: "on", Options: []string{"on", "off"}},
 	{Key: SettingWebOnExit, Label: "web on exit", Value: OnExitAsk, Options: []string{OnExitAsk, OnExitStop, OnExitKeep}},
 	{Key: SettingScanOnStart, Label: "scan on start", Value: ScanOnStartBackground, Options: []string{ScanOnStartBackground, ScanOnStartOff}},
+	{Key: SettingBlogRoot, Label: "blog root", Value: "", Options: nil},
+	{Key: SettingBlogBaseURL, Label: "blog base url", Value: DefaultBlogBaseURL, Options: nil},
 }
 
 const (
@@ -86,6 +88,25 @@ func (s *Service) ListSettings(ctx context.Context) ([]Setting, error) {
 				return nil, err
 			}
 			out = append(out, setting)
+			continue
+		}
+		if spec.Key == SettingBlogRoot {
+			value, err := s.store.GetSetting(ctx, spec.Key)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, Setting{Key: spec.Key, Label: spec.Label, Value: value})
+			continue
+		}
+		if spec.Key == SettingBlogBaseURL {
+			value, err := s.store.GetSetting(ctx, spec.Key)
+			if err != nil {
+				return nil, err
+			}
+			if strings.TrimSpace(value) == "" {
+				value = spec.Value
+			}
+			out = append(out, Setting{Key: spec.Key, Label: spec.Label, Value: value})
 			continue
 		}
 		value, err := s.getSetting(ctx, spec.Key)
@@ -160,6 +181,19 @@ func (s *Service) SetSetting(ctx context.Context, key, value string) error {
 		}
 		return fmt.Errorf("main path %q is not a configured path; add it with mm path add", value)
 	}
+	if key == SettingBlogRoot {
+		root, err := validateBlogRoot(value)
+		if err != nil {
+			return err
+		}
+		return s.store.SetSetting(ctx, key, root)
+	}
+	if key == SettingBlogBaseURL {
+		if value == "" {
+			return fmt.Errorf("blog base url cannot be empty (default: %s)", DefaultBlogBaseURL)
+		}
+		return s.store.SetSetting(ctx, key, strings.TrimRight(value, "/"))
+	}
 	valid := false
 	for _, option := range spec.Options {
 		if value == option {
@@ -184,6 +218,16 @@ func (s *Service) getSetting(ctx context.Context, key string) (string, error) {
 			return "", err
 		}
 		return setting.Value, nil
+	}
+	if key == SettingBlogRoot {
+		return s.store.GetSetting(ctx, key)
+	}
+	if key == SettingBlogBaseURL {
+		value, err := s.store.GetSetting(ctx, key)
+		if err != nil || strings.TrimSpace(value) == "" {
+			return DefaultBlogBaseURL, err
+		}
+		return value, nil
 	}
 	value, err := s.store.GetSetting(ctx, key)
 	if err != nil {

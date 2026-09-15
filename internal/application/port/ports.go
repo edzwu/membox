@@ -58,6 +58,24 @@ type GitHistory interface {
 	FileTimes(ctx context.Context, repositoryRoot, absolutePath string) (RevisionTimes, bool, error)
 }
 
+// BlogCommitter stages generated blog files, commits, and optionally pushes.
+// It reports whether a commit was actually created (false when the staged
+// tree was unchanged).
+type BlogCommitter interface {
+	CommitAndPush(ctx context.Context, repoRoot, message string, paths []string, push bool) (committed bool, err error)
+}
+
+// PublicationRecord links a document to its generated public blog bundle.
+// PublishedSHA256 is the source hash at export time; comparing it with the
+// document's current hash detects drift ("stale" publications).
+type PublicationRecord struct {
+	DocumentID      string
+	Slug            string
+	Lang            string
+	PublishedSHA256 string
+	PublishedAt     time.Time
+}
+
 type PathSummary struct {
 	Path          catalog.IndexedPath
 	DocumentCount int
@@ -334,6 +352,11 @@ type CatalogStore interface {
 	Status(ctx context.Context) (StatusSnapshot, error)
 	GetSetting(ctx context.Context, key string) (string, error)
 	SetSetting(ctx context.Context, key, value string) error
+	// Publications track which documents are mirrored to the public blog.
+	UpsertPublication(ctx context.Context, record PublicationRecord) error
+	GetPublication(ctx context.Context, documentID catalog.DocumentID) (PublicationRecord, bool, error)
+	DeletePublication(ctx context.Context, documentID catalog.DocumentID) error
+	ListPublications(ctx context.Context) ([]PublicationRecord, error)
 	// Questions exposes the personal question accumulation store.
 	Questions() QuestionStore
 }

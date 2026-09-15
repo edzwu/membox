@@ -35,5 +35,6 @@ func Open(databasePath string) (*application.Service, error) {
 		return nil, lockErr
 	}
 	service.SetMutationLocker(lock)
+	service.SetBlogCommitter(git.Publisher{})
 	return service, nil
 }

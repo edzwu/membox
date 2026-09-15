@@ -227,6 +227,16 @@ CREATE TABLE IF NOT EXISTS document_versions (
     created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS document_versions_document ON document_versions(document_id,id);
+-- Publications link documents to generated blog bundles under the configured
+-- blog root. published_sha256 records the source hash at export time so the
+-- CLI can report drift between the private source and the public copy.
+CREATE TABLE IF NOT EXISTS publications (
+    document_id TEXT PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
+    slug TEXT NOT NULL UNIQUE,
+    lang TEXT NOT NULL DEFAULT 'en' CHECK(lang IN ('en','zh')),
+    published_sha256 TEXT NOT NULL DEFAULT '',
+    published_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS document_heads (
     document_id TEXT PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
     version_id INTEGER NOT NULL REFERENCES document_versions(id) ON DELETE CASCADE

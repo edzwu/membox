@@ -436,7 +436,7 @@ type GetDocumentQuery struct{ Selector string }
 type DocumentView struct {
 	// ID is the logical visible document id (unique compact suffix). Physical
 	// UUIDs are a storage-layer identity and never cross the Box boundary.
-	ID string `json:"id"`
+	ID           string     `json:"id"`
 	Path         string     `json:"path"`
 	PathID       int64      `json:"path_id"`
 	RelativePath string     `json:"relative_path"`
@@ -508,6 +508,85 @@ func (b *Box) GetDocument(ctx context.Context, query GetDocumentQuery) (Document
 		return DocumentView{}, err
 	}
 	return b.documentView(ctx, document, path), nil
+}
+
+// PublishCommand exports one document to the configured public blog.
+type PublishCommand struct {
+	Selector string
+	Lang     string
+	Slug     string
+	NoPush   bool
+}
+
+// PublicationView describes one document's public-blog state.
+type PublicationView struct {
+	ID          string    `json:"id"` // logical short ID for display
+	DocumentID  string    `json:"document_id"`
+	Slug        string    `json:"slug"`
+	Lang        string    `json:"lang"`
+	Title       string    `json:"title"`
+	Status      string    `json:"status"` // published | stale | unpublished
+	URL         string    `json:"url"`
+	PublishedAt time.Time `json:"published_at"`
+	BundlePath  string    `json:"bundle_path"`
+}
+
+func (b *Box) publicationView(ctx context.Context, publication application.Publication) PublicationView {
+	return PublicationView{
+		ID:          b.ShortID(ctx, publication.DocumentID),
+		DocumentID:  publication.DocumentID,
+		Slug:        publication.Slug,
+		Lang:        publication.Lang,
+		Title:       publication.Title,
+		Status:      publication.Status,
+		URL:         publication.URL,
+		PublishedAt: publication.PublishedAt,
+		BundlePath:  publication.BundlePath,
+	}
+}
+
+func (b *Box) PublishDocument(ctx context.Context, command PublishCommand) (PublicationView, error) {
+	publication, err := b.service.Publish(ctx, application.PublishOptions{
+		Selector: command.Selector, Lang: command.Lang, Slug: command.Slug, NoPush: command.NoPush,
+	})
+	if err != nil {
+		return PublicationView{}, err
+	}
+	return b.publicationView(ctx, publication), nil
+}
+
+func (b *Box) UnpublishDocument(ctx context.Context, selector string, noPush bool) (PublicationView, error) {
+	publication, err := b.service.Unpublish(ctx, selector, noPush)
+	if err != nil {
+		return PublicationView{}, err
+	}
+	return b.publicationView(ctx, publication), nil
+}
+
+func (b *Box) ListPublications(ctx context.Context) ([]PublicationView, error) {
+	publications, err := b.service.ListPublications(ctx)
+	if err != nil {
+		return nil, err
+	}
+	views := make([]PublicationView, 0, len(publications))
+	for _, publication := range publications {
+		views = append(views, b.publicationView(ctx, publication))
+	}
+	return views, nil
+}
+
+// GetPublication returns one document's publication state.
+func (b *Box) GetPublication(ctx context.Context, selector string) (PublicationView, error) {
+	publication, err := b.service.GetPublication(ctx, selector)
+	if err != nil {
+		return PublicationView{}, err
+	}
+	return b.publicationView(ctx, publication), nil
+}
+
+// SyncPublications re-exports stale publications; returns how many changed.
+func (b *Box) SyncPublications(ctx context.Context, noPush bool) (int, error) {
+	return b.service.SyncPublications(ctx, noPush)
 }
 
 func (b *Box) documentView(ctx context.Context, document *catalog.Document, path string) DocumentView {
