@@ -1,5 +1,7 @@
 // @vitest-environment happy-dom
 
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   extractCandidate,
@@ -248,6 +250,38 @@ describe('Defuddle article extraction', () => {
     );
     expect(candidates.length).toBeGreaterThan(0);
     expect(candidates[0]?.html).toContain('Substantial article text.');
+  });
+
+  // Regression: trentorch listing pages lost whole question sections to
+  // Defuddle's score-based removal. When the strict pass covers only a
+  // fraction of the visible text, the pipeline escalates to a permissive
+  // pass and then to a main-container candidate, which must keep every item.
+  it('keeps every section of a link-heavy listing page', () => {
+    // happy-dom shadows URL, so resolve the fixture from the package root.
+    const fixture = join(
+      process.cwd(),
+      'src/lib/fixtures/trentorch-part-production-ml.html',
+    );
+    const doc = page(readFileSync(fixture, 'utf8'));
+
+    const candidates = extractCandidates(
+      doc,
+      'https://trentorch.com/questions/part-production-ml',
+      'live',
+    );
+    const best = selectBestCandidate(candidates, false);
+    const markdown = htmlToMarkdown(best.html);
+
+    // All three sections and all 14 questions survive.
+    expect(markdown).toContain('Experiment Tracking & Versioning');
+    expect(markdown).toContain('Deployment & Serving');
+    expect(markdown).toContain('Monitoring & Drift');
+    expect(markdown.match(/trentorch\.com\/ide\//g)).toHaveLength(14);
+    // The container's own h1 becomes the title instead of duplicating it.
+    expect(best.title).toBe('Production ML');
+    expect(markdown).not.toContain('# Production ML');
+    // Header/footer chrome stays out of the clip.
+    expect(markdown).not.toContain('Problem of the day');
   });
 
   it('clips zhipin job detail pages as clean visible text', () => {

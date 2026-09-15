@@ -5,6 +5,21 @@ import { looksLikeMermaid } from './markdown';
 const MIN_ARTICLE_CHARS = 200;
 const RAW_FORMAT_COMPLETENESS = 0.75;
 const LIVE_TIE_COMPLETENESS = 0.9;
+/**
+ * When the strict Defuddle pass keeps less than this fraction of the page's
+ * visible text, the page is likely a listing (link-heavy sections that score
+ * like chrome) rather than a prose article, so a permissive candidate
+ * without score-based removal is added.
+ */
+const PERMISSIVE_COVERAGE = 0.6;
+/** Absolute floor for the coverage gate, so small pages never trigger it. */
+const PERMISSIVE_MIN_VISIBLE_CHARS = 600;
+/**
+ * The permissive Defuddle candidate is preferred over the raw main-container
+ * candidate when it reaches this fraction of the container's text — the
+ * cleaner extraction wins near-ties.
+ */
+const DIRECT_TIE_COMPLETENESS = 0.85;
 
 export type CandidateSource = 'live' | 'raw' | 'iframe';
 
@@ -153,6 +168,51 @@ export function extractCandidates(
       // generic Defuddle must still be able to extract the page.
     }
   }
+
+  // Listing-style pages (link-heavy sections: question lists, indexes,
+  // directories) lose whole blocks to Defuddle's low-scoring removal. When
+  // the strict result covers only a fraction of the visible text, escalate:
+  // first a permissive Defuddle pass without score-based removal, then a
+  // direct extraction of the main content container. Completeness selection
+  // then naturally prefers the fuller candidate. Prose articles keep most of
+  // the visible text, so they never trigger the extra passes.
+  const visible = visibleTextLength(doc);
+  const strictBest = longestCandidate(candidates);
+  const escalated = Boolean(
+    strictBest &&
+      visible >= PERMISSIVE_MIN_VISIBLE_CHARS &&
+      strictBest.textLength < visible * PERMISSIVE_COVERAGE,
+  );
+  if (escalated) {
+    for (const profile of profiles) {
+      if (profile.directSelector) continue; // direct extraction never scores
+      const key = `${profile.contentSelector || ''} ${Boolean(profile.preserveHidden)} permissive`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      try {
+        candidates.push(
+          extractCandidate(doc.cloneNode(true) as Document, url, source, profile, true),
+        );
+      } catch {
+        // The permissive pass is opportunistic; strict candidates still stand.
+      }
+    }
+    // The permissive pass can still lose blocks Defuddle removes for
+    // non-scoring reasons. When the raw main container is materially more
+    // complete than the best clean candidate, offer it as the complete
+    // fallback; it wins selection by length, while a clean candidate that
+    // is nearly as complete keeps the clip tidy.
+    try {
+      const direct = extractMainContainerCandidate(doc, url, source);
+      const best = longestCandidate(candidates);
+      if (direct && best && direct.textLength > best.textLength / DIRECT_TIE_COMPLETENESS) {
+        candidates.push(direct);
+      }
+    } catch {
+      // No identifiable main container; strict candidates still stand.
+    }
+  }
+
   if (!candidates.length) throw new Error('Page has no extractable candidates');
   return candidates;
 }
@@ -163,6 +223,7 @@ export function extractCandidate(
   url: string,
   source: CandidateSource,
   profile = siteProfile(url),
+  permissive = false,
 ): ExtractedArticle {
   profile.prepare?.(doc);
   normalizeMermaidSources(doc);
@@ -181,6 +242,7 @@ export function extractCandidate(
           removePartialSelectors: false,
         }
       : {}),
+    ...(permissive ? { removeLowScoring: false } : {}),
   };
 
   let result: DefuddleResponse;
@@ -548,11 +610,108 @@ function htmlHasMermaidSource(html: string): boolean {
   });
 }
 
+/**
+ * Non-article pages whose content scoring destroys the structure (question
+ * lists, indexes, directories) fall back to the main content container as
+ * the clip. Completeness beats cleanliness here: the user sees the whole
+ * listing on screen, and a slightly noisy clip beats a gutted one.
+ */
+function extractMainContainerCandidate(
+  doc: Document,
+  url: string,
+  source: CandidateSource,
+): ExtractedArticle | null {
+  const container = findMainContainer(doc);
+  if (!container) return null;
+  const clone = container.cloneNode(true) as Element;
+  clone.querySelectorAll(CHROME_SELECTOR).forEach((el) => el.remove());
+  // clip.ts serializes a single h1 from the candidate title at the document
+  // boundary, so the container's own h1 must not duplicate it. Document
+  // titles are commonly "<h1> | <site>", so an h1 contained in the document
+  // title becomes the title and is dropped; other h1s demote to keep one
+  // h1 per document.
+  let title = cleanTitle(doc.title || 'Clipped page');
+  let titleHeadingDropped = false;
+  clone.querySelectorAll('h1').forEach((h1) => {
+    const heading = (h1.textContent || '').replace(/\s+/g, ' ').trim();
+    if (!titleHeadingDropped && heading && title.includes(heading)) {
+      titleHeadingDropped = true;
+      title = heading;
+      h1.remove();
+      return;
+    }
+    const h2 = clone.ownerDocument.createElement('h2');
+    h2.innerHTML = h1.innerHTML;
+    h1.replaceWith(h2);
+  });
+  absolutizeResourceLinks(clone, url);
+  const html = (clone as HTMLElement).outerHTML || '';
+  const textLength = htmlTextLength(html);
+  if (textLength < MIN_ARTICLE_CHARS) return null;
+  return {
+    source,
+    title,
+    html,
+    textLength,
+    wordCount: 0,
+    hasMermaidSource: htmlHasMermaidSource(html),
+    author: '',
+    published: '',
+  };
+}
+
+/** Best-effort main content scope: semantic containers first, else the
+ * largest text-bearing block (chrome inside it is stripped on the clone). */
+function findMainContainer(doc: Document): Element | null {
+  const semantic = doc.querySelector(
+    'main, [role="main"], #main, #main-content, #content, .content, article',
+  );
+  if (semantic) return semantic;
+  let best: Element | null = null;
+  let bestLength = 0;
+  doc.body?.querySelectorAll('div, section').forEach((el) => {
+    const length = (el.textContent || '').replace(/\s+/g, ' ').trim().length;
+    if (length > bestLength) {
+      bestLength = length;
+      best = el;
+    }
+  });
+  return best;
+}
+
 function htmlTextLength(html: string): number {
   if (!html) return 0;
   const doc = new DOMParser().parseFromString(html, 'text/html');
   doc.querySelectorAll('script,style,noscript').forEach((el) => el.remove());
   return (doc.body.textContent || '').replace(/\s+/g, ' ').trim().length;
+}
+
+const CHROME_SELECTOR = [
+  'header',
+  'nav',
+  'footer',
+  'aside',
+  'script',
+  'style',
+  'noscript',
+  'template',
+  '[role="navigation"]',
+  '[role="banner"]',
+  '[role="contentinfo"]',
+  '[role="search"]',
+].join(',');
+
+/**
+ * Text length of the page minus structural chrome, used by the coverage gate
+ * that decides whether the strict extraction lost real content. The input
+ * document is already an isolated snapshot, but measure a clone so the
+ * chrome removal never mutates a document other candidates still parse.
+ */
+function visibleTextLength(doc: Document): number {
+  if (!doc.body) return 0;
+  const clone = doc.body.cloneNode(true) as HTMLElement;
+  clone.querySelectorAll(CHROME_SELECTOR).forEach((el) => el.remove());
+  return (clone.textContent || '').replace(/\s+/g, ' ').trim().length;
 }
 
 function cleanTitle(title: string): string {
