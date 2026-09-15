@@ -179,9 +179,10 @@ func buildOutlinePrompt(headings []polishOutlineHeading, withSamples bool) strin
 任务：给出每个标题应有的层级与文本，规则：
 1. 若全文只有一个 H1，它是文档主标题，保持 H1；正文章节从 H2 开始，子节依次 H3、H4，不要跳级。
 2. 按语义判断归属：内容上是上一节子主题的标题降一级；并列主题的标题同级。
-3. 去掉标题里的手工序号（如 "1." "3)" "第3章"）：阅读器会自动编号，保留会显示成重复编号。
-4. 标记者「疑似乱码」的标题是粘贴错误（文件名、URL 残片、slug），必须根据该节正文采样改写成一个简洁明了的标题（例如采样讲 Factory Vfs，标题就写 "2. Factory Vfs" 或 "Factory Vfs"）。其他标题逐字保留原文。
-5. 拿不准就保持原级别与原文，宁少勿改。不要增删标题，不要编造内容。
+3. 容器标题：标注了「本节无正文」的 Part / Chapter / Appendix / 第 X 章 等带编号的结构标题是分组容器——紧跟其后的 Chapter/小节是它的内容，应比它低一级（例如 Part 保持 H2，其下的 Chapter 从 H2 降为 H3）；降级是级联的，容器内容原有的子节随之顺降（H3→H4）。容器本身不要降到与内容同级。
+4. 去掉标题里的手工序号（如 "1." "3)"），阅读器会自动编号，保留会显示成重复编号；但 "Part I" "Chapter 2" "第3章" 这类构成标题本身的编号词保留。
+5. 标记者「疑似乱码」的标题是粘贴错误（文件名、URL 残片、slug），必须根据该节正文采样改写成一个简洁明了的标题（例如采样讲 Factory Vfs，标题就写 "Factory Vfs"）。其他标题逐字保留原文。
+6. 拿不准就保持原级别与原文，宁少勿改。不要增删标题，不要编造内容。
 输出：严格的 JSON 数组，第 i 个元素对应第 i 个标题，格式 {"level": 2, "text": "标题"}。只输出 JSON，不要解释。
 
 标题大纲：
@@ -190,6 +191,9 @@ func buildOutlinePrompt(headings []polishOutlineHeading, withSamples bool) strin
 		fmt.Fprintf(&b, "%d. H%d %s", i, h.Level, h.Text)
 		if looksGarbledHeading(h.Text) {
 			b.WriteString("（疑似乱码/粘贴错误）")
+		}
+		if strings.TrimSpace(h.Sample) == "" {
+			b.WriteString("（本节无正文）")
 		}
 		b.WriteString("\n")
 		if sample := strings.TrimSpace(h.Sample); withSamples && sample != "" {
