@@ -29,14 +29,17 @@ type ghRun struct {
 	UpdatedAt    time.Time `json:"updatedAt"`
 }
 
-// LatestDeployRun returns the most recent run of the deploy workflow for the
-// repository containing dir (gh infers owner/repo from the git remote).
+// LatestDeployRun returns the most recent Actions run for the repository
+// containing dir (gh infers owner/repo from the git remote). Blog repos run
+// a single deploy workflow, so the latest run is always the deploy run; not
+// filtering by workflow filename keeps this working across repos whose
+// workflow files have different names (agora: deploy.yml).
 func (DeployWatcher) LatestDeployRun(ctx context.Context, dir string) (port.DeployRun, error) {
 	if _, err := exec.LookPath("gh"); err != nil {
 		return port.DeployRun{}, ErrGHUnavailable
 	}
 	command := exec.CommandContext(ctx, "gh", "run", "list",
-		"--workflow", "deploy-blog.yml", "--limit", "1",
+		"--limit", "1",
 		"--json", "status,conclusion,url,displayTitle,headSha,updatedAt")
 	command.Dir = dir
 	command.Env = append(os.Environ(), "LC_ALL=C", "LANG=C")
