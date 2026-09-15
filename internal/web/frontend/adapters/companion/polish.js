@@ -284,7 +284,7 @@ export function initPolish() {
   dockButton.type = 'button';
   dockButton.className = 'file-action polish-action';
   dockButton.dataset.action = 'polish';
-  dockButton.title = '标题层级优化（DeepSeek 仅看大纲）· Alt-click 全文深度重写（本地模型）';
+  dockButton.title = 'Fix heading hierarchy (DeepSeek, outline only) · Alt-click for full rewrite (local model)';
   dockButton.setAttribute('aria-label', dockButton.title);
   dockButton.innerHTML = WAND_ICON;
   dockButton.hidden = true;

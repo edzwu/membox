@@ -20,8 +20,8 @@ function syncVisibility() {
 }
 
 const ICONS = {
-  // Summary: a sheet of condensed lines.
-  summarize: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M5 4.5h14"/><path d="M5 9h14"/><path d="M5 13.5h9"/><path d="M5 18h6"/></svg>',
+  // Summary: text lines converging into a leftward arrow.
+  summarize: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4.5h14"/><path d="M5 9h11"/><path d="M5 13.5h8"/><path d="M5 18h5"/><path d="M18 13l2.5 2.5L18 18"/><path d="M20.5 15.5h-3.5"/></svg>',
   // Trash can.
   delete: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M9 7V4.5h6V7"/><path d="M6.5 7l1 12.2a2 2 0 0 0 2 1.8h5a2 2 0 0 0 2-1.8l1-12.2"/><path d="M10 11v5.5M14 11v5.5"/></svg>',
   // Armed (second-click confirm): warning mark.
@@ -46,19 +46,19 @@ async function onDelete(button) {
   if (!button.classList.contains('is-armed')) {
     button.classList.add('is-armed');
     button.innerHTML = ICONS.armed;
-    button.title = '再次点击确认删除';
-    showToast('再次点击确认删除');
+    button.title = 'Click again to confirm delete';
+    showToast('Click again to confirm delete');
     deleteTimer = setTimeout(() => {
       button.classList.remove('is-armed');
       button.innerHTML = ICONS.delete;
-      button.title = '删除本文（移入回收站，可恢复）';
+      button.title = 'Move to trash (restorable via mm trash restore)';
     }, 3000);
     return;
   }
   clearTimeout(deleteTimer);
   button.classList.remove('is-armed');
   button.innerHTML = ICONS.delete;
-  button.title = '删除本文（移入回收站，可恢复）';
+  button.title = 'Move to trash (restorable via mm trash restore)';
 
   const id = session.documentID;
   if (!id) return;
@@ -79,13 +79,13 @@ export function initFileActions() {
   rail = document.createElement('div');
   rail.className = 'membox-file-rail';
 
-  const summarize = makeButton('summarize', 'summarize', '总结本文（本地模型）');
+  const summarize = makeButton('summarize', 'summarize', 'Summarize this document (local model)');
   summarize.addEventListener('click', () => {
     if (!visible()) return;
     void startDocSummarize(false);
   });
 
-  const del = makeButton('delete', 'delete', '删除本文（移入回收站，可恢复）');
+  const del = makeButton('delete', 'delete', 'Move to trash (restorable via mm trash restore)');
   del.classList.add('file-action-danger');
   del.addEventListener('click', () => void onDelete(del));
 

@@ -14,8 +14,9 @@ import { postSuggestTitle } from './api.js';
 import { renameCurrentDocument } from './document.js';
 import { addFileAction } from './file-actions.js';
 
-const TAG_ICON = '<svg xmlns="http://www.w3.org/2000/svg" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
-  + '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
+const TAG_ICON = '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+  + '<path d="M4 17l3.5-9L11 17"/><path d="M5.5 13h4"/>'
+  + '<path d="M10.6 20.3l.5-2.2 7.3-7.3 1.7 1.7-7.3 7.3z"/><path d="M16.6 9.4l1.7 1.7"/></svg>';
 
 const LEAD_SAMPLE_RUNES = 300;
 
@@ -146,7 +147,7 @@ export function initRetitle() {
   button.type = 'button';
   button.className = 'file-action retitle-action';
   button.dataset.action = 'retitle';
-  button.title = 'AI 建议标题（DeepSeek 只看大纲与导语）';
+  button.title = 'Suggest a better title (DeepSeek reads outline & lead only)';
   button.setAttribute('aria-label', button.title);
   button.innerHTML = TAG_ICON;
   button.hidden = true;
