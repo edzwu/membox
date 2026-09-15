@@ -65,6 +65,21 @@ type BlogCommitter interface {
 	CommitAndPush(ctx context.Context, repoRoot, message string, paths []string, push bool) (committed bool, err error)
 }
 
+// DeployRun snapshots the latest CI deploy run for the blog repository.
+type DeployRun struct {
+	Status     string // queued | in_progress | completed | "" when unknown
+	Conclusion string // success | failure | ... (completed runs only)
+	URL        string
+	Title      string
+	SHA        string
+	UpdatedAt  time.Time
+}
+
+// BlogDeployWatcher reads CI deploy state for the blog repository.
+type BlogDeployWatcher interface {
+	LatestDeployRun(ctx context.Context, blogRoot string) (DeployRun, error)
+}
+
 // PublicationRecord links a document to its generated public blog bundle.
 // PublishedSHA256 is the source hash at export time; comparing it with the
 // document's current hash detects drift ("stale" publications).

@@ -36,5 +36,6 @@ func Open(databasePath string) (*application.Service, error) {
 	}
 	service.SetMutationLocker(lock)
 	service.SetBlogCommitter(git.Publisher{})
+	service.SetDeployWatcher(git.DeployWatcher{})
 	return service, nil
 }

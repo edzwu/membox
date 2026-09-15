@@ -23,6 +23,9 @@ type Service struct {
 	// blogGit commits/pushes generated blog bundles. Nil until bootstrap wires
 	// it; publish operations fail fast without it.
 	blogGit port.BlogCommitter
+	// deployWatch reads CI deploy state. Nil degrades WatchDeploy to plain
+	// URL polling.
+	deployWatch port.BlogDeployWatcher
 	// mutations serializes every mutating operation across all processes
 	// sharing this membox home. Nil in unit tests without a home directory.
 	mutations port.MutationLocker
@@ -44,6 +47,9 @@ func (s *Service) SetContentStore(store port.ImmutableContentStore) { s.contents
 // SetBlogCommitter installs the Git commit/push adapter used by publish
 // operations. Wired by bootstrap; nil in unit tests.
 func (s *Service) SetBlogCommitter(committer port.BlogCommitter) { s.blogGit = committer }
+
+// SetDeployWatcher installs the CI deploy-state reader used by WatchDeploy.
+func (s *Service) SetDeployWatcher(watcher port.BlogDeployWatcher) { s.deployWatch = watcher }
 
 // Store returns the outbound catalog port. Used by composition roots (Companion)
 // to access optional store capabilities such as the Agent session catalog.

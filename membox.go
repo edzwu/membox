@@ -589,6 +589,66 @@ func (b *Box) SyncPublications(ctx context.Context, noPush bool) (int, error) {
 	return b.service.SyncPublications(ctx, noPush)
 }
 
+// BlogStatusView is a one-shot snapshot of the deploy pipeline.
+type BlogStatusView struct {
+	RunKnown      bool                  `json:"run_known"`
+	RunStatus     string                `json:"run_status"`
+	RunConclusion string                `json:"run_conclusion"`
+	RunURL        string                `json:"run_url"`
+	RunTitle      string                `json:"run_title"`
+	Publications  []PublicationLiveness `json:"publications"`
+}
+
+// PublicationLiveness pairs a publication with its live HTTP status.
+type PublicationLiveness struct {
+	PublicationView
+	HTTPStatus int  `json:"http_status"`
+	Live       bool `json:"live"`
+}
+
+func (b *Box) BlogStatus(ctx context.Context) (BlogStatusView, error) {
+	report, err := b.service.BlogStatus(ctx)
+	if err != nil {
+		return BlogStatusView{}, err
+	}
+	view := BlogStatusView{
+		RunKnown:      report.RunKnown,
+		RunStatus:     report.Run.Status,
+		RunConclusion: report.Run.Conclusion,
+		RunURL:        report.Run.URL,
+		RunTitle:      report.Run.Title,
+	}
+	for _, item := range report.Publications {
+		view.Publications = append(view.Publications, PublicationLiveness{
+			PublicationView: b.publicationView(ctx, item.Publication),
+			HTTPStatus:      item.HTTPStatus,
+			Live:            item.Live,
+		})
+	}
+	return view, nil
+}
+
+// DeployProgressView is one tick of deploy watching.
+type DeployProgressView struct {
+	Phase   string        `json:"phase"`
+	Message string        `json:"message"`
+	Elapsed time.Duration `json:"elapsed"`
+}
+
+// WatchDeploy polls until the publication's page serves HTTP 200. The
+// progress callback is invoked on every poll tick; ctx sets the time bound.
+func (b *Box) WatchDeploy(ctx context.Context, selector string, progress func(DeployProgressView)) error {
+	return b.service.WatchDeploy(ctx, selector, func(update application.DeployProgress) {
+		if progress != nil {
+			progress(DeployProgressView{
+				Phase:   string(update.Phase),
+				Message: update.Message,
+				Elapsed: update.Elapsed,
+			})
+		}
+	})
+}
+
 func (b *Box) documentView(ctx context.Context, document *catalog.Document, path string) DocumentView {
 	view := DocumentView{ID: b.ShortID(ctx, string(document.ID)), Path: path, PathID: int64(document.Location.PathID), RelativePath: document.Location.RelativePath,
 		Status: string(document.Status), Pinned: document.Pinned, Title: document.Index.Title, Summary: document.Index.Summary,
