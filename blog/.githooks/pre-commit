@@ -1,7 +1,0 @@
-#!/usr/bin/env sh
-# Verify the site builds before every commit; abort on failure.
-set -eu
-
-echo "pre-commit: verifying Hugo build..."
-hugo --minify --quiet
-echo "pre-commit: build OK"

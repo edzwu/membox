@@ -1,9 +1,12 @@
-name: Deploy Hugo Site
+name: Deploy Blog
 
 on:
   push:
     branches:
       - main
+    paths:
+      - blog/**
+      - .github/workflows/deploy-blog.yml
   workflow_dispatch:
 
 jobs:
@@ -24,7 +27,7 @@ jobs:
           extended: true
 
       - name: Build
-        run: hugo --minify
+        run: hugo --minify --source blog
 
       - name: Deploy to edzwu.github.io
         uses: peaceiris/actions-gh-pages@v4
@@ -32,7 +35,7 @@ jobs:
           personal_token: ${{ secrets.PAGES_DEPLOY_TOKEN || secrets.DEPLOY_PAT }}
           external_repository: edzwu/edzwu.github.io
           publish_branch: master
-          publish_dir: ./public
+          publish_dir: ./blog/public
           user_name: github-actions[bot]
           user_email: 41898282+github-actions[bot]@users.noreply.github.com
-          commit_message: "Deploy from agora: ${{ github.sha }}"
+          commit_message: "Deploy from membox: ${{ github.sha }}"
