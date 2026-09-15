@@ -130,10 +130,33 @@ document.addEventListener('keydown', (event) => {
 
 async function start() {
   emitRender();
-  session.connected = await checkStatus();
-  session.connecting = false;
-  emitRender();
-  if (session.connected) await loadFromMembox();
+  await connectAndLoad();
+}
+
+// The TUI's "open in browser" can race the companion: a stale-binary recycle
+// or a fresh spawn leaves a window where the page is already open but the
+// server is not answering yet. A single failed probe used to leave the
+// reader on the empty state until a manual reload. Keep probing in the
+// background instead, and load the bound document as soon as the connection
+// lands.
+async function connectAndLoad() {
+  let announced = false;
+  let delay = 1000;
+  for (;;) {
+    session.connected = await checkStatus();
+    session.connecting = false;
+    emitRender();
+    if (session.connected) {
+      if (session.documentID && !session.loadedMarkdown) await loadFromMembox();
+      return;
+    }
+    if (session.documentID && !announced) {
+      announced = true;
+      showToast('正在等待 membox companion 就绪…');
+    }
+    await new Promise((resolve) => setTimeout(resolve, delay));
+    delay = Math.min(delay * 2, 5000);
+  }
 }
 
 void start();

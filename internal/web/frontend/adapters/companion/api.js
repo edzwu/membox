@@ -132,9 +132,12 @@ export async function importPDF(file) {
   return response.json();
 }
 
-export async function checkStatus() {
+export async function checkStatus({ timeoutMs = 4000 } = {}) {
   try {
-    const response = await fetch('/api/status', { cache: 'no-store' });
+    const response = await fetch('/api/status', {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(timeoutMs),
+    });
     return response.ok;
   } catch (err) {
     return false;

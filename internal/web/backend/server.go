@@ -116,12 +116,6 @@ func (s *Server) Start(ctx context.Context, port int) (string, error) {
 	if _, err := fs.Stat(s.miruFS, "index.html"); err != nil {
 		return "", fmt.Errorf("loading Miru frontend: %w", err)
 	}
-	// Upgrade old Extension-created *-note.md files before serving Miru. The
-	// pass skips normalized rows, so subsequent starts only perform cheap index
-	// lookups and also pick up old notes imported after the upgrade.
-	if err := s.migrateExistingAnnotationNotes(ctx); err != nil {
-		return "", fmt.Errorf("migrating annotation notes: %w", err)
-	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/status", s.handleStatus)
@@ -167,6 +161,18 @@ func (s *Server) Start(ctx context.Context, port int) (string, error) {
 	go func() { _ = s.httpServer.Serve(listener) }()
 
 	s.baseURL = fmt.Sprintf("http://%s", listener.Addr().String())
+
+	// Upgrade old Extension-created *-note.md files in the background, AFTER
+	// the listener is up. The pass is idempotent and skips normalized rows, so
+	// a brief window of pre-migration reads is harmless — but running it
+	// before Listen used to block the port for the whole pass, and a browser
+	// tab opened by `mm web open` / the TUI during that window sat on an empty
+	// page until the companion finished booting.
+	go func() {
+		if err := s.migrateExistingAnnotationNotes(context.Background()); err != nil {
+			fmt.Fprintf(os.Stderr, "migrating annotation notes: %v\n", err)
+		}
+	}()
 	return s.baseURL, nil
 }
 
