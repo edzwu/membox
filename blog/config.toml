@@ -1,0 +1,30 @@
+languageCode = "en-us"
+title = "Edward's Notes"
+baseURL = "https://edzwu.github.io/"
+canonifyURLs = false
+theme = "clig-style"
+publishDir = "public"
+defaultContentLanguage = "en"
+defaultContentLanguageInSubdir = true
+
+[markup]
+  [markup.goldmark]
+    [markup.goldmark.renderer]
+      unsafe = true
+
+[frontmatter]
+  lastmod = [":fileModTime", ":git", "lastmod", "date"]
+
+[taxonomies]
+  tag = "tags"
+
+[params]
+  description = "Intelligence is the ability to avoid doing work, yet getting the work done."
+
+[languages]
+  [languages.en]
+    languageName = "English"
+    weight = 1
+  [languages.zh]
+    languageName = "中文"
+    weight = 2

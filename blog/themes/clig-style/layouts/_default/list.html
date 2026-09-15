@@ -1,0 +1,21 @@
+{{ define "main" }}
+<main class="list-page-main">
+    <div class="page-header">
+        <h1>#{{ .Title }}</h1>
+        <p class="page-count">{{ len .Pages }} note{{ if ne (len .Pages) 1 }}s{{ end }}</p>
+    </div>
+    <ul class="note-list">
+        {{ range .Pages.ByDate.Reverse }}
+        <li class="note-card">
+            <a href="{{ .RelPermalink }}" class="note-title">{{ .Title }}</a>
+            <div class="note-meta">
+                <time datetime="{{ .Date.Format "2006-01-02T15:04:05Z07:00" }}">{{ .Date.Format "Jan 2, 2006" }}</time>
+            </div>
+            {{ if .Params.tldr }}
+            <div class="note-tldr">{{ .Params.tldr }}</div>
+            {{ end }}
+        </li>
+        {{ end }}
+    </ul>
+</main>
+{{ end }}
