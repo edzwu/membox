@@ -103,7 +103,8 @@ func TestPolishOutlineRejectsBadInput(t *testing.T) {
 
 	for _, body := range []string{
 		`{}`,                                                            // no headings
-		`{"headings":[{"level":0,"text":"x"}]}`,                         // level too low
+		`{"headings":[{"level":0,"text":"x"}]}`,                         // level 0 without candidate flag
+		`{"headings":[{"level":1,"text":"x","candidate":true}]}`,         // candidate must be level 0
 		`{"headings":[{"level":7,"text":"x"}]}`,                         // level too high
 		`{"headings":[{"level":2,"text":"` + strings.Repeat("x", 400) + `"}]}`,   // text too long
 		`{"headings":[{"level":2,"text":"x","sample":"` + strings.Repeat("s", 300) + `"}]}`, // sample too long
@@ -157,6 +158,72 @@ func TestParseOutlineEditsToleratesProseAndFences(t *testing.T) {
 	}
 }
 
+// Pseudo-heading candidates take level 0 (left as body, text forced back to
+// the original) or 1..6 (promoted); level 0 on a real heading stays a 502.
+func TestParseOutlineEditsCandidates(t *testing.T) {
+	headings := []polishOutlineHeading{
+		{Level: 1, Text: "Doc"},
+		{Level: 0, Text: "SOMEWHAT HAPPY", Candidate: true},
+		{Level: 0, Text: "just a short line", Candidate: true},
+	}
+	edits, err := parseOutlineEdits(
+		`[{"level":1,"text":"Doc"},{"level":2,"text":"SOMEWHAT HAPPY"},{"level":0,"text":"whatever the model wrote"}]`,
+		headings,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if edits[1].Level != 2 || edits[1].Text != "SOMEWHAT HAPPY" {
+		t.Fatalf("promotion lost: %+v", edits[1])
+	}
+	if edits[2].Level != 0 || edits[2].Text != "just a short line" {
+		t.Fatalf("body candidate must keep original text: %+v", edits[2])
+	}
+
+	if _, err := parseOutlineEdits(
+		`[{"level":0,"text":"Doc"},{"level":2,"text":"SOMEWHAT HAPPY"},{"level":0,"text":"x"}]`,
+		headings,
+	); err == nil {
+		t.Fatal("level 0 on a real heading must be rejected")
+	}
+}
+
+func TestBuildOutlinePromptRendersCandidatesAndDividers(t *testing.T) {
+	headings := []polishOutlineHeading{
+		{Level: 3, Text: "Double Survivorship Biases", Empty: true},
+		{Level: 2, Text: "Part I", Empty: true},
+		{Level: 0, Text: "SOMEWHAT HAPPY", Candidate: true, Sample: "Marc lives on Park Avenue"},
+	}
+	prompt := buildOutlinePrompt(headings, true)
+	if !strings.Contains(prompt, "（本节无正文——分隔大节）") {
+		t.Fatalf("divider marker missing: %q", prompt)
+	}
+	if !strings.Contains(prompt, "（本节无正文——编号容器）") {
+		t.Fatalf("numbered container marker missing: %q", prompt)
+	}
+	if !strings.Contains(prompt, "候选标题（正文行）「SOMEWHAT HAPPY」") {
+		t.Fatalf("candidate marker missing: %q", prompt)
+	}
+	if !strings.Contains(prompt, "level\": 0") {
+		t.Fatalf("output contract must mention level 0: %q", prompt)
+	}
+}
+
+func TestLooksNumberedContainer(t *testing.T) {
+	numbered := []string{"Part I", "Part 3", "Chapter 12", "Appendix B", "第3章", "第十二回", "Volume II"}
+	plain := []string{"Double Survivorship Biases", "SOMEWHAT HAPPY", "章节小结", "转折"}
+	for _, text := range numbered {
+		if !looksNumberedContainer(text) {
+			t.Errorf("%q should be a numbered container", text)
+		}
+	}
+	for _, text := range plain {
+		if looksNumberedContainer(text) {
+			t.Errorf("%q must not be a numbered container", text)
+		}
+	}
+}
+
 func TestLooksGarbledHeading(t *testing.T) {
 	garbled := []string{"oss-filesystem-exploration", "readme.md", "yt-ADzLv1nRtR8-transcript", "a_b"}
 	clean := []string{"我会把版图扩成这样", "layerfs vs Vfs", "restic / Borg", "AgentFS", "3. Cloudflare Agents Workspace：另外一种答案"}
@@ -183,7 +250,11 @@ func TestPolishOutlineDropsSamplesOverBudget(t *testing.T) {
 	runPolishOutline = func(_ context.Context, _ string, _ string, prompt string) (string, string, error) {
 		capturedPrompt = prompt
 		n := 0
-		for _, line := range strings.Split(prompt, "\n") {
+		outline := prompt
+		if idx := strings.LastIndex(prompt, "标题大纲："); idx >= 0 {
+			outline = prompt[idx:]
+		}
+		for _, line := range strings.Split(outline, "\n") {
 			if strings.Contains(line, ". H2 ") {
 				n++
 			}
@@ -216,7 +287,11 @@ func TestPolishOutlineDropsSamplesOverBudget(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%q", response.Code, response.Body.String())
 	}
-	if strings.Contains(capturedPrompt, "采样：") {
+	outline := capturedPrompt
+	if idx := strings.LastIndex(capturedPrompt, "标题大纲："); idx >= 0 {
+		outline = capturedPrompt[idx:]
+	}
+	if strings.Contains(outline, "采样：") {
 		t.Fatal("over-budget outline must drop samples before calling the model")
 	}
 	for i := 0; i < 120; i++ {

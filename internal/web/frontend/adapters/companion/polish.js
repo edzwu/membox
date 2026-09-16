@@ -55,11 +55,13 @@ function renderDock() {
 /* Default click: outline polish via DeepSeek. Only the heading lines plus a
    short sample of each section's opening go to the model — never the body —
    so the round-trip is fast; the returned level/text edits are applied to
-   the source deterministically. */
+   the source deterministically. Isolated short lines that look like lost
+   headings (PDF debris) are included as level-0 candidates the model may
+   promote. */
 async function startOutlinePolish() {
   if (running || previewing || !polishAvailable()) return;
   const source = state.currentMarkdown || '';
-  const headings = extractHeadings(source);
+  const headings = extractHeadings(source, { includeCandidates: true });
   if (headings.length < 2) {
     showToast('标题太少，无需层级优化');
     return;
@@ -70,7 +72,7 @@ async function startOutlinePolish() {
   showToast(`分析 ${headings.length} 个标题的层级与语义… (DeepSeek)`);
   try {
     const result = await postPolishOutline(
-      headings.map((h) => ({ level: h.level, text: h.text, sample: h.sample })),
+      headings.map((h) => ({ level: h.level, text: h.text, sample: h.sample, candidate: h.candidate, empty: h.empty })),
       { signal: controller.signal },
     );
     const edits = Array.isArray(result.edits) ? result.edits : [];
@@ -78,7 +80,7 @@ async function startOutlinePolish() {
       throw new Error(`模型返回了 ${edits.length} 条修改，应有 ${headings.length} 条`);
     }
     const changed = edits.filter(
-      (edit, i) => edit.level !== headings[i].level || String(edit.text || '').trim() !== headings[i].text,
+      (edit, i) => edit.level !== headings[i].level || (edit.level >= 1 && String(edit.text || '').trim() !== headings[i].text),
     ).length;
     if (!changed) {
       showToast('标题层级已经很合理');
