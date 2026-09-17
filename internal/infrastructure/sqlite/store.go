@@ -15,6 +15,7 @@ import (
 
 	"membox/internal/application/port"
 	"membox/internal/domain/catalog"
+	"membox/internal/sourceurl"
 )
 
 var selectorPattern = regexp.MustCompile(`^[0-9a-fA-F-]+$`)
@@ -462,6 +463,9 @@ CREATE INDEX IF NOT EXISTS document_sources_mode ON document_sources(clip_mode);
 	if err != nil {
 		return fmt.Errorf("migrating document_sources: %w", err)
 	}
+	if err := s.normalizeDocumentSourceURLs(); err != nil {
+		return err
+	}
 	// Soft-delete registry: trashed documents keep their rows and relations;
 	// queries hide them and scans skip the trash directory until purge.
 	if _, err := s.db.Exec(`
@@ -480,6 +484,35 @@ CREATE TABLE IF NOT EXISTS document_trash (
 		return err
 	}
 	return s.migrateAgentSessions()
+}
+
+func (s *Store) normalizeDocumentSourceURLs() error {
+	rows, err := s.db.Query(`SELECT document_id,source_url,source_url_norm FROM document_sources`)
+	if err != nil {
+		return fmt.Errorf("reading document source URLs: %w", err)
+	}
+	type update struct{ id, normalized string }
+	var updates []update
+	for rows.Next() {
+		var id, raw, current string
+		if err := rows.Scan(&id, &raw, &current); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("scanning document source URL: %w", err)
+		}
+		normalized := sourceurl.Normalize(raw)
+		if normalized != "" && normalized != current {
+			updates = append(updates, update{id: id, normalized: normalized})
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, item := range updates {
+		if _, err := s.db.Exec(`UPDATE document_sources SET source_url_norm=? WHERE document_id=?`, item.normalized, item.id); err != nil {
+			return fmt.Errorf("normalizing document source URL: %w", err)
+		}
+	}
+	return nil
 }
 
 // migrateQuestions creates the question accumulation table and adds inbox-scan

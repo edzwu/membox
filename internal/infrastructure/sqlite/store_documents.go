@@ -11,6 +11,7 @@ import (
 
 	"membox/internal/application/port"
 	"membox/internal/domain/catalog"
+	"membox/internal/sourceurl"
 )
 
 // notTrashedClause hides soft-deleted documents from listings while keeping
@@ -589,27 +590,8 @@ func frontMatterMap(body string) (map[string]string, bool) {
 	return out, true
 }
 
-// normalizeSourceURLLite keeps store independent of the HTTP package while
-// matching browser/weixin share-link variants to the same key.
-func normalizeSourceURLLite(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return ""
-	}
-	// Strip fragment.
-	if i := strings.IndexByte(raw, '#'); i >= 0 {
-		raw = raw[:i]
-	}
-	// WeChat article id is stable; drop query entirely for mp.weixin.qq.com/s/…
-	if strings.Contains(raw, "mp.weixin.qq.com/s/") || strings.Contains(raw, "weixin.qq.com/s/") {
-		if i := strings.IndexByte(raw, '?'); i >= 0 {
-			raw = raw[:i]
-		}
-		return strings.TrimRight(raw, "/")
-	}
-	if i := strings.IndexByte(raw, '?'); i >= 0 {
-		// Keep non-weixin queries only if essential; default strip for matching stability.
-		raw = raw[:i]
-	}
-	return strings.TrimRight(raw, "/")
-}
+// Keep scan-time metadata registration identical to browser ingest. A prior
+// lightweight implementation stripped every query, while the bridge retained
+// unknown queries; editing and rescanning a clip could therefore change its
+// identity and let the next save create a duplicate.
+func normalizeSourceURLLite(raw string) string { return sourceurl.Normalize(raw) }

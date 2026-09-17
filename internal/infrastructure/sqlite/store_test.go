@@ -107,6 +107,37 @@ CREATE TABLE graph_edges (
 	}
 }
 
+func TestOpenRenormalizesDocumentSourceURLs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "membox.db")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`
+INSERT INTO documents(id,created_at,updated_at,pinned) VALUES('x-clip',1,1,0);
+INSERT INTO document_sources(document_id,source_url,source_url_norm,clip_mode,created_at)
+VALUES('x-clip','https://x.com/user/status/123?s=12','https://x.com/user/status/123?s=12','page',1);`); err != nil {
+		store.Close()
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	var normalized string
+	if err := store.db.QueryRow(`SELECT source_url_norm FROM document_sources WHERE document_id='x-clip'`).Scan(&normalized); err != nil {
+		t.Fatal(err)
+	}
+	if want := "https://x.com/user/status/123"; normalized != want {
+		t.Fatalf("source_url_norm=%q, want %q", normalized, want)
+	}
+}
+
 func TestSearchExactSkipsPrefixMatches(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "membox.db"))
 	if err != nil {

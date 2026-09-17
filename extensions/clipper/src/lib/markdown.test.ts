@@ -15,6 +15,33 @@ describe('htmlToMarkdown', () => {
     expect(markdown).not.toContain('window.bad');
   });
 
+  // Regression: X Articles wraps the content of headed table cells in block
+  // elements. turndown-plugin-gfm kept the resulting blank lines inside pipe
+  // rows, so Miru parsed them as scattered paragraphs instead of one table.
+  it('flattens block-wrapped headed cells into valid one-line GFM rows', () => {
+    const markdown = htmlToMarkdown(`
+      <table>
+        <thead><tr>
+          <th><div>folder</div></th>
+          <th><p>what it is</p></th>
+          <th><div>authoritative for</div></th>
+        </tr></thead>
+        <tbody><tr>
+          <td><div><code>cutlass/</code></div><div>(v4.8.0, <code>include/cutlass/version.h</code>)</div></td>
+          <td><p>NVIDIA CUTLASS, whole checkout.</p><p>Only the DSL directories matter.</p></td>
+          <td><div>CuTe DSL API surface</div></td>
+        </tr></tbody>
+      </table>
+    `);
+
+    const lines = markdown.split('\n');
+    expect(lines).toEqual([
+      '| folder | what it is | authoritative for |',
+      '| --- | --- | --- |',
+      '| `cutlass/` (v4.8.0, `include/cutlass/version.h`) | NVIDIA CUTLASS, whole checkout. Only the DSL directories matter. | CuTe DSL API surface |',
+    ]);
+  });
+
   // Regression: body-only tables (no <th>) used to be kept as raw HTML by
   // turndown-plugin-gfm. Miru html:false then shows the tags as source text.
   it('serializes body-only tables without a heading row', () => {

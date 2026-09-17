@@ -74,7 +74,10 @@ export function normalizeSourceURL(raw: string): string {
     const isWeixin =
       host.includes('weixin.qq.com') ||
       (host.includes('qq.com') && u.pathname.startsWith('/s'));
-    if (isWeixin) {
+    const isXStatus =
+      ['x.com', 'www.x.com', 'twitter.com', 'www.twitter.com', 'mobile.twitter.com'].includes(host) &&
+      /^\/[^/]+\/status\/[^/]+/.test(u.pathname);
+    if (isWeixin || isXStatus) {
       u.search = '';
     } else {
       const drop = [

@@ -40,12 +40,13 @@ function makeTurndown(): TurndownService {
   });
   turndown.use(gfm);
 
-  // turndown-plugin-gfm only converts tables whose first row is <th>, and
-  // keeps every other <table> as raw HTML. Miru renders with html:false, so
-  // those leftovers show up as escaped source. Convert body-only tables too
-  // (common on hand-written pages like Jeff Dean latency numbers).
-  turndown.addRule('tableWithoutHeading', {
-    filter: (node) => isTableWithoutHeading(node),
+  // Own the whole table conversion instead of leaving headed tables to the
+  // GFM plugin. Rich page DOMs (notably X Articles) wrap cell text in div/p
+  // blocks; the plugin preserves their blank lines inside pipe rows, producing
+  // invalid Markdown that Miru renders as scattered paragraphs. The canonical
+  // serializer below flattens each cell to one line for every table shape.
+  turndown.addRule('normalizedTable', {
+    filter: 'table',
     replacement: (_content, node) => tableToMarkdown(node as HTMLTableElement),
   });
 
@@ -102,14 +103,6 @@ export function isLatexMathElement(node: Node): boolean {
   );
 }
 
-function isTableWithoutHeading(node: Node): boolean {
-  if (node.nodeName !== 'TABLE') return false;
-  const table = node as HTMLTableElement;
-  const first = table.rows?.[0];
-  if (!first) return false;
-  return !rowIsHeading(first);
-}
-
 function rowIsHeading(row: HTMLTableRowElement): boolean {
   const parent = row.parentElement;
   if (!parent) return false;
@@ -124,9 +117,10 @@ function rowIsHeading(row: HTMLTableRowElement): boolean {
 /** Serialize any HTML table to a GFM pipe table (synthetic blank header if needed). */
 export function tableToMarkdown(table: HTMLTableElement): string {
   const rows = Array.from(table.rows).map((row) =>
-    Array.from(row.cells).map((cell) => cellTextForMarkdown(cell)),
+    Array.from(row.cells).map((cell) => cellMarkdownForTable(cell)),
   );
-  if (!rows.length) return '';
+  const firstRow = rows[0];
+  if (!firstRow) return '';
 
   const colCount = Math.max(0, ...rows.map((row) => row.length));
   if (colCount === 0) return '';
@@ -139,7 +133,7 @@ export function tableToMarkdown(table: HTMLTableElement): string {
   const first = table.rows[0];
   const headed = first ? rowIsHeading(first) : false;
   const bodyRows = headed ? rows.slice(1) : rows;
-  const header = headed ? pad(rows[0]) : Array(colCount).fill('');
+  const header = headed ? pad(firstRow) : Array(colCount).fill('');
 
   const lines = [
     `| ${header.join(' | ')} |`,
@@ -149,11 +143,27 @@ export function tableToMarkdown(table: HTMLTableElement): string {
   return `\n\n${lines.join('\n')}\n\n`;
 }
 
-function cellTextForMarkdown(cell: HTMLTableCellElement): string {
-  // Prefer structured text (keeps <br> as spaces after normalize) without
-  // pulling in nested table noise — rare and not worth recursive conversion.
-  const text = elementText(cell).replace(/\s+/g, ' ').trim();
-  return text.replace(/\|/g, '\\|');
+function cellMarkdownForTable(cell: HTMLTableCellElement): string {
+  const clone = cell.cloneNode(true) as HTMLTableCellElement;
+  // Nested tables cannot be represented inside a GFM pipe cell. Keep their
+  // readable text without letting a recursive table conversion create rows.
+  clone.querySelectorAll('table').forEach((nested) => nested.replaceWith(nested.textContent || ''));
+
+  const inline = new TurndownService({
+    headingStyle: 'atx',
+    codeBlockStyle: 'fenced',
+    bulletListMarker: '-',
+  });
+  inline.use(gfm);
+
+  // A GFM table row must occupy one physical line. Block wrappers and <br>
+  // therefore become spaces, while Turndown still preserves useful inline
+  // semantics such as links, emphasis, images, and code spans.
+  return inline
+    .turndown(clone.innerHTML)
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\|/g, '\\|');
 }
 
 function cleanConversionHtml(html: string): string {

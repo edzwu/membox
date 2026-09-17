@@ -9,13 +9,13 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"membox/internal/application"
 	"membox/internal/domain/catalog"
+	"membox/internal/sourceurl"
 )
 
 const bridgeTokenHeader = "X-Membox-Token"
@@ -285,47 +285,9 @@ func (s *Server) listClipsBySourceURL(ctx context.Context, sourceURL string, sel
 	return out
 }
 
-// normalizeSourceURL strips fragments and noisy tracking query params so the
-// same article matches across share links (WeChat adds scene/token params).
-func normalizeSourceURL(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return ""
-	}
-	u, err := url.Parse(raw)
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		return strings.TrimRight(raw, "/")
-	}
-	u.Fragment = ""
-	u.Host = strings.ToLower(u.Host)
-	host := u.Host
-	// WeChat / many share pages: path id is stable; query is not.
-	if strings.Contains(host, "weixin.qq.com") ||
-		(strings.Contains(host, "qq.com") && strings.HasPrefix(u.Path, "/s")) {
-		u.RawQuery = ""
-	} else {
-		q := u.Query()
-		for _, key := range []string{
-			"from", "scene", "sessionid", "ascene", "devicetype", "version",
-			"nettype", "abtest_cookie", "wx_header", "poc_token", "srcid",
-			"sharer_shareinfo", "sharer_shareinfo_first", "mpshare", "clicktime",
-			"enterid", "exportkey", "pass_ticket", "uin", "key", "wxtoken",
-		} {
-			q.Del(key)
-		}
-		u.RawQuery = q.Encode()
-	}
-	u.Path = path.Clean("/" + strings.TrimPrefix(u.Path, "/"))
-	// Origin-only URLs must not keep a trailing slash. Go's url.URL.String()
-	// renders Path "/" as "https://host/", which used to disagree with older
-	// clips stored as "https://host" and broke page-clip idempotency.
-	if u.Path == "/" {
-		u.Path = ""
-	} else {
-		u.Path = strings.TrimRight(u.Path, "/")
-	}
-	return u.String()
-}
+// normalizeSourceURL is kept as a local name for the bridge helpers; the
+// implementation is shared with scan-time source metadata indexing.
+func normalizeSourceURL(raw string) string { return sourceurl.Normalize(raw) }
 
 func sourceURLSearchKeys(raw string) []string {
 	norm := normalizeSourceURL(raw)

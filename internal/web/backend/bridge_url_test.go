@@ -11,6 +11,14 @@ func TestNormalizeSourceURL_WeChatStripsQuery(t *testing.T) {
 	}
 }
 
+func TestNormalizeSourceURL_XStatusStripsShareQuery(t *testing.T) {
+	raw := "https://x.com/maharshii/status/2100193318277890174?s=12"
+	want := "https://x.com/maharshii/status/2100193318277890174"
+	if got := normalizeSourceURL(raw); got != want {
+		t.Fatalf("normalizeSourceURL = %q, want %q", got, want)
+	}
+}
+
 func TestNormalizeSourceURL_OriginTrailingSlashIsStable(t *testing.T) {
 	// Regression: page-clip idempotency keyed on source_url_norm. Origin URLs
 	// with and without a trailing slash must collapse to one key.

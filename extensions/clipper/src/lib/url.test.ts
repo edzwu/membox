@@ -20,6 +20,17 @@ describe('source URLs', () => {
     );
   });
 
+  it('canonicalizes X status share URLs to the path identity', () => {
+    expect(normalizeSourceURL('https://x.com/maharshii/status/2100193318277890174?s=12')).toBe(
+      'https://x.com/maharshii/status/2100193318277890174',
+    );
+    expect(
+      normalizeSourceURL(
+        'https://twitter.com/maharshii/status/2100193318277890174?t=abc&s=19#reply',
+      ),
+    ).toBe('https://twitter.com/maharshii/status/2100193318277890174');
+  });
+
   it('canonicalizes YouTube watch URLs to the stable video identity', () => {
     expect(
       youTubeVideoID('https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PLxx&index=3'),
