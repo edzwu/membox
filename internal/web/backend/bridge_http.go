@@ -15,6 +15,7 @@ import (
 
 	"membox/internal/application"
 	"membox/internal/domain/catalog"
+	"membox/internal/noteasset"
 	"membox/internal/sourceurl"
 )
 
@@ -238,6 +239,86 @@ func (s *Server) handleBridgeClips(writer http.ResponseWriter, request *http.Req
 		"count":      len(clips),
 		"clips":      clips,
 	})
+}
+
+// handleBridgeClipImages applies narrow image-URL substitutions after the text
+// document is already readable. It reads the latest Markdown and only rewrites
+// matching image destinations, so edits made while downloads were running are
+// never replaced by an older full-document snapshot.
+func (s *Server) handleBridgeClipImages(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireBridgeToken(writer, request) {
+		return
+	}
+	var payload struct {
+		ID           string `json:"id"`
+		Replacements []struct {
+			SourceURL string `json:"source_url"`
+			LocalURL  string `json:"local_url"`
+		} `json:"replacements"`
+	}
+	if !decodeJSON(writer, request, &payload) {
+		return
+	}
+	payload.ID = strings.TrimSpace(payload.ID)
+	if payload.ID == "" || len(payload.Replacements) == 0 || len(payload.Replacements) > 100 {
+		http.Error(writer, "document id and 1-100 image replacements are required", http.StatusBadRequest)
+		return
+	}
+
+	type replacement struct{ old, new string }
+	validated := make([]replacement, 0, len(payload.Replacements))
+	for _, item := range payload.Replacements {
+		source := strings.TrimSpace(item.SourceURL)
+		parsed, err := url.Parse(source)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+			http.Error(writer, "invalid source image URL", http.StatusBadRequest)
+			return
+		}
+		local := strings.TrimSpace(item.LocalURL)
+		const prefix = "/api/note-assets/"
+		if !strings.HasPrefix(local, prefix) || strings.ContainsAny(local, "?#") {
+			http.Error(writer, "invalid local image URL", http.StatusBadRequest)
+			return
+		}
+		target, err := noteasset.Resolve(s.home, strings.TrimPrefix(local, prefix))
+		if err != nil {
+			http.Error(writer, "invalid local image asset", http.StatusBadRequest)
+			return
+		}
+		info, err := os.Stat(target)
+		if err != nil || !info.Mode().IsRegular() {
+			http.Error(writer, "local image asset not found", http.StatusBadRequest)
+			return
+		}
+		validated = append(validated, replacement{old: "](" + source + ")", new: "](" + local + ")"})
+	}
+
+	s.documentMu.Lock()
+	defer s.documentMu.Unlock()
+	body, err := s.service.ReadDocument(request.Context(), payload.ID)
+	if err != nil {
+		http.Error(writer, err.Error(), http.StatusNotFound)
+		return
+	}
+	updated := string(body)
+	replaced := 0
+	for _, item := range validated {
+		replaced += strings.Count(updated, item.old)
+		updated = strings.ReplaceAll(updated, item.old, item.new)
+	}
+	if replaced > 0 {
+		if _, err := s.service.SyncDocument(request.Context(), payload.ID, updated); err != nil {
+			http.Error(writer, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+	writer.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(writer).Encode(map[string]any{"updated": replaced > 0, "replaced": replaced})
 }
 
 // repairSourceLinks ensures every selection note for URL is linked from the

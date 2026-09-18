@@ -57,6 +57,25 @@ func TestNoteImageUploadAndServe(t *testing.T) {
 	}
 }
 
+func TestNoteImageUploadAcceptsAuthenticatedClipper(t *testing.T) {
+	server := &Server{home: t.TempDir(), token: "clipper-secret"}
+	request := httptest.NewRequest(http.MethodPost, "/api/note-assets", bytes.NewReader(testNotePNG))
+	request.Header.Set(bridgeTokenHeader, "clipper-secret")
+	response := httptest.NewRecorder()
+	server.handleNoteImageUpload(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("extension upload status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	badRequest := httptest.NewRequest(http.MethodPost, "/api/note-assets", bytes.NewReader(testNotePNG))
+	badRequest.Header.Set(bridgeTokenHeader, "wrong")
+	badResponse := httptest.NewRecorder()
+	server.handleNoteImageUpload(badResponse, badRequest)
+	if badResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("bad extension token status=%d", badResponse.Code)
+	}
+}
+
 func TestNoteImageUploadImportsPastedAbsolutePath(t *testing.T) {
 	home := t.TempDir()
 	source := filepath.Join(t.TempDir(), "Finder clipboard.png")

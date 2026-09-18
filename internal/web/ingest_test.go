@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"membox/internal/application"
 	"membox/internal/bootstrap"
 	"membox/internal/web"
 )
@@ -77,6 +78,84 @@ func TestServerIngestPageOverwriteKeepsUUID(t *testing.T) {
 	docBody, _ := io.ReadAll(docResp.Body)
 	if !strings.Contains(string(docBody), "v2-final") {
 		t.Fatalf("body not overwritten: %s", docBody)
+	}
+}
+
+func TestAsyncClipImagePatchPreservesConcurrentDocumentEdits(t *testing.T) {
+	ctx := context.Background()
+	home := t.TempDir()
+	notesDir := t.TempDir()
+	service, err := bootstrap.Open(filepath.Join(home, "membox.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = service.Close() })
+	if _, err := service.AddPath(ctx, notesDir); err != nil {
+		t.Fatal(err)
+	}
+
+	const remote = "https://cdn.example.com/diagram.png"
+	created, err := service.CreateNote(ctx, application.CreateNoteOptions{
+		Title: "Async images",
+		Body:  "# Async images\n\n![diagram](" + remote + ")\n",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	logical, err := service.LogicalID(ctx, string(created.Document.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a reader edit made after the fast text ingest but before the
+	// image job finishes. The patch endpoint must retain it.
+	if _, err := service.SyncDocument(ctx, logical, "# Async images\n\n![diagram]("+remote+")\n\nreader edit\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	filename := strings.Repeat("a", 64) + ".png"
+	assetDir := filepath.Join(home, "assets", "note-images")
+	if err := os.MkdirAll(assetDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(assetDir, filename), []byte("stored image"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	server := web.NewServer(service)
+	server.SetHome(home)
+	server.SetToken("secret")
+	baseURL, err := server.Start(ctx, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = server.Shutdown(ctx) })
+	payload, _ := json.Marshal(map[string]any{
+		"id": logical,
+		"replacements": []map[string]string{{
+			"source_url": remote,
+			"local_url":  "/api/note-assets/" + filename,
+		}},
+	})
+	request, _ := http.NewRequest(http.MethodPost, baseURL+"/api/bridge/clip-images", strings.NewReader(string(payload)))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Membox-Token", "secret")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	responseBody, _ := io.ReadAll(response.Body)
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("patch status=%d body=%s", response.StatusCode, responseBody)
+	}
+
+	body, err := service.ReadDocument(ctx, logical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "/api/note-assets/"+filename) ||
+		!strings.Contains(string(body), "reader edit") || strings.Contains(string(body), remote) {
+		t.Fatalf("patched body lost content or URL replacement: %s", body)
 	}
 }
 

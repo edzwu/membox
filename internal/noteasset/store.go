@@ -1,4 +1,4 @@
-// Package noteasset stores binary images referenced by annotation-note Markdown.
+// Package noteasset stores binary images referenced by note and clipped-page Markdown.
 // Assets live under MEMBOX_HOME, outside user Markdown/Git trees, and use
 // content-addressed filenames so repeated clipboard pastes deduplicate safely.
 package noteasset
@@ -42,7 +42,7 @@ type Image struct {
 	Size      int64
 }
 
-// Root is the private image store for annotation notes.
+// Root is the private image store for Markdown documents.
 func Root(home string) (string, error) {
 	home = filepath.Clean(strings.TrimSpace(home))
 	if home == "" || home == "." {

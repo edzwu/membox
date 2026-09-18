@@ -14,16 +14,24 @@ import (
 
 const maxNoteImageRequestBytes int64 = noteasset.MaxImageBytes + 64*1024
 
-// handleNoteImageUpload stores one clipboard image outside Markdown/Git and
-// returns the stable same-origin URL to embed in annotation-note Markdown.
+// handleNoteImageUpload stores one pasted or browser-clipped image outside
+// Markdown/Git and returns the stable same-origin URL to embed in Markdown.
 func (s *Server) handleNoteImageUpload(writer http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodPost {
 		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	if request.Header.Get(miruClientHeader) != "1" {
-		http.Error(writer, "same-origin Miru request required", http.StatusForbidden)
-		return
+		// Extension uploads are cross-origin and must prove possession of the
+		// bridge token. Keep token-less test/local servers Miru-only rather than
+		// accidentally turning this into an unauthenticated localhost write API.
+		if s.token == "" {
+			http.Error(writer, "same-origin Miru or authenticated bridge request required", http.StatusForbidden)
+			return
+		}
+		if !s.requireBridgeToken(writer, request) {
+			return
+		}
 	}
 	request.Body = http.MaxBytesReader(writer, request.Body, maxNoteImageRequestBytes)
 	var image noteasset.Image
