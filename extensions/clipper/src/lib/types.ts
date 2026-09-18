@@ -10,10 +10,24 @@ export type BridgeStatus = {
   error?: string;
 };
 
+export type ClipImageRef = {
+  /** Temporary URL emitted into Markdown before the background worker localizes it. */
+  placeholder: string;
+  /** Absolute HTTP(S) image URL observed in the clipped article DOM. */
+  sourceUrl: string;
+};
+
+export type ClipImageReplacement = {
+  sourceUrl: string;
+  localUrl: string;
+};
+
 export type ClipPayload = {
   title: string;
   sourceUrl: string;
   body: string;
+  /** Images to download and replace with local content-addressed URLs before ingest. */
+  images?: ClipImageRef[];
   /** Length of the extracted Markdown body (debug/diagnostic). */
   bodyLength?: number;
   /** "selection" | "page" — stored in membox document_sources */
@@ -36,6 +50,7 @@ export type IngestResult = {
   filename?: string;
   video_id?: string;
   course_code?: string;
+  images_pending?: number;
 };
 
 /** Returned when a page clip for the URL already exists and overwrite was not set. */

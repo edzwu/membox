@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   clipCurrentDocument,
+  clipSelection,
   isMarkdownURL,
   rawMarkdownText,
   rawMarkdownTitle,
@@ -23,6 +24,31 @@ function installRawPage(markdown: string, url = RAW_URL) {
 afterEach(() => {
   Object.defineProperty(document, 'contentType', { value: 'text/html', configurable: true });
   document.body.innerHTML = '';
+});
+
+describe('clip image policy', () => {
+  it('keeps ordinary-site images as their original remote URLs', () => {
+    const payload = clipSelection({
+      excerptText: 'diagram',
+      excerptHTML: '<p>diagram</p><img src="https://cdn.example.com/diagram.png" alt="d">',
+      note: '',
+      sourceUrl: 'https://example.com/article',
+    });
+    expect(payload.images).toBeUndefined();
+    expect(payload.body).toContain('https://cdn.example.com/diagram.png');
+    expect(payload.body).not.toContain('membox.invalid');
+  });
+
+  it('prepares WeChat article images for asynchronous localization', () => {
+    const payload = clipSelection({
+      excerptText: 'diagram',
+      excerptHTML: '<p>diagram</p><img data-src="https://mmbiz.qpic.cn/pic.png" alt="d">',
+      note: '',
+      sourceUrl: 'https://mp.weixin.qq.com/s/article-id',
+    });
+    expect(payload.images).toHaveLength(1);
+    expect(payload.body).toContain('https://membox.invalid/__clip-image/0');
+  });
 });
 
 describe('rawMarkdownText', () => {

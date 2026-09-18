@@ -1,5 +1,6 @@
 import type { ClipPayload } from './types';
 import { extractCurrentArticle } from './article-extractor';
+import { prepareClipImages, shouldLocalizeClipImages } from './image-assets';
 import { htmlToMarkdown } from './markdown';
 import { currentSourceURL, normalizeSourceURL } from './url';
 
@@ -46,11 +47,14 @@ export function clipSelection(args: {
   if (!excerptText) throw new Error('Selection is empty');
 
   let excerptMarkdown = '';
+  let images: ClipPayload['images'] = [];
   try {
     const html = args.excerptHTML?.trim()
       ? args.excerptHTML
       : plainTextHtml(excerptText);
-    excerptMarkdown = htmlToMarkdown(html);
+    const prepared = prepareImagesForClip(html, sourceUrl);
+    excerptMarkdown = htmlToMarkdown(prepared.html);
+    images = prepared.images;
   } catch {
     excerptMarkdown = excerptText;
   }
@@ -73,6 +77,7 @@ export function clipSelection(args: {
     sourceUrl,
     clipMode: 'selection',
     excerptRaw: excerptText.replace(/\u00a0/g, ' ').trim(),
+    images: images.length ? images : undefined,
     body: buildMarkdown(title, sourceUrl, body, {
       clip_mode: 'selection',
       source_title: pageTitle,
@@ -161,7 +166,8 @@ export async function clipCurrentDocument(): Promise<ClipPayload> {
 
   const article = await extractCurrentArticle();
   const title = article.title || (document.title || 'Clipped page').trim();
-  const converted = htmlToMarkdown(article.html);
+  const prepared = prepareImagesForClip(article.html, sourceUrl);
+  const converted = htmlToMarkdown(prepared.html);
   if (!converted) throw new Error('Page has no extractable text');
 
   // Defuddle standardizes body headings to h2+, so the persisted document has
@@ -176,8 +182,17 @@ export async function clipCurrentDocument(): Promise<ClipPayload> {
     sourceUrl,
     clipMode: 'page',
     body: buildMarkdown(title, sourceUrl, markdownBody, extraFrontMatter),
+    images: prepared.images.length ? prepared.images : undefined,
     bodyLength: markdownBody.length,
   };
+}
+
+function prepareImagesForClip(
+  html: string,
+  sourceUrl: string,
+): { html: string; images: NonNullable<ClipPayload['images']> } {
+  if (!shouldLocalizeClipImages(sourceUrl)) return { html, images: [] };
+  return prepareClipImages(html, sourceUrl);
 }
 
 function runtimeClipperVersion(): string {

@@ -99,7 +99,8 @@ function applyJob(job: ActiveJob | null | undefined) {
     const short = String(job.result.id || '').slice(0, 8);
     const titleBit = job.result.title || job.title ? ` · ${job.result.title || job.title}` : '';
     const reused = job.result.reused;
-    showMessage(`${reused ? 'Opened' : 'Saved'} ${short}…${titleBit}`, 'ok');
+    const imageBit = formatImageResult(job.result.images_pending);
+    showMessage(`${reused ? 'Opened' : 'Saved'} ${short}…${titleBit}${imageBit}`, 'ok');
     return;
   }
   if (job.status === 'error') {
@@ -263,7 +264,14 @@ clipBtn.addEventListener('click', async () => {
 function handleSyncResult(response: {
   ok?: boolean;
   error?: string;
-  result?: { id?: string; title?: string; reused?: boolean; created?: boolean; updated?: boolean };
+  result?: {
+    id?: string;
+    title?: string;
+    reused?: boolean;
+    created?: boolean;
+    updated?: boolean;
+    images_pending?: number;
+  };
 } | undefined) {
   if (!response?.ok) {
     hideProgress();
@@ -274,13 +282,18 @@ function handleSyncResult(response: {
     return;
   }
   showProgress('Done', 100);
-  const { id, created, updated, reused, title } = response.result || {};
+  const { id, created, updated, reused, title, images_pending } = response.result || {};
   const action = reused ? 'Opened' : updated ? 'Updated' : created === false ? 'Saved' : 'Saved';
   const short = String(id || '').slice(0, 8);
-  showMessage(`${action} ${short}…${title ? ` · ${title}` : ''}`, 'ok');
+  const imageBit = formatImageResult(images_pending);
+  showMessage(`${action} ${short}…${title ? ` · ${title}` : ''}${imageBit}`, 'ok');
   clipBtn.disabled = false;
   void refreshStatus();
   setTimeout(() => hideProgress(), 800);
+}
+
+function formatImageResult(pending?: number): string {
+  return pending ? ` · ${pending} images loading` : '';
 }
 
 async function activeTabId(): Promise<number | null> {

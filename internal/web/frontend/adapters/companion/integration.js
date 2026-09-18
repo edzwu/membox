@@ -26,6 +26,7 @@
      retitle.js        AI title suggestion from the outline + lead sample */
 
 import { elements } from '../../js/dom.js';
+import { state } from '../../js/state.js';
 import { isEditableTarget } from '../../js/utils.js';
 import { hasUnsavedAnnotationChanges } from '../../js/annotations/session.js';
 import { session } from './session.js';
@@ -86,6 +87,41 @@ initAssist();
 initSelectionSummarize();
 initReview();
 initAgentSearch();
+
+// The clipper localizes WeChat images after the text has already rendered.
+// Keep Miru's in-memory source and loaded baseline aligned with the backend's
+// narrow URL patch, so a later explicit Sync cannot restore remote URLs.
+document.addEventListener('membox-clip-images-localized', (event) => {
+  let payload;
+  try {
+    payload = JSON.parse(String(event.detail || ''));
+  } catch {
+    return;
+  }
+  if (!payload || String(payload.documentId || '') !== session.documentID ||
+      !Array.isArray(payload.replacements)) return;
+
+  const valid = payload.replacements.filter((item) => {
+    try {
+      const source = new URL(String(item?.sourceUrl || ''));
+      return (source.protocol === 'http:' || source.protocol === 'https:') &&
+        /^\/api\/note-assets\/[a-f0-9]{64}\.(?:png|jpg|gif|webp|bmp)$/.test(
+          String(item?.localUrl || ''),
+        );
+    } catch {
+      return false;
+    }
+  });
+  const patch = (markdown) => {
+    let updated = String(markdown || '');
+    for (const item of valid) {
+      updated = updated.split(`](${item.sourceUrl})`).join(`](${item.localUrl})`);
+    }
+    return updated;
+  };
+  state.currentMarkdown = patch(state.currentMarkdown);
+  session.loadedMarkdown = patch(session.loadedMarkdown);
+});
 
 // User edits make the in-memory annotation set authoritative for deletions on
 // the next save. During a restore the model is incomplete; the restore flow

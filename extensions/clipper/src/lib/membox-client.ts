@@ -1,6 +1,7 @@
 import type {
   BridgeSettings,
   BridgeStatus,
+  ClipImageReplacement,
   ClipPayload,
   IngestConflict,
   IngestResult,
@@ -51,6 +52,53 @@ export async function fetchBridgeStatus(settings: BridgeSettings): Promise<Bridg
   } finally {
     clearTimeout(timer);
   }
+}
+
+export type StoredClipImage = {
+  url: string;
+  filename: string;
+  media_type: string;
+  sha256: string;
+  size: number;
+};
+
+/** Store one downloaded clip image in membox's content-addressed asset store. */
+export async function uploadClipImage(
+  settings: BridgeSettings,
+  image: Blob,
+): Promise<StoredClipImage> {
+  const base = settings.baseUrl.replace(/\/$/, '');
+  const response = await fetch(`${base}/api/note-assets`, {
+    method: 'POST',
+    headers: headers(settings),
+    body: image,
+  });
+  const text = await response.text();
+  if (!response.ok) throw new Error(extractErrorMessage(text, response.status));
+  return JSON.parse(text) as StoredClipImage;
+}
+
+export async function patchClipImages(
+  settings: BridgeSettings,
+  documentId: string,
+  replacements: ClipImageReplacement[],
+): Promise<{ updated: boolean; replaced: number }> {
+  if (!replacements.length) return { updated: false, replaced: 0 };
+  const base = settings.baseUrl.replace(/\/$/, '');
+  const response = await fetch(`${base}/api/bridge/clip-images`, {
+    method: 'POST',
+    headers: headers(settings, true),
+    body: JSON.stringify({
+      id: documentId,
+      replacements: replacements.map((item) => ({
+        source_url: item.sourceUrl,
+        local_url: item.localUrl,
+      })),
+    }),
+  });
+  const text = await response.text();
+  if (!response.ok) throw new Error(extractErrorMessage(text, response.status));
+  return JSON.parse(text) as { updated: boolean; replaced: number };
 }
 
 export async function ingestClip(

@@ -500,7 +500,7 @@ Extension 或 Miru 选区 Save
 
 1. **常驻方式**：仅文档约定 `mm web start --fg`，还是要 daemon/launchd？  
 2. **默认写入路径**：必须已 `path add` 某个 notes 根，还是 membox 提供默认 inbox 目录？  
-3. **图片**：MVP 只保留 URL，还是下载到附件目录？（建议 MVP 外链）  
+3. **图片（已实现，仅微信公众号）**：对 `mp.weixin.qq.com/s…`，clipper 从 `currentSrc/src/data-src/srcset` 收集正文图片；先保存文字和远程 URL 并打开 Miru，再由 background 以 `no-referrer` 异步下载、上传内容寻址附件、定点改写 Markdown，并替换已打开阅读页中的图片。单图失败时保留原 URL。其他网站沿用原逻辑，只在 Markdown 中保留远程图片 URL。
 4. **付费墙/登录页**：扩展可读当前 DOM（已登录态）——产品上要在隐私说明里写清「仅本机、用户触发」。  
 5. **Firefox/Chrome 扩展 ID** 与 CORS 白名单如何在开发/发行间切换。
 

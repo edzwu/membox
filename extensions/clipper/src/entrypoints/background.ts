@@ -2,10 +2,12 @@ import {
   fetchClipsBySource,
   ingestClip,
   IngestConflictError,
+  patchClipImages,
   summarizeVideo,
 } from '../lib/membox-client';
 import { loadSettings } from '../lib/settings';
 import { getNotesEnabled } from '../lib/float-notes';
+import { localizeClipImages, remoteClipImages } from '../lib/image-localizer';
 import { isYouTubeVideoURL, normalizeSourceURL, youTubeVideoID } from '../lib/url';
 import { captionsToMarkdown, type YouTubeCaptionsResult } from '../lib/youtube-captions';
 import {
@@ -55,6 +57,25 @@ function keepAliveStop() {
   if (keepAliveTimer) {
     clearInterval(keepAliveTimer);
     keepAliveTimer = null;
+  }
+}
+
+// Page text is saved/opened before image downloads. Keep that detached image
+// job alive independently from YouTube's progress lifecycle.
+let imageJobs = 0;
+let imageKeepAliveTimer: ReturnType<typeof setInterval> | null = null;
+function imageKeepAliveStart() {
+  imageJobs++;
+  if (imageKeepAliveTimer) return;
+  imageKeepAliveTimer = setInterval(() => {
+    void browser.storage.session.get('membox.activeJob');
+  }, 20_000);
+}
+function imageKeepAliveStop() {
+  imageJobs = Math.max(0, imageJobs - 1);
+  if (imageJobs === 0 && imageKeepAliveTimer) {
+    clearInterval(imageKeepAliveTimer);
+    imageKeepAliveTimer = null;
   }
 }
 
@@ -113,11 +134,21 @@ async function ingestPayload(
     if (payload.clipMode === 'selection' && payload.sourceUrl && opts.tabId) {
       await ensurePageClip(settings, opts.tabId, payload.sourceUrl);
     }
-    const result = await ingestClip(settings, payload, { overwrite: opts.overwrite });
+    // Persist readable text immediately. Remote image URLs are temporary and
+    // are patched to local assets by a detached job after Miru has opened.
+    const result = await ingestClip(settings, remoteClipImages(payload), {
+      overwrite: opts.overwrite,
+    });
     if (payload.bodyLength != null) result.body_length = payload.bodyLength;
+    result.images_pending = payload.images?.length || 0;
     const shouldOpen = opts.open && settings.autoOpen && result.view_url;
+    let readerTabId: number | undefined;
     if (shouldOpen) {
-      await browser.tabs.create({ url: result.view_url });
+      const readerTab = await browser.tabs.create({ url: result.view_url });
+      readerTabId = readerTab.id;
+    }
+    if (result.images_pending) {
+      startImageLocalization(settings, payload, result.id, readerTabId);
     }
     return { ok: true, result };
   } catch (err) {
@@ -137,9 +168,61 @@ async function ensurePageClip(
     const clips = await fetchClipsBySource(settings, sourceUrl, 'all');
     if (clips.some((c) => c.clip_mode === 'page')) return;
     const clip = await clipTab(tabId);
-    await ingestClip(settings, clip);
+    const result = await ingestClip(settings, remoteClipImages(clip));
+    if (clip.images?.length) startImageLocalization(settings, clip, result.id);
   } catch {
     /* best effort */
+  }
+}
+
+function startImageLocalization(
+  settings: Awaited<ReturnType<typeof loadSettings>>,
+  clip: ClipPayload,
+  documentId: string,
+  readerTabId?: number,
+): void {
+  imageKeepAliveStart();
+  void (async () => {
+    try {
+      await localizeClipImages(settings, clip, {
+        onLocalized: async (replacement) => {
+          await patchClipImages(settings, documentId, [replacement]);
+          if (readerTabId != null) {
+            await notifyReaderImages(readerTabId, settings.baseUrl, documentId, [replacement]);
+          }
+        },
+      });
+    } catch (error) {
+      console.warn('membox: asynchronous image localization failed', error);
+    } finally {
+      imageKeepAliveStop();
+    }
+  })();
+}
+
+async function notifyReaderImages(
+  tabId: number,
+  baseUrl: string,
+  documentId: string,
+  replacements: Array<{ sourceUrl: string; localUrl: string }>,
+): Promise<void> {
+  const local = replacements.map((item) => ({
+    sourceUrl: item.sourceUrl,
+    localUrl: new URL(item.localUrl, baseUrl).href,
+    markdownUrl: item.localUrl,
+  }));
+  for (let attempt = 0; attempt < 10; attempt++) {
+    try {
+      const response = await browser.tabs.sendMessage(tabId, {
+        type: 'membox.clip-images-localized',
+        documentId,
+        replacements: local,
+      });
+      if (Number(response?.replaced || 0) > 0) return;
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
   }
 }
 

@@ -2,7 +2,7 @@
   "name": "membox-clipper",
   "description": "Clip any webpage into membox and open it in Miru",
   "private": true,
-  "version": "0.1.27",
+  "version": "0.1.28",
   "type": "module",
   "scripts": {
     "dev": "wxt",

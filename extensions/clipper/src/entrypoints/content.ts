@@ -140,6 +140,10 @@ export default defineContentScript({
     }
 
     browser.runtime.onMessage.addListener((message) => {
+      if (message?.type === 'membox.clip-images-localized') {
+        return Promise.resolve(applyLocalizedImages(message.documentId, message.replacements));
+      }
+
       // Explicit user toggle from the popup — works live, no reload needed.
       if (message?.type === 'membox.set-enabled') {
         return (async () => {
@@ -267,3 +271,73 @@ export default defineContentScript({
     }
   },
 });
+
+function applyLocalizedImages(
+  documentId: unknown,
+  replacements: unknown,
+): { ok: true; replaced: number } {
+  const currentDocument = new URL(location.href).searchParams.get('id');
+  if (currentDocument && documentId && currentDocument !== String(documentId)) {
+    return { ok: true, replaced: 0 };
+  }
+  if (!Array.isArray(replacements)) return { ok: true, replaced: 0 };
+
+  const localBySource = new Map<string, string>();
+  const localURLs = new Set<string>();
+  const markdownReplacements: Array<{ sourceUrl: string; localUrl: string }> = [];
+  for (const item of replacements) {
+    const sourceUrl = String(item?.sourceUrl || '').trim();
+    const source = assetURLKey(sourceUrl);
+    const local = String(item?.localUrl || '').trim();
+    const markdownURL = String(item?.markdownUrl || local).trim();
+    if (!source || !/^https?:\/\//i.test(local) || !markdownURL) continue;
+    localBySource.set(source, local);
+    localURLs.add(assetURLKey(local));
+    markdownReplacements.push({ sourceUrl, localUrl: markdownURL });
+  }
+
+  if (localBySource.size) {
+    // Keep Miru's in-memory Markdown baseline aligned with the backend patch;
+    // otherwise a later explicit Sync could restore the old remote URLs.
+    document.dispatchEvent(
+      new CustomEvent('membox-clip-images-localized', {
+        detail: JSON.stringify({
+          documentId: String(documentId || ''),
+          replacements: markdownReplacements,
+        }),
+      }),
+    );
+  }
+
+  let replaced = 0;
+  document.querySelectorAll('img').forEach((image) => {
+    const candidates = [image.getAttribute('src'), image.currentSrc, image.src].map((candidate) =>
+      assetURLKey(candidate),
+    );
+    if (candidates.some((candidate) => localURLs.has(candidate))) {
+      replaced++;
+      return;
+    }
+    const local = candidates.map((candidate) => localBySource.get(candidate)).find(Boolean);
+    if (!local) return;
+    image.removeAttribute('srcset');
+    image.closest('picture')?.querySelectorAll('source').forEach((source) => {
+      source.removeAttribute('srcset');
+    });
+    image.src = local;
+    replaced++;
+  });
+  return { ok: true, replaced };
+}
+
+function assetURLKey(raw: unknown): string {
+  const value = String(raw || '').trim();
+  if (!value) return '';
+  try {
+    const url = new URL(value, location.href);
+    url.hash = '';
+    return url.href;
+  } catch {
+    return value;
+  }
+}

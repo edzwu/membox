@@ -348,8 +348,21 @@ function snapshotDocument(source: Document): Document {
   if (!clone.body && clone.documentElement) {
     clone.documentElement.appendChild(clone.createElement('body'));
   }
+  copyRenderedImageSources(source, clone);
   copyOpenShadowRoots(source, clone);
   return clone;
+}
+
+/** Preserve the resource Chromium actually selected from picture/srcset. */
+function copyRenderedImageSources(source: Document, clone: Document): void {
+  const sourceImages = Array.from(source.querySelectorAll('img'));
+  const cloneImages = Array.from(clone.querySelectorAll('img'));
+  for (let index = 0; index < sourceImages.length; index++) {
+    const current = sourceImages[index]?.currentSrc?.trim();
+    const target = cloneImages[index];
+    if (!current || !target || !/^https?:\/\//i.test(current)) continue;
+    target.setAttribute('src', current);
+  }
 }
 
 /** Flatten open shadow roots into the isolated snapshot without touching the page. */

@@ -54,6 +54,17 @@ The clipping pipeline is deliberately split by responsibility:
 - `article-extractor.ts` — isolated live/raw/iframe candidates + Defuddle
 - `markdown.ts` — deterministic HTML serialization (GFM, code, Mermaid)
 - `clip.ts` — payload/frontmatter orchestration and selection notes
+- `image-assets.ts` / `image-localizer.ts` — lazy-image discovery, background download, content-addressed membox upload, and Markdown URL rewriting
+
+Binary image localization is deliberately limited to WeChat Official Account
+articles (`mp.weixin.qq.com/s…`). Their text and remote image URLs are ingested
+first so Miru opens immediately; image downloads then continue in the extension
+background, patch only the matching Markdown destinations, and swap images in
+the open reader as they finish. `mmbiz.qpic.cn` is fetched without a Referer
+(avoiding its localhost anti-hotlink placeholder) and stored under
+`$MEMBOX_HOME/assets/note-images`. An individual image failure keeps its remote
+URL and does not abort the page clip. All other sites keep the original clipper
+behavior: Markdown references their remote image URLs directly.
 
 Regression checks:
 

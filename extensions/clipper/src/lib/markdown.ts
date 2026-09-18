@@ -196,19 +196,19 @@ function cleanConversionHtml(html: string): string {
 // data:image/(png|gif|jpeg|webp) and renders a rejected image as literal
 // text — the raw base64 blob floods the page — and DOMPurify strips
 // data:image/svg+xml outright (SVG is an XSS vector). Drop them here, but
-// first rescue the lazy-loading pattern where src holds a data: placeholder
-// and the real URL sits in a data-* attribute.
+// first rescue lazy-loading patterns where src is absent/a data placeholder
+// and the real URL sits in a data-* attribute (notably WeChat articles).
 function dropDataUriImages(root: HTMLElement): void {
   root.querySelectorAll('img').forEach((img) => {
     const src = (img.getAttribute('src') || '').trim();
-    if (!/^data:/i.test(src)) return;
+    if (src && !/^data:/i.test(src)) return;
     const real =
       img.getAttribute('data-src') ||
       img.getAttribute('data-original') ||
       img.getAttribute('data-lazy-src');
     if (real && /^https?:\/\//i.test(real.trim())) {
       img.setAttribute('src', real.trim());
-    } else {
+    } else if (/^data:/i.test(src)) {
       img.remove();
     }
   });

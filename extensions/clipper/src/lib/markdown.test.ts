@@ -215,6 +215,13 @@ describe('htmlToMarkdown', () => {
     expect(markdown).toBe('![diagram](https://cdn.ex.com/real.png)');
   });
 
+  it('rescues WeChat lazy images whose src has not been populated yet', () => {
+    const markdown = htmlToMarkdown(
+      '<img data-src="https://mmbiz.qpic.cn/pic/640?wx_fmt=jpeg" alt="图" />',
+    );
+    expect(markdown).toBe('![图](https://mmbiz.qpic.cn/pic/640?wx_fmt=jpeg)');
+  });
+
   it('keeps ordinary http(s) images untouched', () => {
     const markdown = htmlToMarkdown('<img src="https://ex.com/pic.png" alt="p" />');
     expect(markdown).toBe('![p](https://ex.com/pic.png)');
