@@ -101,6 +101,32 @@ export async function patchClipImages(
   return JSON.parse(text) as { updated: boolean; replaced: number };
 }
 
+/** Ask the bridge's naming model for a title when pasted text has no H1.
+ * Authenticates with the bridge token; returns '' on any failure — ingest
+ * still works, the server just falls back to its default title. */
+export async function suggestTitle(
+  settings: BridgeSettings,
+  input: { lead: string; current?: string; headings?: { level: number; text: string }[] },
+): Promise<string> {
+  try {
+    const base = settings.baseUrl.replace(/\/$/, '');
+    const response = await fetch(`${base}/api/suggest-title`, {
+      method: 'POST',
+      headers: headers(settings, true),
+      body: JSON.stringify({
+        lead: input.lead,
+        current: input.current || '',
+        headings: input.headings || [],
+      }),
+    });
+    if (!response.ok) return '';
+    const data = (await response.json()) as { title?: string };
+    return (data.title || '').trim();
+  } catch {
+    return '';
+  }
+}
+
 export async function ingestClip(
   settings: BridgeSettings,
   clip: ClipPayload,

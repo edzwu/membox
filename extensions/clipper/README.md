@@ -4,6 +4,18 @@ WXT browser extension that clips the current page to Markdown, ingests it into
 membox (`POST /api/ingest`), opens the new document in Miru, and provides a
 side panel for finding and switching between open tabs.
 
+## Clipboard: Copy / Paste & save
+
+**Copy page** extracts the active tab exactly like Save does, but composes a
+self-contained Markdown document (H1 title + body + source line) onto the
+clipboard — nothing is sent to membox.
+
+**Paste & save** goes the other way: clipboard text is ingested as a new
+note. Title resolution: the text's own first H1 wins; when it has none, the
+bridge's naming model suggests one from the lead paragraph and outline
+(`POST /api/suggest-title`, bridge-token auth); if that fails the server's
+default title applies.
+
 ## Tab stash (OneTab-style history)
 
 The popup's **Stash all tabs** button snapshots every open http(s) tab into a

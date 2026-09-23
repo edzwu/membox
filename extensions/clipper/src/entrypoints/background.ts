@@ -102,12 +102,39 @@ export default defineBackground(() => {
         overwrite: message.overwrite === true,
       });
     }
+    if (message?.type === 'membox.clip-active-tab') {
+      return clipActiveTabPayload();
+    }
     if (message?.type === 'membox.clips-for-url') {
       return clipsForUrl(String(message.url || ''));
     }
     return undefined;
   });
 });
+
+function unclippableUrlError(url: string): string {
+  if (
+    !url ||
+    /^(chrome|chrome-extension|about|edge|moz-extension|devtools):/.test(url)
+  ) {
+    return 'This page cannot be clipped';
+  }
+  return '';
+}
+
+/** Extract the active tab as Markdown without ingesting — the popup's Copy
+ * button puts this straight on the clipboard. */
+async function clipActiveTabPayload(): Promise<ClipResponse> {
+  const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id) return { ok: false, error: 'No active tab' };
+  const urlError = unclippableUrlError(tab.url || '');
+  if (urlError) return { ok: false, error: urlError };
+  try {
+    return { ok: true, payload: await clipTab(tab.id) };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
 
 async function clipsForUrl(
   sourceUrl: string,
@@ -241,16 +268,9 @@ async function startActiveTabJob(opts: { overwrite?: boolean } = {}): Promise<In
     return { ok: false, error: 'No active tab' };
   }
   const url = tab.url || '';
-  if (
-    !url ||
-    url.startsWith('chrome://') ||
-    url.startsWith('chrome-extension://') ||
-    url.startsWith('about:') ||
-    url.startsWith('edge://') ||
-    url.startsWith('moz-extension://') ||
-    url.startsWith('devtools://')
-  ) {
-    return { ok: false, error: 'This page cannot be clipped' };
+  const urlError = unclippableUrlError(url);
+  if (urlError) {
+    return { ok: false, error: urlError };
   }
 
   const youtube = isYouTubeVideoURL(url);

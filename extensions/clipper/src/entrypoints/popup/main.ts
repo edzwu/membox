@@ -1,9 +1,15 @@
-import { fetchBridgeStatus } from '../../lib/membox-client';
+import { fetchBridgeStatus, suggestTitle } from '../../lib/membox-client';
 import { loadSettings, saveSettings } from '../../lib/settings';
 import { getNotesEnabled, setNotesEnabled } from '../../lib/float-notes';
 import { stashOpenTabs } from '../../lib/tab-organizer/stash';
+import {
+  composePageMarkdown,
+  leadFromMarkdown,
+  outlineFromMarkdown,
+  titleFromMarkdown,
+} from '../../lib/paste';
 import type { ActiveJob } from '../../lib/jobs';
-import type { BridgeSettings } from '../../lib/types';
+import type { BridgeSettings, ClipPayload, IngestResult } from '../../lib/types';
 
 const homeView = document.getElementById('homeView') as HTMLElement;
 const settingsView = document.getElementById('settingsView') as HTMLElement;
@@ -18,6 +24,8 @@ const notesToggleBtn = document.getElementById('notesToggle') as HTMLButtonEleme
 const openTabsBtn = document.getElementById('openTabs') as HTMLButtonElement;
 const stashTabsBtn = document.getElementById('stashTabs') as HTMLButtonElement;
 const openStashBtn = document.getElementById('openStash') as HTMLButtonElement;
+const copyPageBtn = document.getElementById('copyPage') as HTMLButtonElement;
+const pasteSaveBtn = document.getElementById('pasteSave') as HTMLButtonElement;
 const openSettingsBtn = document.getElementById('openSettings') as HTMLButtonElement;
 const closeSettingsBtn = document.getElementById('closeSettings') as HTMLButtonElement;
 const progressEl = document.getElementById('progress') as HTMLDivElement;
@@ -78,6 +86,67 @@ stashTabsBtn.addEventListener('click', async () => {
 });
 
 openStashBtn.addEventListener('click', openStashPage);
+
+copyPageBtn.addEventListener('click', async () => {
+  copyPageBtn.disabled = true;
+  showMessage('', '');
+  try {
+    const res = await browser.runtime.sendMessage({ type: 'membox.clip-active-tab' });
+    if (!res?.ok) {
+      showMessage(res?.error || 'Copy failed', 'error');
+      return;
+    }
+    const payload = res.payload as ClipPayload;
+    const markdown = composePageMarkdown(payload.title, payload.body, payload.sourceUrl);
+    await navigator.clipboard.writeText(markdown);
+    showMessage(`Copied ${markdown.length} chars`, 'ok');
+  } catch (error) {
+    showMessage(error instanceof Error ? error.message : String(error), 'error');
+  } finally {
+    copyPageBtn.disabled = false;
+  }
+});
+
+pasteSaveBtn.addEventListener('click', async () => {
+  pasteSaveBtn.disabled = true;
+  showMessage('', '');
+  try {
+    const text = (await navigator.clipboard.readText()).trim();
+    if (!text) {
+      showMessage('Clipboard is empty', 'error');
+      return;
+    }
+    // Title: the text's own H1 wins; otherwise ask the bridge's naming
+    // model (lead + outline). Failure still saves — the server falls back.
+    let title = titleFromMarkdown(text);
+    if (!title) {
+      showMessage('Naming…', '');
+      const settings = await loadSettings();
+      title = await suggestTitle(settings, {
+        lead: leadFromMarkdown(text),
+        headings: outlineFromMarkdown(text),
+      });
+    }
+    showMessage('Saving…', '');
+    const res = await browser.runtime.sendMessage({
+      type: 'membox.ingest-payload',
+      payload: { title, sourceUrl: '', body: text },
+      open: true,
+    });
+    if (!res?.ok) {
+      showMessage(res?.error || 'Save failed', 'error');
+      return;
+    }
+    const result = res.result as IngestResult;
+    const short = String(result.id || '').slice(0, 8);
+    const titleBit = result.title || title ? ` · ${result.title || title}` : '';
+    showMessage(`Saved ${short}…${titleBit}`, 'ok');
+  } catch (error) {
+    showMessage(error instanceof Error ? error.message : String(error), 'error');
+  } finally {
+    pasteSaveBtn.disabled = false;
+  }
+});
 
 async function renderEnableState(enabled: boolean) {
   notesToggleBtn.classList.toggle('is-on', enabled);

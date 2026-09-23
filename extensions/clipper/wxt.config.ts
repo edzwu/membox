@@ -16,6 +16,9 @@ export default defineConfig({
       'tabs',
       // Stash enrichment: visitCount / lastVisitTime per stashed URL.
       'history',
+      // Copy page → writeText; Paste & save → readText.
+      'clipboardRead',
+      'clipboardWrite',
       ...(browser === 'firefox' ? [] : ['sidePanel']),
     ],
     // 127.0.0.1 = membox bridge. http(s)://*/ = clip any normal webpage
