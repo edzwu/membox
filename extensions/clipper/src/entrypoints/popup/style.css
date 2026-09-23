@@ -178,14 +178,70 @@ button:disabled {
   cursor: default;
 }
 
-.save-btn,
-.tabs-btn {
-  width: 100%;
+/* Segmented control: Save / Copy / Paste as one row. */
+.segmented {
+  display: flex;
+  border-radius: 10px;
+  overflow: hidden;
 }
 
-.save-btn {
+.seg {
+  flex: 1;
+  appearance: none;
+  border: 0;
+  padding: 12px 8px;
+  font: inherit;
+  font-weight: 600;
   font-size: 14px;
-  padding: 12px 14px;
+  cursor: pointer;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.seg + .seg {
+  border-left: 1px solid var(--bg);
+}
+
+.seg-primary {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* Submenu: the three tabs actions collapse behind one toggle. */
+.submenu {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.submenu-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.submenu-toggle .chevron {
+  transition: transform 0.15s ease;
+}
+
+.submenu-toggle[aria-expanded="true"] .chevron {
+  transform: rotate(180deg);
+}
+
+.submenu-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.submenu-body[hidden] {
+  display: none;
+}
+
+.tabs-btn {
+  width: 100%;
 }
 
 /* Progress */

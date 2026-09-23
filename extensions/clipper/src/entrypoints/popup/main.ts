@@ -87,6 +87,22 @@ stashTabsBtn.addEventListener('click', async () => {
 
 openStashBtn.addEventListener('click', openStashPage);
 
+// Tabs submenu: collapsed by default, expanded state persists.
+const tabsToggleBtn = document.getElementById('tabsToggle') as HTMLButtonElement;
+const tabsMenuEl = document.getElementById('tabsMenu') as HTMLDivElement;
+const TABS_MENU_KEY = 'membox.popup.tabsMenuOpen';
+
+function setTabsMenu(open: boolean) {
+  tabsMenuEl.hidden = !open;
+  tabsToggleBtn.setAttribute('aria-expanded', String(open));
+  localStorage.setItem(TABS_MENU_KEY, open ? '1' : '0');
+}
+
+tabsToggleBtn.addEventListener('click', () => {
+  setTabsMenu(tabsMenuEl.hidden);
+});
+setTabsMenu(localStorage.getItem(TABS_MENU_KEY) === '1');
+
 copyPageBtn.addEventListener('click', async () => {
   copyPageBtn.disabled = true;
   showMessage('', '');

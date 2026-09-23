@@ -31,12 +31,25 @@
             </button>
           </div>
 
-          <button id="clip" type="button" class="primary save-btn">Save</button>
-          <button id="copyPage" type="button" class="secondary tabs-btn">Copy page</button>
-          <button id="pasteSave" type="button" class="secondary tabs-btn">Paste &amp; save</button>
-          <button id="openTabs" type="button" class="secondary tabs-btn">Organize tabs</button>
-          <button id="stashTabs" type="button" class="secondary tabs-btn">Stash all tabs</button>
-          <button id="openStash" type="button" class="secondary tabs-btn">Saved tabs</button>
+          <div class="segmented" role="group" aria-label="Page actions">
+            <button id="clip" type="button" class="seg seg-primary" title="Clip this page into membox">Save</button>
+            <button id="copyPage" type="button" class="seg" title="Copy this page as Markdown, without saving">Copy</button>
+            <button id="pasteSave" type="button" class="seg" title="Save clipboard text into membox">Paste</button>
+          </div>
+
+          <div class="submenu">
+            <button id="tabsToggle" type="button" class="secondary submenu-toggle" aria-expanded="false" aria-controls="tabsMenu">
+              <span>Tabs</span>
+              <svg class="chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M6 9l6 6 6-6" />
+              </svg>
+            </button>
+            <div id="tabsMenu" class="submenu-body" hidden>
+              <button id="openTabs" type="button" class="secondary tabs-btn">Organize tabs</button>
+              <button id="stashTabs" type="button" class="secondary tabs-btn">Stash all tabs</button>
+              <button id="openStash" type="button" class="secondary tabs-btn">Saved tabs</button>
+            </div>
+          </div>
 
           <div id="progress" class="progress" hidden>
             <div class="progress-track">
