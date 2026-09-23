@@ -22,7 +22,7 @@ func TestSuggestTitleReturnsCleanTitle(t *testing.T) {
 			}
 		}
 		// Prose + quotes + trailing punctuation must be cleaned off.
-		return "deepseek/deepseek-v4-flash", "好的，标题是：《Agent 文件系统版图》。\n希望有帮助！", nil
+		return "deepseek/deepseek-flash", "好的，标题是：《Agent 文件系统版图》。\n希望有帮助！", nil
 	}
 	defer func() { runSuggestTitle = restore }()
 

@@ -11,7 +11,7 @@ YouTube watch/shorts/embed pages take a different path:
 3. Companion saves `yt-<video_id>-transcript.md` into membox.
 4. mmd → `ebp automation summary-local --transcript-file <that path>`:
    LLM input = system prompt + that Markdown; model default
-   **deepseek/deepseek-v4-flash**. Summary published as `<course>-lecN.md`.
+   **deepseek/deepseek-flash**. Summary published as `<course>-lecN.md`.
 5. If a managed summary for that `video_id` already exists, Miru opens it
    immediately (idempotent; no caption fetch / no LLM).
 

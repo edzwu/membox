@@ -1,6 +1,6 @@
 // Package assist implements one-shot selection Q&A and rewrite for Miru.
 // It reuses Pi RPC (same boundary as translation) but targets a cloud model
-// such as deepseek-v4-flash and never loads membox write tools.
+// such as deepseek-flash and never loads membox write tools.
 package assist
 
 import (
@@ -19,18 +19,19 @@ import (
 )
 
 const (
-	DefaultProvider = "deepseek"
-	DefaultModel    = "deepseek-v4-flash"
+	DefaultProvider       = "deepseek"
+	DefaultModel          = "deepseek-flash"
+	DefaultQualifiedModel = DefaultProvider + "/" + DefaultModel
 
 	ModeAsk  = "ask"
 	ModeEdit = "edit"
 
 	maxInstructionRunes = 4000
 	// Group analysis sends several complete raw JDs as one selection; 60k
-	// runes (~30k tokens) fits deepseek-v4-flash comfortably.
-	maxSelectionRunes   = 60000
-	maxContextRunes     = 4000
-	maxRPCFrameBytes    = 8 << 20
+	// runes (~30k tokens) fits deepseek-flash comfortably.
+	maxSelectionRunes = 60000
+	maxContextRunes   = 4000
+	maxRPCFrameBytes  = 8 << 20
 )
 
 // Request is one selection-scoped assist turn.

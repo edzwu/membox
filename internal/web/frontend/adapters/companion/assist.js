@@ -1,4 +1,4 @@
-/* Selection assist: ask about a selection via deepseek-v4-flash (Companion → Pi).
+/* Selection assist: ask about a selection via deepseek-flash (Companion → Pi).
    Answers stream inline under the passage (translation-style) and auto-save as
    a kind=qa note — no sidebar card. The toolbar only holds the question input. */
 
@@ -14,7 +14,7 @@ import { session } from './session.js';
 const INLINE_HOST_SELECTOR = 'p, li, blockquote, pre, td, th, dd, dt, h1, h2, h3, h4, h5, h6';
 const ASSIST_INLINE_CLASS = 'membox-assist-inline';
 
-const MODEL_LABEL = 'deepseek-v4-flash';
+const MODEL_LABEL = 'deepseek-flash';
 
 const ASSIST_ICON =
   '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">' +

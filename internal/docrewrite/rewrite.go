@@ -2,7 +2,7 @@
 // debris) into readable notes via LLM completion.
 //
 // Default model path is local qwen3:14b through mmd (same stack as PDF
-// structure planning / translation). Cloud deepseek-v4-flash is opt-in.
+// structure planning / translation). Cloud deepseek-flash is opt-in.
 //
 // Large documents are rewritten in heading-aligned chunks so each model call
 // stays within local context / mmd prompt limits — the full file is never
@@ -27,7 +27,7 @@ const (
 	LocalModel    = translation.DefaultModel    // "qwen3:14b"
 
 	DeepseekProvider = assist.DefaultProvider // "deepseek"
-	DeepseekModel    = assist.DefaultModel    // "deepseek-v4-flash"
+	DeepseekModel    = assist.DefaultModel    // "deepseek-flash"
 )
 
 // ModelSpec is a resolved provider/model pair.
@@ -43,7 +43,7 @@ type ModelSpec struct {
 //
 //	"" | "local" | "qwen" | "qwen3:14b"  → local qwen3:14b via mmd
 //	"deepseek" | "deepseek-flash" |
-//	"deepseek/deepseek-v4-flash"         → deepseek-v4-flash via Pi
+//	"deepseek/deepseek-flash"            → deepseek-flash via Pi
 //	"provider/model"                     → Pi (or local if provider is ollama)
 func ParseModel(raw string) (ModelSpec, error) {
 	s := strings.ToLower(strings.TrimSpace(raw))
@@ -53,7 +53,8 @@ func ParseModel(raw string) (ModelSpec, error) {
 			Provider: LocalProvider, Model: LocalModel, Local: true,
 			Label: "local " + LocalModel,
 		}, nil
-	case "deepseek", "deepseek-flash", "flash", "deepseek/deepseek-v4-flash":
+	case "deepseek", "deepseek-flash", "flash", "deepseek/deepseek-flash",
+		"deepseek-v4-flash", "deepseek/deepseek-v4-flash":
 		return ModelSpec{
 			Provider: DeepseekProvider, Model: DeepseekModel, Local: false,
 			Label: DeepseekProvider + "/" + DeepseekModel,

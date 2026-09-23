@@ -34,7 +34,7 @@ Continuity: each chunk sees a short tail of the previous rewrite; after all
 chunks, a light second pass polishes each join (seam) so cuts read naturally.
 
 Default model is local qwen3:14b through mmd (same stack as translation /
-PDF structure planning). Pass --model deepseek to use deepseek-v4-flash.
+PDF structure planning). Pass --model deepseek to use deepseek-flash.
 
 Extra guidance for the model (especially useful with the local model):
   --hint '…'           repeatable; injected into every chunk prompt
@@ -64,8 +64,9 @@ Examples:
 		switch strings.ToLower(model) {
 		case "", "local", "qwen", "qwen3", "qwen3:14b", "ollama":
 			// default
-		case "deepseek", "deepseek-flash", "flash", "deepseek/deepseek-v4-flash":
-			label = "deepseek/deepseek-v4-flash"
+		case "deepseek", "deepseek-flash", "flash", "deepseek/deepseek-flash",
+			"deepseek-v4-flash", "deepseek/deepseek-v4-flash":
+			label = "deepseek/deepseek-flash"
 		default:
 			label = model
 		}

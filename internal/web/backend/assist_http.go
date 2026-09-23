@@ -21,7 +21,7 @@ var (
 	assistRunner *assist.Runner
 )
 
-// SetAssistRunner wires the selection-assist model runner (typically deepseek-v4-flash).
+// SetAssistRunner wires the selection-assist model runner (typically deepseek-flash).
 func (s *Server) SetAssistRunner(runner *assist.Runner) {
 	assistMu.Lock()
 	defer assistMu.Unlock()
@@ -34,7 +34,7 @@ func getAssistRunner() *assist.Runner {
 	if assistRunner != nil {
 		return assistRunner
 	}
-	// Default: deepseek-v4-flash via Pi on PATH, auth from user home.
+	// Default: deepseek-flash via Pi on PATH, auth from user home.
 	home, _ := os.UserHomeDir()
 	return &assist.Runner{
 		PiPath:   "pi",

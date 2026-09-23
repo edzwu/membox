@@ -1220,7 +1220,7 @@ func (b *Box) ReindexDocument(ctx context.Context, command ReindexDocumentComman
 }
 
 // RewriteDocumentCommand runs LLM readability rewrite on a Markdown document.
-// Model defaults to local qwen3:14b (mmd); pass "deepseek" for deepseek-v4-flash.
+// Model defaults to local qwen3:14b (mmd); pass "deepseek" for deepseek-flash.
 type RewriteDocumentCommand struct {
 	Selector   string
 	Model      string // empty/local/qwen3:14b | deepseek | provider/model

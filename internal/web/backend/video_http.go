@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"membox/internal/assist"
 	"membox/internal/translation"
 	"membox/internal/videosummary"
 )
@@ -21,7 +22,7 @@ import (
 const browserVideoCourseCode = videosummary.DefaultBrowserCourseCode
 
 // defaultBrowserSummaryModel matches membox assist / deepseek flash.
-const defaultBrowserSummaryModel = "deepseek/deepseek-v4-flash"
+const defaultBrowserSummaryModel = assist.DefaultQualifiedModel
 
 type videoSummaryHTTPRequest struct {
 	URL        string `json:"url"`

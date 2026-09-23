@@ -90,7 +90,7 @@ func Run(ctx context.Context, options Options) error {
 			return translation.EnsureMMD(ctx, options.Home)
 		},
 	})
-	// Selection assist (ask/edit) uses Pi → deepseek-v4-flash one-shot RPC.
+	// Selection assist (ask/edit) uses Pi → deepseek-flash one-shot RPC.
 	userHome, _ := os.UserHomeDir()
 	assistPiPath, _ := service.Store().GetSetting(runCtx, "agent.pi_path")
 	assistPiPath = strings.TrimSpace(assistPiPath)

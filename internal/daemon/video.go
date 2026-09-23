@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"membox/internal/application"
+	"membox/internal/assist"
 	"membox/internal/videosummary"
 )
 
@@ -21,7 +22,7 @@ const DefaultBrowserCourseCode = videosummary.DefaultBrowserCourseCode
 
 // DefaultBrowserSummaryModel is the pi model used when the browser extension
 // supplies a pre-fetched transcript (skip yt-dlp). Matches membox assist.
-const DefaultBrowserSummaryModel = "deepseek/deepseek-v4-flash"
+const DefaultBrowserSummaryModel = assist.DefaultQualifiedModel
 
 type VideoSummaryRequest struct {
 	URL        string `json:"url"`

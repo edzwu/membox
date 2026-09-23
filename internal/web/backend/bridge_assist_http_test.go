@@ -66,7 +66,7 @@ func TestBridgeAssistStatusReportsRunner(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
 	}
-	for _, field := range []string{`"available"`, `"provider":"deepseek"`, `"model":"deepseek-v4-flash"`} {
+	for _, field := range []string{`"available"`, `"provider":"deepseek"`, `"model":"deepseek-flash"`} {
 		if !strings.Contains(response.Body.String(), field) {
 			t.Fatalf("body = %q, want field %s", response.Body.String(), field)
 		}

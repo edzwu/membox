@@ -18,7 +18,10 @@ func TestParseModelDefaultIsLocalQwen(t *testing.T) {
 }
 
 func TestParseModelDeepseekAliases(t *testing.T) {
-	for _, raw := range []string{"deepseek", "deepseek-flash", "deepseek/deepseek-v4-flash"} {
+	for _, raw := range []string{
+		"deepseek", "deepseek-flash", "deepseek/deepseek-flash",
+		"deepseek-v4-flash", "deepseek/deepseek-v4-flash",
+	} {
 		spec, err := ParseModel(raw)
 		if err != nil {
 			t.Fatalf("ParseModel(%q): %v", raw, err)
