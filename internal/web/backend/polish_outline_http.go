@@ -268,16 +268,21 @@ func looksGarbledHeading(text string) bool {
 	return true
 }
 
-var outlineJSONRe = regexp.MustCompile(`\[[\s\S]*?\]`)
-
-// parseOutlineEdits tolerates prose/fences around the JSON array by trying
-// each [...] candidate, then enforces the contract: one edit per outline
-// item; real headings keep level 1..6, candidates take 0 (left as body —
-// text forced back to the original) or 1..6 (promoted); promoted or kept
-// headings need non-empty text within the length cap.
+// parseOutlineEdits tolerates prose/fences around the JSON array by
+// scanning for balanced [...] spans with a string-aware scanner (brackets
+// inside string literals never close the array), retrying once after
+// unescaping Markdown-style \[ \] some models emit, then enforces the
+// contract: one edit per outline item; real headings keep level 1..6,
+// candidates take 0 (left as body — text forced back to the original) or
+// 1..6 (promoted); promoted or kept headings need non-empty text within the
+// length cap.
 func parseOutlineEdits(text string, headings []polishOutlineHeading) ([]polishOutlineEdit, error) {
+	candidates := jsonArraySpans(text)
+	if repaired := unescapeArrayBrackets(text); repaired != text {
+		candidates = append(candidates, jsonArraySpans(repaired)...)
+	}
 	var lastErr error
-	for _, match := range outlineJSONRe.FindAllString(text, -1) {
+	for _, match := range candidates {
 		var edits []polishOutlineEdit
 		if err := json.Unmarshal([]byte(match), &edits); err != nil {
 			lastErr = err
@@ -317,5 +322,91 @@ func parseOutlineEdits(text string, headings []polishOutlineHeading) ([]polishOu
 	if lastErr == nil {
 		lastErr = fmt.Errorf("no JSON array in response")
 	}
-	return nil, lastErr
+	return nil, fmt.Errorf("%s (model output excerpt: %q)", lastErr, truncateRunes(strings.TrimSpace(text), 300))
+}
+
+// jsonArraySpans returns every balanced top-level [...] span in text. The
+// scanner tracks JSON string state, so brackets inside string literals
+// (e.g. a heading text "a[i] 数组") never affect the depth count — the lazy
+// regex it replaces truncated the array at exactly those brackets.
+func jsonArraySpans(text string) []string {
+	var spans []string
+	depth := 0
+	start := -1
+	inString := false
+	escaped := false
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+		if inString {
+			if escaped {
+				escaped = false
+			} else if c == '\\' {
+				escaped = true
+			} else if c == '"' {
+				inString = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inString = true
+		case '[':
+			if depth == 0 {
+				start = i
+			}
+			depth++
+		case ']':
+			if depth > 0 {
+				depth--
+				if depth == 0 {
+					spans = append(spans, text[start:i+1])
+					start = -1
+				}
+			}
+		}
+	}
+	return spans
+}
+
+// unescapeArrayBrackets removes Markdown-style escapes of [ and ] that some
+// models emit outside JSON strings (e.g. `[{...}\]`), which otherwise break
+// parsing with "invalid character '\\' after array element". Backslashes
+// inside string literals are JSON escapes and are left untouched.
+func unescapeArrayBrackets(text string) string {
+	if !strings.ContainsAny(text, "\\") {
+		return text
+	}
+	var b strings.Builder
+	b.Grow(len(text))
+	inString := false
+	escaped := false
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+		if inString {
+			b.WriteByte(c)
+			if escaped {
+				escaped = false
+			} else if c == '\\' {
+				escaped = true
+			} else if c == '"' {
+				inString = false
+			}
+			continue
+		}
+		if c == '"' {
+			inString = true
+		} else if c == '\\' && i+1 < len(text) && (text[i+1] == '[' || text[i+1] == ']') {
+			continue // drop the backslash, keep the bracket
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
+}
+
+func truncateRunes(s string, max int) string {
+	runes := []rune(s)
+	if len(runes) <= max {
+		return s
+	}
+	return string(runes[:max]) + "…"
 }

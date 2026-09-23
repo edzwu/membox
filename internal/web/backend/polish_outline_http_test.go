@@ -19,7 +19,7 @@ func fakeOutlineOK(edits []polishOutlineEdit) polishOutlineFunc {
 		for _, e := range edits {
 			parts = append(parts, fmt.Sprintf(`{"level":%d,"text":%q}`, e.Level, e.Text))
 		}
-		return "deepseek/deepseek-v4-flash", "根据语义分析……\n[" + strings.Join(parts, ",") + "]\n以上供参考", nil
+		return "deepseek/deepseek-flash", "根据语义分析……\n[" + strings.Join(parts, ",") + "]\n以上供参考", nil
 	}
 }
 
@@ -102,11 +102,11 @@ func TestPolishOutlineRejectsBadInput(t *testing.T) {
 	server.SetHome(t.TempDir())
 
 	for _, body := range []string{
-		`{}`,                                                            // no headings
-		`{"headings":[{"level":0,"text":"x"}]}`,                         // level 0 without candidate flag
-		`{"headings":[{"level":1,"text":"x","candidate":true}]}`,         // candidate must be level 0
-		`{"headings":[{"level":7,"text":"x"}]}`,                         // level too high
-		`{"headings":[{"level":2,"text":"` + strings.Repeat("x", 400) + `"}]}`,   // text too long
+		`{}`,                                    // no headings
+		`{"headings":[{"level":0,"text":"x"}]}`, // level 0 without candidate flag
+		`{"headings":[{"level":1,"text":"x","candidate":true}]}`,                            // candidate must be level 0
+		`{"headings":[{"level":7,"text":"x"}]}`,                                             // level too high
+		`{"headings":[{"level":2,"text":"` + strings.Repeat("x", 400) + `"}]}`,              // text too long
 		`{"headings":[{"level":2,"text":"x","sample":"` + strings.Repeat("s", 300) + `"}]}`, // sample too long
 	} {
 		request := httptest.NewRequest(http.MethodPost, "/api/polish-outline", strings.NewReader(body))
@@ -185,6 +185,46 @@ func TestParseOutlineEditsCandidates(t *testing.T) {
 		headings,
 	); err == nil {
 		t.Fatal("level 0 on a real heading must be rejected")
+	}
+}
+
+// Models occasionally Markdown-escape the array brackets (`\]`); the old
+// lazy regex handed that to json.Unmarshal verbatim and the endpoint
+// returned "invalid character '\\' after array element". Unescape and parse.
+func TestParseOutlineEditsUnescapesMarkdownBrackets(t *testing.T) {
+	headings := []polishOutlineHeading{{Level: 1, Text: "A"}, {Level: 2, Text: "B"}}
+	edits, err := parseOutlineEdits(`\[{"level":1,"text":"A"},{"level":2,"text":"B"}\]`, headings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if edits[0].Level != 1 || edits[1].Text != "B" {
+		t.Fatalf("unexpected edits: %+v", edits)
+	}
+}
+
+// A ] inside a heading's text must not truncate the array — the scanner
+// tracks string state, so brackets inside literals are inert.
+func TestParseOutlineEditsBracketsInsideText(t *testing.T) {
+	headings := []polishOutlineHeading{{Level: 2, Text: "a[i] 数组"}, {Level: 2, Text: "B"}}
+	edits, err := parseOutlineEdits(`[{"level":2,"text":"a[i] 数组"},{"level":2,"text":"B"}]`, headings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if edits[0].Text != "a[i] 数组" {
+		t.Fatalf("text lost: %+v", edits[0])
+	}
+}
+
+// A raw backslash inside a string is still invalid JSON ("C:\Users"), but
+// the error must carry an excerpt of the model output for diagnosis.
+func TestParseOutlineEditsErrorCarriesExcerpt(t *testing.T) {
+	headings := []polishOutlineHeading{{Level: 1, Text: "A"}}
+	_, err := parseOutlineEdits(`[{"level":1,"text":"C:\Users\ed"}]`, headings)
+	if err == nil {
+		t.Fatal("invalid escape inside string must be rejected")
+	}
+	if !strings.Contains(err.Error(), "model output excerpt") || !strings.Contains(err.Error(), "C:") {
+		t.Fatalf("error must quote the raw model output: %v", err)
 	}
 }
 
