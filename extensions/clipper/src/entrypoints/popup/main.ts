@@ -14,6 +14,7 @@ const messageEl = document.getElementById('message') as HTMLParagraphElement;
 const saveSettingsBtn = document.getElementById('saveSettings') as HTMLButtonElement;
 const clipBtn = document.getElementById('clip') as HTMLButtonElement;
 const notesToggleBtn = document.getElementById('notesToggle') as HTMLButtonElement;
+const openTabsBtn = document.getElementById('openTabs') as HTMLButtonElement;
 const openSettingsBtn = document.getElementById('openSettings') as HTMLButtonElement;
 const closeSettingsBtn = document.getElementById('closeSettings') as HTMLButtonElement;
 const progressEl = document.getElementById('progress') as HTMLDivElement;
@@ -34,6 +35,25 @@ function showSettings() {
 
 openSettingsBtn.addEventListener('click', showSettings);
 closeSettingsBtn.addEventListener('click', showHome);
+
+openTabsBtn.addEventListener('click', () => {
+  const extensionBrowser = browser as typeof browser & {
+    sidePanel?: typeof browser.sidePanel;
+    sidebarAction?: { open: () => Promise<void> };
+  };
+  const opening = extensionBrowser.sidePanel?.open
+    ? extensionBrowser.sidePanel.open({ windowId: browser.windows.WINDOW_ID_CURRENT })
+    : extensionBrowser.sidebarAction?.open();
+  if (!opening) {
+    showMessage('Tab organizer is not supported in this browser', 'error');
+    return;
+  }
+  void opening
+    .then(() => window.close())
+    .catch((error: unknown) => {
+      showMessage(error instanceof Error ? error.message : String(error), 'error');
+    });
+});
 
 async function renderEnableState(enabled: boolean) {
   notesToggleBtn.classList.toggle('is-on', enabled);

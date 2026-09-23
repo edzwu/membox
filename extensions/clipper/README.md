@@ -1,7 +1,24 @@
 # membox clipper (P0)
 
 WXT browser extension that clips the current page to Markdown, ingests it into
-membox (`POST /api/ingest`), and opens the new document in Miru.
+membox (`POST /api/ingest`), opens the new document in Miru, and provides a
+side panel for finding and switching between open tabs.
+
+## Tab organizer side panel
+
+The popup's **Organize tabs** button opens a browser side panel with:
+
+- all tabs across browser windows, refreshed on tab events;
+- a close button on the right of each row, revealed on hover or keyboard focus;
+- fuzzy matching over title, URL, and host with match highlighting;
+- filters such as `host:`, `title:`, `url:`, `is:pinned|active|discarded`, and
+  `win:current`;
+- keyboard navigation: `↑`/`↓` or `Ctrl+P`/`Ctrl+N`, `Enter` to focus,
+  `Esc` to clear, and `Ctrl+R` to reload;
+- a persisted Current Intent card that can be edited by double-clicking it.
+
+Automatic tab deduplication is intentionally not enabled yet. The organizer
+reads tab metadata only and does not read page content.
 
 YouTube watch/shorts/embed pages take a different path:
 
@@ -112,7 +129,9 @@ extensions/clipper/dist/chrome-mv3
 build points at `localhost:3000` and the popup stays stuck on `checking…`
 with no styles.
 
-After every rebuild click **Reload** on the extension card.
+After every rebuild click **Reload** on the extension card. Open the popup and
+choose **Organize tabs** to open the side panel; the normal toolbar click still
+opens the clipping popup.
 
 Pairing in the popup:
 

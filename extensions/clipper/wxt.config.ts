@@ -3,13 +3,19 @@ import { defineConfig } from 'wxt';
 export default defineConfig({
   srcDir: 'src',
   outDir: 'dist',
-  // Keep Vite defaults; a postbuild step rewrites popup.html asset hrefs to
+  // Keep Vite defaults; a postbuild step rewrites extension-page asset hrefs to
   // extension-root-relative paths (see scripts/fix-popup-paths.mjs).
-  manifest: {
+  manifest: ({ browser }) => ({
     name: 'membox clipper',
-    description: 'Save the current page to membox and open it in Miru',
+    description: 'Save pages to membox and organize open tabs',
     // WXT derives manifest.version from package.json, our single version source.
-    permissions: ['activeTab', 'storage', 'scripting', 'tabs'],
+    permissions: [
+      'activeTab',
+      'storage',
+      'scripting',
+      'tabs',
+      ...(browser === 'firefox' ? [] : ['sidePanel']),
+    ],
     // 127.0.0.1 = membox bridge. http(s)://*/ = clip any normal webpage
     // (content script + optional programmatic inject after user gesture).
     host_permissions: [
@@ -21,5 +27,5 @@ export default defineConfig({
     action: {
       default_title: 'Save to membox',
     },
-  },
+  }),
 });

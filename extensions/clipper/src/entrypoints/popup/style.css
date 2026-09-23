@@ -178,8 +178,12 @@ button:disabled {
   cursor: default;
 }
 
-.save-btn {
+.save-btn,
+.tabs-btn {
   width: 100%;
+}
+
+.save-btn {
   font-size: 14px;
   padding: 12px 14px;
 }

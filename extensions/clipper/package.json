@@ -1,8 +1,8 @@
 {
   "name": "membox-clipper",
-  "description": "Clip any webpage into membox and open it in Miru",
+  "description": "Clip webpages into membox and organize browser tabs",
   "private": true,
-  "version": "0.1.28",
+  "version": "0.1.29",
   "type": "module",
   "scripts": {
     "dev": "wxt",
