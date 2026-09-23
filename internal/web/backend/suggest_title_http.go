@@ -31,8 +31,11 @@ func (s *Server) handleSuggestTitle(writer http.ResponseWriter, request *http.Re
 		return
 	}
 	if request.Header.Get(miruClientHeader) != "1" {
-		http.Error(writer, "forbidden", http.StatusForbidden)
-		return
+		// The browser extension holds the bridge token, not the Miru header —
+		// accept it too (clipboard paste-and-save suggests titles this way).
+		if !s.requireBridgeToken(writer, request) {
+			return
+		}
 	}
 	if s.home == "" {
 		http.Error(writer, "membox home is not configured", http.StatusServiceUnavailable)
@@ -47,8 +50,15 @@ func (s *Server) handleSuggestTitle(writer http.ResponseWriter, request *http.Re
 	if !decodeJSON(writer, request, &payload) {
 		return
 	}
-	if err := validateOutlineHeadings(payload.Headings); err != nil {
-		http.Error(writer, err.Error(), http.StatusBadRequest)
+	// Headings are optional when a lead is provided: clipboard paste-and-save
+	// sends plain text that may contain no Markdown headings at all.
+	if len(payload.Headings) > 0 {
+		if err := validateOutlineHeadings(payload.Headings); err != nil {
+			http.Error(writer, err.Error(), http.StatusBadRequest)
+			return
+		}
+	} else if strings.TrimSpace(payload.Lead) == "" {
+		http.Error(writer, "headings or lead are required", http.StatusBadRequest)
 		return
 	}
 	if utf8.RuneCountInString(payload.Lead) > suggestTitleMaxLeadRunes ||

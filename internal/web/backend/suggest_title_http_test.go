@@ -13,12 +13,15 @@ import (
 func TestSuggestTitleReturnsCleanTitle(t *testing.T) {
 	server := NewServer(nil, nil, nil)
 	server.SetHome(t.TempDir())
+	server.SetToken("secret") // bridge token mode: the real deployment shape
 
 	restore := runSuggestTitle
 	runSuggestTitle = func(_ context.Context, _ string, _ string, prompt string) (string, string, error) {
-		for _, want := range []string{"当前标题：oss-filesystem-exploration", "导语：", "标题大纲：", "H2 Factory Vfs"} {
-			if !strings.Contains(prompt, want) {
-				return "", "", fmt.Errorf("prompt missing %q: %q", want, prompt)
+		if strings.Contains(prompt, "Factory Vfs") { // the outline-driven request
+			for _, want := range []string{"当前标题：oss-filesystem-exploration", "导语：", "标题大纲：", "H2 Factory Vfs"} {
+				if !strings.Contains(prompt, want) {
+					return "", "", fmt.Errorf("prompt missing %q: %q", want, prompt)
+				}
 			}
 		}
 		// Prose + quotes + trailing punctuation must be cleaned off.
@@ -26,11 +29,11 @@ func TestSuggestTitleReturnsCleanTitle(t *testing.T) {
 	}
 	defer func() { runSuggestTitle = restore }()
 
-	// The Miru header guards the endpoint against cross-origin pages.
+	// Neither Miru header nor bridge token → rejected.
 	blocked := httptest.NewRecorder()
 	server.handleSuggestTitle(blocked, httptest.NewRequest(http.MethodPost, "/api/suggest-title", nil))
-	if blocked.Code != http.StatusForbidden {
-		t.Fatalf("without Miru header status=%d", blocked.Code)
+	if blocked.Code != http.StatusUnauthorized {
+		t.Fatalf("without any auth status=%d", blocked.Code)
 	}
 
 	body := `{"current":"oss-filesystem-exploration","lead":"我按你这套 CAS 的坐标系挖了一轮",` +
@@ -55,6 +58,17 @@ func TestSuggestTitleReturnsCleanTitle(t *testing.T) {
 	}
 	if result.Label == "" {
 		t.Fatal("missing model label")
+	}
+
+	// The extension authenticates with the bridge token instead of the Miru
+	// header, and clipboard text may carry no headings — lead alone suffices.
+	paste := httptest.NewRequest(http.MethodPost, "/api/suggest-title",
+		strings.NewReader(`{"lead":"内存分配器的核心是减少碎片"}`))
+	paste.Header.Set(bridgeTokenHeader, "secret")
+	pasteResponse := httptest.NewRecorder()
+	server.handleSuggestTitle(pasteResponse, paste)
+	if pasteResponse.Code != http.StatusOK {
+		t.Fatalf("token-authed lead-only: status=%d body=%q", pasteResponse.Code, pasteResponse.Body.String())
 	}
 }
 
