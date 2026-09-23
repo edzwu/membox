@@ -102,6 +102,24 @@ describe('mergeStashEntries', () => {
     expect(merged[0]).toMatchObject({ visitCount: 0, lastVisitedAt: 1000 });
   });
 
+  it('counts duplicate open tabs in one batch as a single stash', () => {
+    // 3 tabs on the same URL must not inflate saveCount — it measures how
+    // many *times* the user stashed, not how many copies were open.
+    const dup = entry('https://a.com/', { visitCount: 5, lastVisitedAt: 8000 });
+    const merged = mergeStashEntries(
+      [],
+      [dup, entry('https://a.com/', { visitCount: 2, pinned: true }), dup],
+      5000,
+    );
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toMatchObject({
+      saveCount: 1,
+      visitCount: 5, // best signal across the duplicates survives
+      lastVisitedAt: 8000,
+      pinned: true,
+    });
+  });
+
   it('evicts least-recently-saved rows beyond the cap', () => {
     const existing = Array.from({ length: MAX_STASHED_TABS }, (_, i) =>
       stashed(`https://old.com/${i}`, { lastSavedAt: i }),

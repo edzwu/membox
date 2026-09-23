@@ -77,7 +77,25 @@ export function mergeStashEntries(
 ): StashedTab[] {
   const byUrl = new Map(existing.map((tab) => [tab.url, tab]));
 
+  // Collapse duplicates within the batch first: saveCount measures how many
+  // *times* the user stashed a page, so N identical open tabs must count as
+  // one stash, not N — otherwise duplicate tabs inflate importance.
+  const batch = new Map<string, StashEntry>();
   for (const entry of incoming) {
+    const prev = batch.get(entry.url);
+    batch.set(entry.url, prev
+      ? {
+          ...entry,
+          title: entry.title || prev.title,
+          favIconUrl: entry.favIconUrl ?? prev.favIconUrl,
+          pinned: entry.pinned || prev.pinned,
+          visitCount: Math.max(prev.visitCount ?? 0, entry.visitCount ?? 0),
+          lastVisitedAt: Math.max(prev.lastVisitedAt ?? 0, entry.lastVisitedAt ?? 0),
+        }
+      : entry);
+  }
+
+  for (const entry of batch.values()) {
     const prev = byUrl.get(entry.url);
     if (prev) {
       byUrl.set(entry.url, {
@@ -160,7 +178,9 @@ export async function stashOpenTabs(): Promise<StashStats> {
   await saveStash(merged);
 
   const added = merged.filter((tab) => !before.has(tab.url)).length;
-  return { total: merged.length, added, refreshed: entries.length - added };
+  const distinctUrls = new Set(entries.map((entry) => entry.url));
+  const refreshed = [...distinctUrls].filter((url) => before.has(url)).length;
+  return { total: merged.length, added, refreshed };
 }
 
 export async function removeStashedTab(url: string): Promise<StashedTab[]> {
