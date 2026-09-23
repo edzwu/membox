@@ -15,7 +15,7 @@ const roots = [
   path.resolve('.output/chrome-mv3'),
   path.resolve('.output/firefox-mv2'),
 ];
-const pages = ['popup.html', 'sidepanel.html'];
+const pages = ['popup.html', 'sidepanel.html', 'stash.html'];
 
 let fixed = 0;
 const found = [];

@@ -14,6 +14,8 @@ export default defineConfig({
       'storage',
       'scripting',
       'tabs',
+      // Stash enrichment: visitCount / lastVisitTime per stashed URL.
+      'history',
       ...(browser === 'firefox' ? [] : ['sidePanel']),
     ],
     // 127.0.0.1 = membox bridge. http(s)://*/ = clip any normal webpage

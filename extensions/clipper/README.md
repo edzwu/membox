@@ -4,6 +4,24 @@ WXT browser extension that clips the current page to Markdown, ingests it into
 membox (`POST /api/ingest`), opens the new document in Miru, and provides a
 side panel for finding and switching between open tabs.
 
+## Tab stash (OneTab-style history)
+
+The popup's **Stash all tabs** button snapshots every open http(s) tab into a
+persistent, accumulating store (`browser.storage.local`; tabs stay open).
+Re-stashing a URL bumps its save count instead of duplicating the row, and
+each URL is enriched with `browser.history` visit stats.
+
+**Saved tabs** opens a full page listing the stash with:
+
+- a sort toggle: **visit time** (real last-visit from browser history) vs
+  **importance** (`saveCount × 5 + min(visits, 50) + pinned bonus`);
+- fuzzy filter/search with match highlighting and the side panel's query
+  syntax (`host:`, `title:`, `url:`, `is:pinned`);
+- keyboard navigation (`↑`/`↓`, `Enter` to open, `Esc` to clear the filter);
+- hover-revealed per-row remove, plus a guarded clear-all.
+
+The store caps at 5000 URLs, evicting the least-recently-saved rows.
+
 ## Tab organizer side panel
 
 The popup's **Organize tabs** button opens a browser side panel with:

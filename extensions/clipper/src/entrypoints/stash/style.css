@@ -1,0 +1,252 @@
+:root {
+  color-scheme: dark;
+  --bg: #0c0c0c;
+  --bg-elevated: #121212;
+  --bg-selected: #1f3a33;
+  --border: #222;
+  --text: #d0d0d0;
+  --muted: #6a6a6a;
+  --dim: #4a4a4a;
+  --accent: #a6e22e;
+  --match: #f92672;
+  --cursor: #66d9ef;
+  --mono: 'SF Mono', 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+/* Full-page (OneTab-style) layout: a centered readable column, not the
+   side panel's edge-to-edge strip. */
+.page {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 32px 20px 64px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 100vh;
+}
+
+/* ── header ─────────────────────────────────────────────────────── */
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.brand {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--cursor);
+  letter-spacing: 0.02em;
+}
+
+.header-spacer {
+  flex: 1;
+}
+
+.sort-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.sort-btn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  padding: 5px 12px;
+  cursor: pointer;
+}
+
+.sort-btn + .sort-btn {
+  border-left: 1px solid var(--border);
+}
+
+.sort-btn:hover {
+  color: var(--text);
+}
+
+.sort-btn.is-on {
+  background: var(--bg-selected);
+  color: var(--accent);
+}
+
+.clear-btn {
+  appearance: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dim);
+  font: inherit;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+
+.clear-btn:hover {
+  color: var(--match);
+  border-color: var(--match);
+}
+
+/* ── query bar ──────────────────────────────────────────────────── */
+
+.query-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  padding: 8px 12px;
+}
+
+.query-prompt {
+  color: var(--accent);
+}
+
+.query-input {
+  flex: 1;
+  appearance: none;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+}
+
+.query-count {
+  color: var(--dim);
+  font-size: 11px;
+}
+
+.query-count.has-filter {
+  color: var(--accent);
+}
+
+/* ── list ───────────────────────────────────────────────────────── */
+
+.list {
+  display: flex;
+  flex-direction: column;
+  outline: none;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.row.is-selected {
+  background: var(--bg-selected);
+}
+
+.favicon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  border-radius: 3px;
+}
+
+.favicon.placeholder {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-elevated);
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.main {
+  flex: 1;
+  min-width: 0;
+}
+
+.title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sub {
+  display: flex;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.sub .sep {
+  color: var(--dim);
+}
+
+.badges {
+  color: var(--dim);
+}
+
+.badges .score {
+  color: var(--accent);
+}
+
+.mark {
+  color: var(--match);
+  font-weight: 700;
+}
+
+.remove-tab {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--dim);
+  padding: 4px;
+  cursor: pointer;
+  opacity: 0;
+  flex-shrink: 0;
+}
+
+.row:hover .remove-tab,
+.row.is-selected .remove-tab,
+.remove-tab:focus-visible {
+  opacity: 1;
+}
+
+.remove-tab:hover {
+  color: var(--match);
+}
+
+.remove-tab svg {
+  width: 12px;
+  height: 12px;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  fill: none;
+  stroke-linecap: round;
+}
+
+.empty {
+  color: var(--dim);
+  padding: 48px 12px;
+  text-align: center;
+}

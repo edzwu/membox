@@ -1,6 +1,7 @@
 import { fetchBridgeStatus } from '../../lib/membox-client';
 import { loadSettings, saveSettings } from '../../lib/settings';
 import { getNotesEnabled, setNotesEnabled } from '../../lib/float-notes';
+import { stashOpenTabs } from '../../lib/tab-organizer/stash';
 import type { ActiveJob } from '../../lib/jobs';
 import type { BridgeSettings } from '../../lib/types';
 
@@ -15,6 +16,8 @@ const saveSettingsBtn = document.getElementById('saveSettings') as HTMLButtonEle
 const clipBtn = document.getElementById('clip') as HTMLButtonElement;
 const notesToggleBtn = document.getElementById('notesToggle') as HTMLButtonElement;
 const openTabsBtn = document.getElementById('openTabs') as HTMLButtonElement;
+const stashTabsBtn = document.getElementById('stashTabs') as HTMLButtonElement;
+const openStashBtn = document.getElementById('openStash') as HTMLButtonElement;
 const openSettingsBtn = document.getElementById('openSettings') as HTMLButtonElement;
 const closeSettingsBtn = document.getElementById('closeSettings') as HTMLButtonElement;
 const progressEl = document.getElementById('progress') as HTMLDivElement;
@@ -54,6 +57,27 @@ openTabsBtn.addEventListener('click', () => {
       showMessage(error instanceof Error ? error.message : String(error), 'error');
     });
 });
+
+function openStashPage() {
+  void browser.tabs.create({ url: browser.runtime.getURL('/stash.html') });
+  window.close();
+}
+
+stashTabsBtn.addEventListener('click', async () => {
+  stashTabsBtn.disabled = true;
+  try {
+    const stats = await stashOpenTabs();
+    const parts = [`${stats.added} new`];
+    if (stats.refreshed > 0) parts.push(`${stats.refreshed} refreshed`);
+    showMessage(`Stashed ${stats.added + stats.refreshed} tabs (${parts.join(', ')}) — ${stats.total} saved`, 'ok');
+  } catch (error) {
+    showMessage(error instanceof Error ? error.message : String(error), 'error');
+  } finally {
+    stashTabsBtn.disabled = false;
+  }
+});
+
+openStashBtn.addEventListener('click', openStashPage);
 
 async function renderEnableState(enabled: boolean) {
   notesToggleBtn.classList.toggle('is-on', enabled);
