@@ -25,6 +25,53 @@ export function titleFromMarkdown(text: string): string {
 
 export type OutlineHeading = { level: number; text: string };
 
+/** Read clipboard text in an extension page. Chrome's async clipboard API
+ * is flaky in popups ("Read permission denied" despite the clipboardRead
+ * permission and a user gesture) — fall back to a paste into a scratch
+ * textarea, which the permission does cover. */
+export async function readClipboardText(): Promise<string> {
+  try {
+    return await navigator.clipboard.readText();
+  } catch {
+    /* fall through to execCommand */
+  }
+  const scratch = document.createElement('textarea');
+  scratch.style.position = 'fixed';
+  scratch.style.opacity = '0';
+  document.body.appendChild(scratch);
+  scratch.focus();
+  try {
+    if (document.execCommand('paste')) return scratch.value;
+    throw new Error('clipboard read denied — is the clipboardRead permission granted?');
+  } finally {
+    scratch.remove();
+  }
+}
+
+/** Write clipboard text with the same execCommand fallback. */
+export async function writeClipboardText(text: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return;
+  } catch {
+    /* fall through to execCommand */
+  }
+  const scratch = document.createElement('textarea');
+  scratch.value = text;
+  scratch.style.position = 'fixed';
+  scratch.style.opacity = '0';
+  document.body.appendChild(scratch);
+  scratch.focus();
+  scratch.select();
+  try {
+    if (!document.execCommand('copy')) {
+      throw new Error('clipboard write denied');
+    }
+  } finally {
+    scratch.remove();
+  }
+}
+
 /** Headings of the pasted Markdown (fence-aware, capped) for the
  * suggest-title prompt — better outlines give better titles. */
 export function outlineFromMarkdown(text: string, max = 50): OutlineHeading[] {

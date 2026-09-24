@@ -6,7 +6,9 @@ import {
   composePageMarkdown,
   leadFromMarkdown,
   outlineFromMarkdown,
+  readClipboardText,
   titleFromMarkdown,
+  writeClipboardText,
 } from '../../lib/paste';
 import type { ActiveJob } from '../../lib/jobs';
 import type { BridgeSettings, ClipPayload, IngestResult } from '../../lib/types';
@@ -114,7 +116,7 @@ copyPageBtn.addEventListener('click', async () => {
     }
     const payload = res.payload as ClipPayload;
     const markdown = composePageMarkdown(payload.title, payload.body, payload.sourceUrl);
-    await navigator.clipboard.writeText(markdown);
+    await writeClipboardText(markdown);
     showMessage(`Copied ${markdown.length} chars`, 'ok');
   } catch (error) {
     showMessage(error instanceof Error ? error.message : String(error), 'error');
@@ -127,7 +129,7 @@ pasteSaveBtn.addEventListener('click', async () => {
   pasteSaveBtn.disabled = true;
   showMessage('', '');
   try {
-    const text = (await navigator.clipboard.readText()).trim();
+    const text = (await readClipboardText()).trim();
     if (!text) {
       showMessage('Clipboard is empty', 'error');
       return;
@@ -144,10 +146,12 @@ pasteSaveBtn.addEventListener('click', async () => {
       });
     }
     showMessage('Saving…', '');
+    // open: false — this flow always opens the new Miru page itself
+    // (below), independent of the autoOpen setting for clips.
     const res = await browser.runtime.sendMessage({
       type: 'membox.ingest-payload',
       payload: { title, sourceUrl: '', body: text },
-      open: true,
+      open: false,
     });
     if (!res?.ok) {
       showMessage(res?.error || 'Save failed', 'error');
@@ -157,6 +161,10 @@ pasteSaveBtn.addEventListener('click', async () => {
     const short = String(result.id || '').slice(0, 8);
     const titleBit = result.title || title ? ` · ${result.title || title}` : '';
     showMessage(`Saved ${short}…${titleBit}`, 'ok');
+    if (result.view_url) {
+      await browser.tabs.create({ url: result.view_url });
+      window.close();
+    }
   } catch (error) {
     showMessage(error instanceof Error ? error.message : String(error), 'error');
   } finally {
