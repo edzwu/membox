@@ -23,6 +23,39 @@ const execFileAsync = promisify(execFile);
 
 const SHORT_ID_RE = /\b[0-9a-fA-F]{4,10}\b/g;
 
+/** Mirror membox's Go noteSlug: lowercase Unicode letters/digits (incl. CJK)
+ * are kept, every other run of characters collapses to one dash. */
+function slugifyStem(stem: string): string {
+  let out = "";
+  let lastDash = false;
+  for (const ch of stem.trim().toLowerCase()) {
+    if (/[\p{L}\p{N}]/u.test(ch)) {
+      out += ch;
+      lastDash = false;
+    } else if (!lastDash && out.length > 0) {
+      out += "-";
+      lastDash = true;
+    }
+  }
+  return out.replace(/^-+|-+$/g, "");
+}
+
+/**
+ * Normalize a requested note filename to membox's slug convention so raw
+ * titles (spaces, quotes, emoji, path separators) never land on disk
+ * verbatim. A trailing alnum extension (.md, .txt, …) is preserved.
+ * Returns null when nothing usable remains.
+ */
+function sanitizeDocFilename(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const match = trimmed.match(/^(.*?)(\.[A-Za-z0-9]{1,10})?$/) ?? [trimmed];
+  const slug = slugifyStem(match[1] ?? trimmed);
+  if (!slug) return null;
+  const ext = (match[2] ?? "").toLowerCase();
+  return slug + ext;
+}
+
 function findMm(): string {
   if (process.env.MEMBOX_MM) return process.env.MEMBOX_MM;
   const home = process.env.HOME || "";
@@ -607,27 +640,32 @@ export default function (pi: ExtensionAPI) {
     name: "membox_doc_create",
     label: "Create a membox document",
     description:
-      "Create a new text document in the membox notes directory (writes the file and rescans so it gets a UUID). Use for tasks, scratchpads, or notes the user asks to save.",
+      "Create a new text document in the membox notes directory (writes the file and rescans so it gets a UUID). The filename is normalized to membox's slug convention: lowercase, spaces/punctuation collapse to dashes, extension kept. Use for tasks, scratchpads, or notes the user asks to save.",
     parameters: Type.Object({
       filename: Type.String({ description: "Filename, e.g. 'task-2026-08-08.md'. Non-markdown extensions are allowed." }),
       content: Type.String({ description: "Full file content" }),
     }),
     async execute(_toolCallId, params) {
+      const filename = sanitizeDocFilename(params.filename);
+      if (!filename) {
+        return { content: [{ type: "text", text: `Filename has no usable characters: ${params.filename}` }], details: {} };
+      }
       const paths = await runMmJson<Array<{ id: number; path: string; status: string }>>(["path", "list", "--json"]).catch(() => []);
       const ready = paths.find((p) => p.status === "ready") || paths[0];
       if (!ready) {
         return { content: [{ type: "text", text: "No membox scan path configured (mm path add <dir>)" }], details: {} };
       }
-      const file = join(ready.path, params.filename);
+      const file = join(ready.path, filename);
       const fs = await import("node:fs/promises");
       if (await fs.stat(file).then(() => true, () => false)) {
         return { content: [{ type: "text", text: `File already exists: ${file}` }], details: {} };
       }
       await fs.writeFile(file, params.content, "utf8");
       await runMm(["path", "scan"]).catch(() => {});
-      const doc = await resolveDoc(params.filename);
+      const doc = await resolveDoc(filename);
+      const renamed = filename !== params.filename.trim() ? ` (sanitized from “${params.filename}”)` : "";
       return {
-        content: [{ type: "text", text: doc ? `Created ${file} → ${displayDocId(doc.id)}` : `Created ${file} (indexed by next scan)` }],
+        content: [{ type: "text", text: doc ? `Created ${file}${renamed} → ${displayDocId(doc.id)}` : `Created ${file}${renamed} (indexed by next scan)` }],
         details: { path: file, document_id: doc?.id },
       };
     },

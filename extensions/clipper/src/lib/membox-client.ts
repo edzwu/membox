@@ -9,6 +9,13 @@ import type {
 } from './types';
 import { normalizeSourceURL } from './url';
 
+const TITLE_REQUEST_TIMEOUT_MS = 15_000;
+const INGEST_REQUEST_TIMEOUT_MS = 60_000;
+
+function timeoutSignal(timeoutMs: number): AbortSignal {
+  return AbortSignal.timeout(timeoutMs);
+}
+
 export class IngestConflictError extends Error {
   readonly conflict: IngestConflict;
   constructor(conflict: IngestConflict) {
@@ -118,11 +125,13 @@ export async function suggestTitle(
         current: input.current || '',
         headings: input.headings || [],
       }),
+      signal: timeoutSignal(TITLE_REQUEST_TIMEOUT_MS),
     });
     if (!response.ok) return '';
     const data = (await response.json()) as { title?: string };
     return (data.title || '').trim();
   } catch {
+    // Title suggestion is optional; a slow/unavailable model must not block save.
     return '';
   }
 }
@@ -133,18 +142,29 @@ export async function ingestClip(
   opts: { overwrite?: boolean } = {},
 ): Promise<IngestResult> {
   const base = settings.baseUrl.replace(/\/$/, '');
-  const response = await fetch(`${base}/api/ingest`, {
-    method: 'POST',
-    headers: headers(settings, true),
-    body: JSON.stringify({
-      title: clip.title,
-      body: clip.body,
-      source_url: normalizeSourceURL(clip.sourceUrl) || clip.sourceUrl,
-      clip_mode: clip.clipMode || undefined,
-      excerpt_raw: clip.excerptRaw || undefined,
-      overwrite: opts.overwrite === true ? true : undefined,
-    }),
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${base}/api/ingest`, {
+      method: 'POST',
+      headers: headers(settings, true),
+      body: JSON.stringify({
+        title: clip.title,
+        body: clip.body,
+        source_url: normalizeSourceURL(clip.sourceUrl) || clip.sourceUrl,
+        clip_mode: clip.clipMode || undefined,
+        excerpt_raw: clip.excerptRaw || undefined,
+        overwrite: opts.overwrite === true ? true : undefined,
+      }),
+      // Never leave the popup/content-card in “Saving…” forever when the
+      // Companion or a catalog mutation is stalled.
+      signal: timeoutSignal(INGEST_REQUEST_TIMEOUT_MS),
+    });
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'TimeoutError') {
+      throw new Error('Save timed out after 60s — restart membox and try again');
+    }
+    throw err;
+  }
   const text = await response.text();
   if (response.status === 409) {
     let parsed: {
