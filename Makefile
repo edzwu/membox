@@ -34,6 +34,16 @@ build:
 	@mkdir -p $(BIN_DIR)
 	CGO_ENABLED=0 $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o $(BINARY) $(MAIN)
 
+# remote-web builds the membox-server React home app into the embedded
+# static/ directory. Requires Node; safe to skip for pure-Go development.
+remote-web:
+	cd internal/interfaces/httpserver/home && npm install && npm run build
+	@touch internal/interfaces/httpserver/static/.gitkeep
+
+# remote-image builds the all-in-one deployable image (web + server).
+remote-image:
+	docker build -f deploy/membox-server/Dockerfile -t membox-server:latest .
+
 install:
 	CGO_ENABLED=0 $(GO) install -trimpath -ldflags '$(LDFLAGS)' $(MAIN)
 
