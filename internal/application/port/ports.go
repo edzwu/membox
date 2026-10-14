@@ -144,6 +144,25 @@ type ImmutableContentStore interface {
 	Put(ctx context.Context, body []byte) (ContentObject, error)
 }
 
+// RemoteObject is one object in the remote blob backend (ADR-002).
+type RemoteObject struct {
+	Key  string
+	Size int64
+}
+
+// RemoteContentStore is the remote node's blob backend port (Cloudflare R2).
+// Unlike ImmutableContentStore it streams (uploads may be hundreds of MiB) and
+// supports reads and deletes; document blobs are still content-addressed by
+// SHA-256 and treated as immutable. Delete exists for GC and smoke cleanup,
+// never for document history.
+type RemoteContentStore interface {
+	Put(ctx context.Context, key string, body io.Reader, size int64) error
+	Get(ctx context.Context, key string) (io.ReadCloser, error)
+	// Head returns exists=false (and no error) when the key is absent.
+	Head(ctx context.Context, key string) (RemoteObject, bool, error)
+	Delete(ctx context.Context, key string) error
+}
+
 type ScanSave struct {
 	Document   *catalog.Document
 	Body       []byte // authoritative source bytes (used for immutable versions)

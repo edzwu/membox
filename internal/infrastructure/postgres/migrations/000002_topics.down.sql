@@ -1,0 +1,4 @@
+DROP TABLE IF EXISTS topic_issues;
+DROP TABLE IF EXISTS topic_members;
+DROP TABLE IF EXISTS issues;
+DROP TABLE IF EXISTS topics;

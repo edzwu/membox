@@ -19,8 +19,15 @@ go.work.sum
 .idea/
 .vscode/
 
+# membox-server local credentials (ADR-004: never commit real secrets)
+.env
+
 # browser extension (WXT)
 node_modules/
 extensions/*/.output/
 extensions/*/.wxt/
 extensions/*/dist/
+
+# membox-server home app: generated vite output (built by `make remote-web`)
+internal/interfaces/httpserver/static/*
+!internal/interfaces/httpserver/static/.gitkeep
