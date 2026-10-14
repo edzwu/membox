@@ -1,0 +1,37 @@
+# membox remote node — production compose.
+# PostgreSQL is internal-only (no published port); the server binds loopback
+# and reaches the public internet through a tunnel or reverse proxy.
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: membox
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+      POSTGRES_DB: membox
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U membox"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  server:
+    build:
+      context: ../..
+      dockerfile: deploy/membox-server/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      APP_ENV: production
+      HTTP_ADDR: 0.0.0.0:8081
+      DATABASE_URL: postgres://membox:${POSTGRES_PASSWORD}@db:5432/membox?sslmode=disable
+    ports:
+      - "127.0.0.1:8081:8081"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
