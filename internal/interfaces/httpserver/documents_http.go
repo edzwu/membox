@@ -19,6 +19,7 @@ type documentItem struct {
 	Title     string `json:"title"`
 	SourceURL string `json:"source_url,omitempty"`
 	SizeBytes int64  `json:"size_bytes,omitempty"`
+	MimeType  string `json:"mime_type,omitempty"`
 	UpdatedAt string `json:"updated_at"`
 }
 
@@ -28,6 +29,8 @@ func toItem(doc remotedocs.Document) documentItem {
 		Revision:  doc.CurrentRevision,
 		Title:     doc.Title,
 		SourceURL: doc.SourceURL,
+		SizeBytes: doc.SizeBytes,
+		MimeType:  doc.MimeType,
 		UpdatedAt: doc.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}
 }

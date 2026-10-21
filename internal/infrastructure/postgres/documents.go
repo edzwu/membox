@@ -69,11 +69,11 @@ func decodeCursor(token string) (listCursor, error) {
 }
 
 func (s *DocumentStore) List(ctx context.Context, q remotedocs.ListQuery) (remotedocs.ListResult, error) {
-	where := "owner_id = $1 AND deleted_at IS NULL"
+	where := "d.owner_id = $1 AND d.deleted_at IS NULL"
 	args := []any{q.OwnerID}
 	if q.Query != "" {
 		args = append(args, "%"+strings.ToLower(q.Query)+"%")
-		where += fmt.Sprintf(" AND lower(title) LIKE $%d", len(args))
+		where += fmt.Sprintf(" AND lower(d.title) LIKE $%d", len(args))
 	}
 	if q.Cursor != "" {
 		cursor, err := decodeCursor(q.Cursor)
@@ -81,14 +81,21 @@ func (s *DocumentStore) List(ctx context.Context, q remotedocs.ListQuery) (remot
 			return remotedocs.ListResult{}, err
 		}
 		args = append(args, cursor.UpdatedAt, cursor.ID)
-		where += fmt.Sprintf(" AND (updated_at, id) < ($%d, $%d)", len(args)-1, len(args))
+		where += fmt.Sprintf(" AND (d.updated_at, d.id) < ($%d, $%d)", len(args)-1, len(args))
 	}
 	args = append(args, q.Limit+1)
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, current_revision, title, source_url, created_at, updated_at
-		FROM documents
+		SELECT d.id, d.current_revision, d.title, d.source_url, d.created_at, d.updated_at,
+		       COALESCE(v.size_bytes, 0), COALESCE(v.mime_type, '')
+		FROM documents d
+		LEFT JOIN LATERAL (
+		       SELECT size_bytes, mime_type
+		       FROM document_versions
+		       WHERE document_id = d.id AND blob_key <> ''
+		       ORDER BY revision DESC LIMIT 1
+		) v ON true
 		WHERE `+where+`
-		ORDER BY updated_at DESC, id DESC
+		ORDER BY d.updated_at DESC, d.id DESC
 		LIMIT $`+strconv.Itoa(len(args)), args...)
 	if err != nil {
 		return remotedocs.ListResult{}, err
@@ -98,7 +105,7 @@ func (s *DocumentStore) List(ctx context.Context, q remotedocs.ListQuery) (remot
 	result := remotedocs.ListResult{}
 	for rows.Next() {
 		var doc remotedocs.Document
-		if err := rows.Scan(&doc.ID, &doc.CurrentRevision, &doc.Title, &doc.SourceURL, &doc.CreatedAt, &doc.UpdatedAt); err != nil {
+		if err := rows.Scan(&doc.ID, &doc.CurrentRevision, &doc.Title, &doc.SourceURL, &doc.CreatedAt, &doc.UpdatedAt, &doc.SizeBytes, &doc.MimeType); err != nil {
 			return remotedocs.ListResult{}, err
 		}
 		doc.OwnerID = q.OwnerID
@@ -118,11 +125,18 @@ func (s *DocumentStore) List(ctx context.Context, q remotedocs.ListQuery) (remot
 func (s *DocumentStore) Get(ctx context.Context, ownerID, id string) (remotedocs.Document, error) {
 	var doc remotedocs.Document
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, current_revision, title, source_url, created_at, updated_at
-		FROM documents
-		WHERE owner_id = $1 AND id = $2 AND deleted_at IS NULL`,
+		SELECT d.id, d.current_revision, d.title, d.source_url, d.created_at, d.updated_at,
+		       COALESCE(v.size_bytes, 0), COALESCE(v.mime_type, '')
+		FROM documents d
+		LEFT JOIN LATERAL (
+		       SELECT size_bytes, mime_type
+		       FROM document_versions
+		       WHERE document_id = d.id AND blob_key <> ''
+		       ORDER BY revision DESC LIMIT 1
+		) v ON true
+		WHERE d.owner_id = $1 AND d.id = $2 AND d.deleted_at IS NULL`,
 		ownerID, id,
-	).Scan(&doc.ID, &doc.CurrentRevision, &doc.Title, &doc.SourceURL, &doc.CreatedAt, &doc.UpdatedAt)
+	).Scan(&doc.ID, &doc.CurrentRevision, &doc.Title, &doc.SourceURL, &doc.CreatedAt, &doc.UpdatedAt, &doc.SizeBytes, &doc.MimeType)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return remotedocs.Document{}, remotedocs.ErrNotFound
 	}

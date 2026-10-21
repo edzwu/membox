@@ -39,6 +39,9 @@ type Document struct {
 	Deleted         bool
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
+	// SizeBytes and MimeType describe the latest blob-carrying version.
+	SizeBytes int64
+	MimeType  string
 }
 
 // Version is one immutable snapshot. Blob fields are empty for metadata-only
@@ -169,6 +172,7 @@ func (s *Service) Create(ctx context.Context, ownerID, filename, sourceURL strin
 		ID: id, OwnerID: ownerID, CurrentRevision: 1,
 		Title: title, SourceURL: strings.TrimSpace(sourceURL),
 		CreatedAt: now, UpdatedAt: now,
+		SizeBytes: spool.size, MimeType: mime,
 	}
 	v := Version{
 		DocumentID: id, Revision: 1, Operation: OpCreate,
@@ -262,6 +266,8 @@ func (s *Service) ReplaceContent(ctx context.Context, ownerID, id string, expect
 		return Document{}, err
 	}
 	doc.CurrentRevision = expectedRev + 1
+	doc.SizeBytes = spool.size
+	doc.MimeType = mime
 	return doc, nil
 }
 
