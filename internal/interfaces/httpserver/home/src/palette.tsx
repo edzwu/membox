@@ -1,18 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { DEMO_DOCUMENTS, formatSize, searchDocuments, type RemoteDocument } from './api';
+import { formatSize, searchDocuments, type RemoteDocument } from './api';
 
 interface Props {
   open: boolean;
   onClose: () => void;
+  onOpen: (doc: RemoteDocument) => void;
 }
 
-// Cmd+K palette: filename search over remote documents. Debounced; Escape or
-// backdrop click closes. Backend is a stub until M4 — demo rows are shown
-// when the API answers empty or is unreachable.
-export function SearchPalette({ open, onClose }: Props) {
+// Cmd+K palette: filename search over remote documents. Debounced; Enter or
+// click opens the document in the in-page viewer; Escape closes.
+export function SearchPalette({ open, onClose, onOpen }: Props) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<RemoteDocument[]>([]);
-  const [usingDemo, setUsingDemo] = useState(false);
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -28,13 +27,9 @@ export function SearchPalette({ open, onClose }: Props) {
     const controller = new AbortController();
     const timer = setTimeout(async () => {
       try {
-        const docs = await searchDocuments(query, controller.signal);
-        setResults(docs.length > 0 ? docs : DEMO_DOCUMENTS);
-        setUsingDemo(docs.length === 0);
+        setResults(await searchDocuments(query, controller.signal));
       } catch {
-        if (!controller.signal.aborted) {
-          setResults([]); // 401/网络错误时不展示 demo 数据，避免误导
-        }
+        if (!controller.signal.aborted) setResults([]);
       }
       setActive(0);
     }, 150);
@@ -43,6 +38,14 @@ export function SearchPalette({ open, onClose }: Props) {
       clearTimeout(timer);
     };
   }, [query, open]);
+
+  const pick = useCallback(
+    (doc: RemoteDocument) => {
+      onOpen(doc);
+      onClose();
+    },
+    [onOpen, onClose],
+  );
 
   const onKeyDown = useCallback(
     (event: React.KeyboardEvent) => {
@@ -53,12 +56,10 @@ export function SearchPalette({ open, onClose }: Props) {
         event.preventDefault();
         setActive((i) => Math.max(i - 1, 0));
       } else if (event.key === 'Enter' && results[active]) {
-        // M4 will serve content at /v1/documents/{id}/content.
-        window.open(`/v1/documents/${results[active].id}/content`, '_blank');
-        onClose();
+        pick(results[active]);
       }
     },
-    [results, active, onClose],
+    [results, active, pick],
   );
 
   if (!open) return null;
@@ -78,15 +79,20 @@ export function SearchPalette({ open, onClose }: Props) {
               key={doc.id}
               className={i === active ? 'palette-row active' : 'palette-row'}
               onMouseEnter={() => setActive(i)}
+              onClick={() => pick(doc)}
             >
-              <span className="palette-title">{doc.title}</span>
+              <span className="palette-title">
+                {doc.title}
+                <span className="palette-uuid">{doc.id}</span>
+              </span>
               <span className="palette-meta">{formatSize(doc.size_bytes)}</span>
             </li>
           ))}
-          {results.length === 0 && <li className="palette-empty">没有匹配的文档</li>}
+          {results.length === 0 && (
+            <li className="palette-empty">没有匹配的文档 — 可在文档库首页上传</li>
+          )}
         </ul>
         <div className="palette-footer">
-          {usingDemo && <span className="palette-demo">demo 数据（文档 API 待 M4）</span>}
           <span>↑↓ 选择 · Enter 打开 · Esc 关闭</span>
         </div>
       </div>
