@@ -1,3 +1,7 @@
+// Package catalog is membox's document registry: identity (UUID), location,
+// status, content fingerprints and inter-document relations. Like a library
+// card catalog, it records everything *about* documents without holding
+// their bytes — content lives in the filesystem/blob layer beneath it.
 package catalog
 
 import (
