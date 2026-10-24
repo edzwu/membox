@@ -62,6 +62,8 @@ membox 的整体架构是三层，本同步引擎只服务最底一层：
 - 远程 agent / SSH 传输（Mutagen 的核心，但第一版跳过）
 - fsnotify 实时监控、守护进程
 - 三方 merge、rsync 增量传输、压缩
+
+  **三方 merge 的扩展路径已预留**（现在不做，将来按此接入）：冲突发生时三个版本的指纹已齐——base = `archive[uuid].ContentSha256`，ours/theirs = `Conflict.Alpha/Beta.ContentSha256`（git 同构：CAS blob 层 = object store，archive = merge base）。唯一配套策略：**archive 或进行中冲突引用的 blob 不得 GC**（MVP 不做 GC，天然满足）。实现位置：reconcile 之后加独立的 autoMerge pass（需要读字节，不污染纯函数），仅处理 `both-modified`：diff3 干净 → 降级为 Change；有冲突块 → 保留 Conflict（或写冲突标记文件）。文本类可合并，PDF 永远人工。rename-vs-edit 将来可从「保守冲突」升级为「改名 + 内容合并」。
 - 符号链接、权限、ACL、大小写折叠等边界情况
 - `.syncignore`（可后置，先用硬编码忽略列表：`.git`、`.DS_Store`、临时文件）
 
@@ -224,8 +226,21 @@ membox 的 UUID 是随机 UUIDv7（全局唯一，不撞号），但**身份绑�
 
 **存储引擎中立性（原则）**：同步协议只携带引擎中立的三样东西——元数据清单（`UUID → Entry`）、blob（`sha256 → bytes`）、导入命令。各端通过自己的 `CatalogStore` port 读写本地 DB：桌面端 SQLite、server Postgres，只是同一 port 的两个 adapter（`internal/infrastructure/sqlite` / `postgres` 已存在），同步层不感知引擎，server 换 Postgres 零改动。禁止的方向：同步 DB 文件本身（二进制、含搜索索引/已读等本地状态、页级冲突不可 merge）或 DB 级复制（Litestream / logical replication，工作在领域层之下，复制本地垃圾状态且跨不了引擎）。archive 是同步层自己的本地账本，不属于任何一端 DB 的被复制状态。
 
-## 11. 已知坑（先记着，不处理）
+## 11. 未来方案：server 托管 archive（任意端发起）
 
+目标：任何端随手发起同步，保住账本唯一性。做法：archive 托管给关系里永远在线的 hub（server）。
+
+- **存储**：`sync_archives(account_id, device_id, archive_json, fencing_token, updated_at)`；key 是「账号×设备」，每对关系一本账；archive 对 server 不透明
+- **协议（三段式会话）**：① `begin`：加锁（按 account 串行化）+ 返回 archive 与 server 快照 + fence token；② 客户端本地 reconcile（纯函数不动），执行变更（拉/推 blob、带 UUID 导入）；③ `commit`：校验 fence token，原子写回 archive，放锁
+- **锁**：粒度 = 按 account 串行化（同步秒级低频，代价为零）；fencing token 防僵尸持锁者（单调递增序号，写回必须携带，过期拒绝）
+- **崩溃语义与本地版同构**：所有操作幂等（带 UUID upsert、CAS blob、Apply 可重放），中途死亡 → 下轮用旧 archive 重放/自动收敛
+- **客户端改动面**：`LoadArchive/SaveArchive` 抽象为窄接口 `ArchiveStore`（LocalFile / Server 两个真实实现，符合「真实多实现才收接口」的规矩），reconcile 零改动
+
+与 Unison 双账本的取舍：我们世界里有永远在线的 hub，让 hub 当裁判比无单点的双账本提交协议简单；Unison 的方案适合无 hub 的直连世界。
+
+## 12. 已知坑（先记着，不处理）
+
+- **驱动方与账本唯一性**：一对同步关系的 archive 是唯一且连续的账本，必须每次同步读写同一本。MVP 采用固定驱动方（账本在驱动方本地），把问题简化为配置约定。「错开时间但各用各的账本」会导致历史断裂、满屏假冲突。任意端发起的升级路径见第 12 节。另外：驱动方本地丢失 archive 会退化为「首次同步」语义——一致内容自动收敛，不一致报假冲突，可恢复但不丢数据
 - **untracked 的同步语义（已拍板）**：`path remove` = 该目录下文档批量退出共享 VFS = **批量删除语义**，tombstone 正常传播。安全性由「字节永不硬删」保证：α 本地文件不动，β 侧进回收站可恢复。连带行为：remove 后 re-add 同一目录，文档会以新 UUID 重新入库（`ReconcileRenames` 不配对 untracked），即这批文档换一次身份——MVP 接受（低频、结果正确，仅历史断裂）
 - name 冲突：接收方物化目录里已有同名文件（属于另一个 UUID）。import 接口自行 slug 去重（如 `-2` 后缀），本地名与同步的 name 允许短暂不一致，下一轮以胜方 name 为准再 rename
 - mtime 精度/时钟问题：仅作快路径，最终信任 sha256
