@@ -36,6 +36,21 @@ func putOK(t *testing.T, s *syncx.LocalBlobStore, body []byte) string {
 	return d
 }
 
+func TestBlobDirectoryIsPrivate(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if _, err := syncx.NewLocalBlobStore(dir); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Join(dir, "blobs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o700 {
+		t.Fatalf("blobs dir perm = %o, want 0700 (digest listing is private)", perm)
+	}
+}
+
 func TestBlobRoundTrip(t *testing.T) {
 	t.Parallel()
 	s := newStore(t)

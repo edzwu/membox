@@ -53,7 +53,12 @@ type LocalBlobStore struct {
 
 // NewLocalBlobStore opens (creating if needed) a CAS store rooted at dir.
 func NewLocalBlobStore(dir string) (*LocalBlobStore, error) {
-	if err := os.MkdirAll(filepath.Join(dir, "blobs"), 0o755); err != nil {
+	// 0o700: blobs are private document content; even the digest listing
+	// should not leak to other users on the machine.
+	if err := os.MkdirAll(filepath.Join(dir, "blobs"), 0o700); err != nil {
+		return nil, err
+	}
+	if err := os.Chmod(filepath.Join(dir, "blobs"), 0o700); err != nil {
 		return nil, err
 	}
 	return &LocalBlobStore{dir: dir}, nil
@@ -143,5 +148,9 @@ func (s *LocalBlobStore) Put(digest string, r io.Reader) error {
 	}
 	// Commit point: atomic rename. A crash before this leaves only a hidden
 	// temp orphan; a crash after leaves the complete object.
-	return os.Rename(tmpName, final)
+	if err := os.Rename(tmpName, final); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	return nil
 }
