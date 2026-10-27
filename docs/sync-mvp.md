@@ -171,8 +171,8 @@ type BlobStore interface {
 
 存储：
 
-- archive：`<workspace>/.sync/archive.json`（MVP 用 JSON，量大再换 BoltDB）
-- 冲突列表：`<workspace>/.sync/conflicts.json`
+- archive：`<workspace>/.sync/archive.json`（MVP 用 JSON，量大再换 BoltDB）——真身账本：逐条更新、原子写、损坏硬报错
+- 冲突列表：`<workspace>/.sync/conflicts.json`——派生缓存：每轮 reconcile 整体重写，可安全删除（下轮重算）。两文件分开的依据是数据性格（权威账本 vs 草稿），而非数量；合并会让草稿的每次涂改给账本制造风险（类比 git：refs/ 是账本，MERGE_HEAD 是冲突草稿）
 
 ## 6. CLI 草案
 
