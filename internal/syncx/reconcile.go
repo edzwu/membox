@@ -46,9 +46,10 @@ const (
 // Conflict is a UUID reconcile refused to touch. Both sides and the archive
 // keep their state; the conflict resurfaces every round until resolved.
 type Conflict struct {
-	UUID        string
-	Reason      ConflictReason
-	Alpha, Beta Entry
+	UUID   string         `json:"uuid"`
+	Reason ConflictReason `json:"reason"`
+	Alpha  Entry          `json:"alpha"`
+	Beta   Entry          `json:"beta"`
 }
 
 // sameState compares the reconcile-relevant fields. Size/Mtime are scan

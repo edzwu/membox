@@ -51,34 +51,43 @@ func LoadArchive(path string) (*Archive, error) {
 	return &a, nil
 }
 
-// SaveArchive writes the archive atomically: temp file in the same
-// directory, then rename. A crash mid-save leaves the previous archive
-// intact — losing history is worse than losing progress.
-func SaveArchive(path string, a *Archive) error {
-	data, err := json.MarshalIndent(a, "", "  ")
+// writeJSONAtomic writes v as JSON atomically: temp file in the same
+// directory, fsync, then rename. A crash mid-write leaves the previous
+// file intact — losing history is worse than losing progress.
+func writeJSONAtomic(path string, v any) error {
+	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".archive-*.tmp")
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
 	if err != nil {
 		return err
 	}
 	tmpName := tmp.Name()
-	if _, err := tmp.Write(data); err != nil {
+	cleanup := func(err error) error {
 		_ = tmp.Close()
 		_ = os.Remove(tmpName)
 		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		return cleanup(err)
 	}
 	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmpName)
-		return err
+		return cleanup(err)
 	}
 	if err := tmp.Close(); err != nil {
+		return cleanup(err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
 		_ = os.Remove(tmpName)
 		return err
 	}
-	return os.Rename(tmpName, path)
+	return nil
+}
+
+// SaveArchive writes the archive atomically.
+func SaveArchive(path string, a *Archive) error {
+	return writeJSONAtomic(path, a)
 }
 
 // Apply records one successfully propagated change: the winner state becomes
