@@ -31,16 +31,17 @@ type BlobStore interface {
 // ErrDigestMismatch means the bytes did not hash to the claimed digest.
 var ErrDigestMismatch = errors.New("syncx: digest mismatch")
 
-// digestFileName validates a digest for use as a filename (defends against
-// path traversal) and returns it unchanged.
-func digestFileName(digest string) (string, error) {
+// validateDigest guards the store entrance: a digest must be 64 lowercase
+// hex chars before it is used as a filename, which makes path traversal
+// ("../...") impossible by construction. Pure validation — no conversion.
+func validateDigest(digest string) error {
 	if len(digest) != sha256.Size*2 {
-		return "", fmt.Errorf("syncx: bad digest %q", digest)
+		return fmt.Errorf("syncx: bad digest %q", digest)
 	}
 	if _, err := hex.DecodeString(digest); err != nil {
-		return "", fmt.Errorf("syncx: bad digest %q", digest)
+		return fmt.Errorf("syncx: bad digest %q", digest)
 	}
-	return digest, nil
+	return nil
 }
 
 // LocalBlobStore is a BlobStore backed by a directory: blobs/<sha256> are the
@@ -65,11 +66,10 @@ func NewLocalBlobStore(dir string) (*LocalBlobStore, error) {
 }
 
 func (s *LocalBlobStore) path(digest string) (string, error) {
-	name, err := digestFileName(digest)
-	if err != nil {
+	if err := validateDigest(digest); err != nil {
 		return "", err
 	}
-	return filepath.Join(s.dir, "blobs", name), nil
+	return filepath.Join(s.dir, "blobs", digest), nil
 }
 
 func (s *LocalBlobStore) Has(digest string) bool {
